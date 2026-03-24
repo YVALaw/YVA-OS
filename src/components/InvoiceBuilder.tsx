@@ -159,6 +159,9 @@ export default function InvoiceBuilder({ onCreated, onCancel, initialProjectId, 
 
   const selectedClient  = clients.find(c => c.id === clientId)
   const selectedProject = projects.find(p => p.id === projectId)
+  const projectEmployees = selectedProject?.employeeIds?.length
+    ? employees.filter(e => selectedProject.employeeIds!.includes(e.id))
+    : employees
 
   const grandTotal = rows.reduce((s, r) => s + rowAmount(r, dates), 0)
 
@@ -440,7 +443,7 @@ export default function InvoiceBuilder({ onCreated, onCancel, initialProjectId, 
                           onChange={e => handleEmpSelect(row._id, e.target.value)}
                         >
                           <option value="">— Select —</option>
-                          {employees.map(e => <option key={e.id} value={e.name}>{e.name}</option>)}
+                          {projectEmployees.map(e => <option key={e.id} value={e.name}>{e.name}</option>)}
                         </select>
                       </td>
                       <td>
