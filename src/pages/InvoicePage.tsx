@@ -247,6 +247,7 @@ export default function InvoicePage() {
   const [form, setForm] = useState<QuickForm>(EMPTY_FORM)
   const urlQ = new URLSearchParams(location.search).get('q') || ''
   const [search, setSearch] = useState(urlQ)
+  const [toast, setToast] = useState<string | null>(null)
   const [previewInv, setPreviewInv] = useState<Invoice | null>(null)
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
 
@@ -266,6 +267,11 @@ export default function InvoicePage() {
   }, [])
 
   function persist(next: Invoice[]) { setInvoices(next); void saveInvoices(next) }
+
+  function showToast(msg: string) {
+    setToast(msg)
+    setTimeout(() => setToast(null), 3500)
+  }
 
   function openBuilder(projectId?: string) { setBuilderProjectId(projectId); setBuilderOpen(true) }
   function openEditInvoice(inv: Invoice) { setEditingInvoice(inv); setBuilderProjectId(inv.projectId || undefined); setBuilderOpen(true) }
@@ -407,6 +413,7 @@ export default function InvoicePage() {
               for (const inv of invoices.filter(i => ['overdue','sent','partial'].includes((i.status||'').toLowerCase()) && i.clientEmail)) {
                 if (!seen.has(inv.clientEmail!)) { seen.add(inv.clientEmail!); reminderEmail(inv, settings) }
               }
+              showToast(`Reminders sent to ${seen.size} client${seen.size !== 1 ? 's' : ''}`)
             }}>✉ Remind All</button>
           )}
           <button className="btn-ghost btn-sm" onClick={() => openQuickForProject(undefined)}>Quick Invoice</button>
@@ -474,9 +481,9 @@ export default function InvoicePage() {
                               </td>
                               <td>
                                 <div style={{ display: 'flex', gap: 3, justifyContent: 'flex-end', flexWrap: 'nowrap' }}>
-                                  {inv.clientEmail && <button className="btn-xs btn-ghost" title="Email invoice" onClick={() => emailInvoice(inv, settings)}>✉</button>}
+                                  {inv.clientEmail && <button className="btn-xs btn-ghost" title="Email invoice" onClick={() => { emailInvoice(inv, settings); showToast(`Invoice ${inv.number} emailed to ${inv.clientEmail}`) }}>✉</button>}
                                   {inv.clientEmail && ['overdue','sent','partial'].includes((inv.status||'').toLowerCase()) && (
-                                    <button className="btn-xs btn-ghost" title="Payment reminder" onClick={() => reminderEmail(inv, settings)}>⚠</button>
+                                    <button className="btn-xs btn-ghost" title="Payment reminder" onClick={() => { reminderEmail(inv, settings); showToast(`Payment reminder sent to ${inv.clientEmail}`) }}>⚠</button>
                                   )}
                                   <button className="btn-xs btn-ghost" title="Preview" onClick={() => setPreviewInv(inv)}>👁</button>
                                   <button className="btn-xs btn-ghost" title="PDF" onClick={() => printInvoice(inv, settings.usdToDop, settings)}>⎙</button>
@@ -653,11 +660,31 @@ export default function InvoicePage() {
                   : i)
                 void saveInvoices(updated)
                 setInvoices(updated)
-                if (sendConfirmInv.clientEmail) emailInvoice(sendConfirmInv, settings)
+                if (sendConfirmInv.clientEmail) {
+                  emailInvoice(sendConfirmInv, settings)
+                  showToast(`Invoice ${sendConfirmInv.number} sent to ${sendConfirmInv.clientEmail}`)
+                } else {
+                  showToast(`Invoice ${sendConfirmInv.number} marked as sent`)
+                }
                 setSendConfirmInv(null)
               }}>{sendConfirmInv.clientEmail ? 'Send Now' : 'Mark as Sent'}</button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Toast notification */}
+      {toast && (
+        <div style={{
+          position: 'fixed', bottom: 28, right: 28, zIndex: 9999,
+          background: '#1e293b', border: '1px solid var(--border)',
+          borderLeft: '3px solid #4ade80',
+          color: 'var(--text)', fontSize: 13, fontWeight: 500,
+          padding: '10px 16px', borderRadius: 8,
+          boxShadow: '0 4px 24px rgba(0,0,0,.4)',
+          maxWidth: 360, animation: 'fadeIn .2s ease',
+        }}>
+          ✓ {toast}
         </div>
       )}
 
