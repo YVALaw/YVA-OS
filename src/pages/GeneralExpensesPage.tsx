@@ -10,7 +10,7 @@ const CATEGORIES = ['', 'Software', 'Hardware', 'Marketing', 'Office', 'Payroll'
 export default function GeneralExpensesPage() {
   const [expenses, setExpenses] = useState<Expense[]>([])
   useEffect(() => { loadGeneralExpenses().then(setExpenses) }, [])
-  const [form, setForm] = useState({ description: '', amount: '', date: new Date().toISOString().slice(0, 10), category: '' })
+  const [form, setForm] = useState({ description: '', amount: '', date: new Date().toISOString().slice(0, 10), category: '', recurring: false })
   const [filterMonth, setFilterMonth] = useState('')
   const [filterCat, setFilterCat] = useState('')
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
@@ -25,10 +25,11 @@ export default function GeneralExpensesPage() {
       amount: parseFloat(form.amount) || 0,
       date: form.date,
       category: form.category || undefined,
+      recurring: form.recurring || undefined,
       createdAt: Date.now(),
     }
     persist([entry, ...expenses])
-    setForm(f => ({ ...f, description: '', amount: '' }))
+    setForm(f => ({ ...f, description: '', amount: '', recurring: false }))
   }
 
   function doDelete(id: string) { persist(expenses.filter(e => e.id !== id)); setConfirmDelete(null) }
@@ -115,6 +116,12 @@ export default function GeneralExpensesPage() {
               {CATEGORIES.map(c => <option key={c} value={c}>{c || '— None —'}</option>)}
             </select>
           </div>
+          <div className="form-group" style={{ alignSelf: 'flex-end', marginBottom: 6 }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: 'var(--muted)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+              <input type="checkbox" checked={form.recurring} onChange={e => setForm(f => ({ ...f, recurring: e.target.checked }))} />
+              Recurring
+            </label>
+          </div>
           <button className="btn-primary btn-sm" style={{ alignSelf: 'flex-end', marginBottom: 2 }}
             onClick={addExpense} disabled={!form.description.trim() || !form.amount}>Add</button>
         </div>
@@ -151,6 +158,7 @@ export default function GeneralExpensesPage() {
                   <th>Description</th>
                   <th>Category</th>
                   <th>Date</th>
+                  <th>Recurring</th>
                   <th style={{ textAlign: 'right' }}>Amount</th>
                   <th></th>
                 </tr>
@@ -161,6 +169,7 @@ export default function GeneralExpensesPage() {
                     <td className="td-name">{ex.description}</td>
                     <td className="td-muted">{ex.category || '—'}</td>
                     <td className="td-muted">{ex.date}</td>
+                    <td className="td-muted">{ex.recurring ? <span style={{ color: '#4ade80', fontSize: 11 }}>● Yes</span> : '—'}</td>
                     <td style={{ textAlign: 'right', color: '#f87171', fontWeight: 700 }}>{formatMoney(ex.amount)}</td>
                     <td>
                       <button className="btn-icon btn-danger" style={{ fontSize: 11, padding: '2px 6px' }}
@@ -169,7 +178,7 @@ export default function GeneralExpensesPage() {
                   </tr>
                 ))}
                 <tr>
-                  <td colSpan={3} style={{ textAlign: 'right', fontWeight: 700, paddingRight: 8, fontSize: 12, color: 'var(--muted)' }}>
+                  <td colSpan={4} style={{ textAlign: 'right', fontWeight: 700, paddingRight: 8, fontSize: 12, color: 'var(--muted)' }}>
                     {filterMonth || filterCat ? 'Filtered Total' : 'Total'}
                   </td>
                   <td style={{ textAlign: 'right', color: '#f87171', fontWeight: 800 }}>{formatMoney(filteredTotal)}</td>

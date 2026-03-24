@@ -66,6 +66,7 @@ export type Expense = {
   amount: number
   date: string
   category?: string
+  recurring?: boolean
   createdAt: number
 }
 
