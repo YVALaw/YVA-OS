@@ -507,7 +507,7 @@ export default function InvoiceBuilder({ onCreated, onCancel, initialProjectId, 
                     {rows.indexOf(row) === 0 && <label className="form-label">Employee</label>}
                     <select className="form-select" value={row.employeeName} onChange={e => handleEmpSelect(row._id, e.target.value)}>
                       <option value="">— Select employee —</option>
-                      {employees.map(e => <option key={e.id} value={e.name}>{e.name}</option>)}
+                      {projectEmployees.map(e => <option key={e.id} value={e.name}>{e.name}</option>)}
                     </select>
                   </div>
                   <div className="form-group" style={{ flex: 2 }}>
