@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { getAllDataSnapshot } from '../services/dataSnapshot'
 import {
   computeReports,
@@ -94,8 +95,21 @@ function filterInvoices(
   })
 }
 
+function sBadge(s?: string) {
+  switch ((s||'').toLowerCase()) {
+    case 'paid':    return 'badge-green'
+    case 'overdue': return 'badge-red'
+    case 'sent':    return 'badge-blue'
+    case 'viewed':  return 'badge-purple'
+    case 'partial': return 'badge-orange'
+    default:        return 'badge-gray'
+  }
+}
+
 export default function ReportsPage() {
   const { role } = useRole()
+  const navigate = useNavigate()
+  const [kpiDrill, setKpiDrill] = useState<string | null>(null)
   const [preset, setPreset] = useState<Preset>('month')
   const [from, setFrom] = useState<string>(getCurrentMonthRange().from)
   const [to, setTo]     = useState<string>(getCurrentMonthRange().to)
@@ -131,6 +145,13 @@ export default function ReportsPage() {
 
   const computed = useMemo(() => computeReports(store, range), [store, range])
   const topClient = computed.byClient.length ? computed.byClient[0] : null
+
+  const invoicesInRange = useMemo(() => store.invoices.filter(inv => {
+    const d = inv.date || inv.billingEnd || inv.billingStart || ''
+    if (from && d < from) return false
+    if (to   && d > to)   return false
+    return true
+  }).sort((a, b) => (Number(b.subtotal)||0) - (Number(a.subtotal)||0)), [store.invoices, from, to])
 
   // Build bar chart data (last 6 months from ALL invoices, not filtered range)
   const chartData = useMemo(() => {
@@ -364,72 +385,73 @@ export default function ReportsPage() {
       )}
 
       {/* KPI cards */}
-      <div className="kpi-grid">
-        <div className="kpi-card">
-          <div className="kpi-label">Total Billed</div>
-          <div className="kpi-value">{formatMoney(computed.totalBilled)}</div>
-          <div className="kpi-sub">{computed.invoiceCount} invoice{computed.invoiceCount === 1 ? '' : 's'} in range</div>
-        </div>
-        <div className="kpi-card">
-          <div className="kpi-label">Total Hours</div>
-          <div className="kpi-value" style={{ fontSize: 22 }}>{fmtHoursHM(computed.totalHours)}</div>
-          <div className="kpi-sub">billed in range</div>
-        </div>
-        <div className="kpi-card">
-          <div className="kpi-label">Est. Payroll</div>
-          <div className="kpi-value" style={{ color: '#f87171' }}>{formatMoney(computed.totalPayroll)}</div>
-          <div className="kpi-sub">based on employee pay rates</div>
-        </div>
-        {(() => {
-          const rangeExpenses = generalExpenses.filter(e => {
-            if (!e.date) return true
-            if (from && e.date < from) return false
-            if (to && e.date > to) return false
-            return true
-          })
-          const totalExpenses = rangeExpenses.reduce((s, e) => s + (Number(e.amount) || 0), 0)
-          const netAfterExpenses = computed.totalNetEarnings - totalExpenses
-          return (<>
-            <div className="kpi-card">
+      {(() => {
+        const rangeExpenses = generalExpenses.filter(e => {
+          if (!e.date) return true
+          if (from && e.date < from) return false
+          if (to   && e.date > to)   return false
+          return true
+        })
+        const totalExpenses = rangeExpenses.reduce((s, e) => s + (Number(e.amount) || 0), 0)
+        const netAfterExpenses = computed.totalNetEarnings - totalExpenses
+        const cardStyle: React.CSSProperties = { cursor: 'pointer' }
+        return (
+          <div className="kpi-grid">
+            <div className="kpi-card" style={cardStyle} onClick={() => setKpiDrill('billed')}>
+              <div className="kpi-label">Total Billed</div>
+              <div className="kpi-value">{formatMoney(computed.totalBilled)}</div>
+              <div className="kpi-sub">{computed.invoiceCount} invoice{computed.invoiceCount === 1 ? '' : 's'} in range</div>
+            </div>
+            <div className="kpi-card" style={cardStyle} onClick={() => setKpiDrill('hours')}>
+              <div className="kpi-label">Total Hours</div>
+              <div className="kpi-value" style={{ fontSize: 22 }}>{fmtHoursHM(computed.totalHours)}</div>
+              <div className="kpi-sub">billed in range</div>
+            </div>
+            <div className="kpi-card" style={cardStyle} onClick={() => setKpiDrill('payroll')}>
+              <div className="kpi-label">Est. Payroll</div>
+              <div className="kpi-value" style={{ color: '#f87171' }}>{formatMoney(computed.totalPayroll)}</div>
+              <div className="kpi-sub">based on employee pay rates</div>
+            </div>
+            <div className="kpi-card" style={cardStyle} onClick={() => setKpiDrill('expenses')}>
               <div className="kpi-label">Business Expenses</div>
               <div className="kpi-value" style={{ color: '#fb923c' }}>{formatMoney(totalExpenses)}</div>
               <div className="kpi-sub">{rangeExpenses.length} expense{rangeExpenses.length !== 1 ? 's' : ''} in range</div>
             </div>
-            <div className="kpi-card">
+            <div className="kpi-card" style={cardStyle} onClick={() => setKpiDrill('net')}>
               <div className="kpi-label">Net Earnings</div>
               <div className="kpi-value" style={{ color: netAfterExpenses >= 0 ? '#4ade80' : '#f87171' }}>
                 {formatMoney(netAfterExpenses)}
               </div>
               <div className="kpi-sub">billed − payroll − expenses</div>
             </div>
-          </>)
-        })()}
-        <div className="kpi-card">
-          <div className="kpi-label">Paid</div>
-          <div className="kpi-value" style={{ color: '#4ade80' }}>{computed.paidCount}</div>
-          <div className="kpi-sub">invoices marked paid</div>
-        </div>
-        <div className="kpi-card">
-          <div className="kpi-label">Unpaid</div>
-          <div className="kpi-value kpi-value-warn">{computed.unpaidCount}</div>
-          <div className="kpi-sub">awaiting payment</div>
-        </div>
-        <div className="kpi-card">
-          <div className="kpi-label">Top Client</div>
-          <div className="kpi-value kpi-value-name">{topClient?.name || '—'}</div>
-          <div className="kpi-sub">{topClient ? formatMoney(topClient.total) : 'No data'}</div>
-        </div>
-        <div className="kpi-card">
-          <div className="kpi-label">Clients</div>
-          <div className="kpi-value" style={{ color: '#60a5fa' }}>{store.clients.length}</div>
-          <div className="kpi-sub">total in system</div>
-        </div>
-        <div className="kpi-card">
-          <div className="kpi-label">Team</div>
-          <div className="kpi-value" style={{ color: '#c084fc' }}>{store.employees.length}</div>
-          <div className="kpi-sub">active members</div>
-        </div>
-      </div>
+            <div className="kpi-card" style={cardStyle} onClick={() => setKpiDrill('paid')}>
+              <div className="kpi-label">Paid</div>
+              <div className="kpi-value" style={{ color: '#4ade80' }}>{computed.paidCount}</div>
+              <div className="kpi-sub">invoices marked paid</div>
+            </div>
+            <div className="kpi-card" style={cardStyle} onClick={() => setKpiDrill('unpaid')}>
+              <div className="kpi-label">Unpaid</div>
+              <div className="kpi-value kpi-value-warn">{computed.unpaidCount}</div>
+              <div className="kpi-sub">awaiting payment</div>
+            </div>
+            <div className="kpi-card" style={cardStyle} onClick={() => setKpiDrill('topClient')}>
+              <div className="kpi-label">Top Client</div>
+              <div className="kpi-value kpi-value-name">{topClient?.name || '—'}</div>
+              <div className="kpi-sub">{topClient ? formatMoney(topClient.total) : 'No data'}</div>
+            </div>
+            <div className="kpi-card" style={cardStyle} onClick={() => setKpiDrill('clients')}>
+              <div className="kpi-label">Clients</div>
+              <div className="kpi-value" style={{ color: '#60a5fa' }}>{store.clients.length}</div>
+              <div className="kpi-sub">total in system</div>
+            </div>
+            <div className="kpi-card" style={cardStyle} onClick={() => setKpiDrill('team')}>
+              <div className="kpi-label">Team</div>
+              <div className="kpi-value" style={{ color: '#c084fc' }}>{store.employees.length}</div>
+              <div className="kpi-sub">active members</div>
+            </div>
+          </div>
+        )
+      })()}
 
       {/* Revenue chart + attention */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 340px', gap: 16, alignItems: 'start' }}>
@@ -928,6 +950,121 @@ export default function ReportsPage() {
                   )}
                 </tbody>
               </table>
+            </div>
+          </div>
+        )
+      })()}
+
+      {/* KPI Drill-down Modal */}
+      {kpiDrill && (() => {
+        const rangeExpenses = generalExpenses.filter(e => {
+          if (!e.date) return true
+          if (from && e.date < from) return false
+          if (to   && e.date > to)   return false
+          return true
+        })
+        const totalExpenses = rangeExpenses.reduce((s, e) => s + (Number(e.amount) || 0), 0)
+        const netAfterExpenses = computed.totalNetEarnings - totalExpenses
+
+        type DItem = { label: string; sub?: string; right?: string; badge?: string; badgeLabel?: string; nav?: string }
+        let title = ''
+        let items: DItem[] = []
+        let summary: string | null = null
+
+        const navInv = (inv: Invoice) => `/invoice?q=${encodeURIComponent(inv.number || '')}`
+
+        if (kpiDrill === 'billed') {
+          title = 'Total Billed — Invoices in Range'
+          items = invoicesInRange.map(inv => ({
+            label: `${inv.number} — ${inv.clientName || '—'}`,
+            sub: inv.projectName || (inv.date || ''),
+            right: formatMoney(Number(inv.subtotal)||0),
+            badge: sBadge(inv.status), badgeLabel: inv.status || 'draft',
+            nav: navInv(inv),
+          }))
+        } else if (kpiDrill === 'hours') {
+          title = 'Total Hours — By Employee'
+          items = [...computed.employeePerformance]
+            .sort((a, b) => b.hours - a.hours)
+            .map(e => ({ label: e.name, sub: `${e.invoiceCount} invoice${e.invoiceCount !== 1 ? 's' : ''}`, right: fmtHoursHM(e.hours) }))
+        } else if (kpiDrill === 'payroll') {
+          title = 'Est. Payroll — By Employee'
+          items = [...computed.employeePerformance]
+            .filter(e => e.payroll > 0)
+            .sort((a, b) => b.payroll - a.payroll)
+            .map(e => ({ label: e.name, sub: fmtHoursHM(e.hours) + ' billed', right: formatMoney(e.payroll) }))
+        } else if (kpiDrill === 'expenses') {
+          title = 'Business Expenses in Range'
+          items = [...rangeExpenses]
+            .sort((a, b) => (b.date||'').localeCompare(a.date||''))
+            .map(e => ({ label: e.description, sub: `${e.date || ''}${e.category ? ' · ' + e.category : ''}`, right: formatMoney(Number(e.amount)||0) }))
+        } else if (kpiDrill === 'net') {
+          title = 'Net Earnings — Breakdown'
+          items = [
+            { label: 'Total Billed',       right: formatMoney(computed.totalBilled) },
+            { label: 'Est. Payroll',        right: `− ${formatMoney(computed.totalPayroll)}` },
+            { label: 'Business Expenses',   right: `− ${formatMoney(totalExpenses)}` },
+            { label: 'Net Earnings',        right: formatMoney(netAfterExpenses), sub: netAfterExpenses >= 0 ? 'Positive' : 'Negative' },
+          ]
+        } else if (kpiDrill === 'paid') {
+          title = 'Paid Invoices in Range'
+          items = invoicesInRange
+            .filter(i => (i.status||'').toLowerCase() === 'paid')
+            .map(inv => ({ label: `${inv.number} — ${inv.clientName||'—'}`, sub: inv.date||'', right: formatMoney(Number(inv.subtotal)||0), badge: 'badge-green', badgeLabel: 'paid', nav: navInv(inv) }))
+        } else if (kpiDrill === 'unpaid') {
+          title = 'Unpaid Invoices in Range'
+          items = invoicesInRange
+            .filter(i => !['paid'].includes((i.status||'').toLowerCase()))
+            .map(inv => ({ label: `${inv.number} — ${inv.clientName||'—'}`, sub: inv.dueDate ? `Due ${inv.dueDate}` : (inv.date||''), right: formatMoney(Number(inv.subtotal)||0), badge: sBadge(inv.status), badgeLabel: inv.status||'draft', nav: navInv(inv) }))
+        } else if (kpiDrill === 'topClient') {
+          title = 'Revenue by Client'
+          items = computed.byClient.map(c => ({ label: c.name, sub: `${c.invoiceCount} invoice${c.invoiceCount !== 1 ? 's' : ''}`, right: formatMoney(c.total) }))
+        } else if (kpiDrill === 'clients') {
+          title = 'All Clients'
+          const byName: Record<string, number> = {}
+          for (const c of computed.byClient) byName[c.name] = c.total
+          items = store.clients.map(c => ({ label: c.name, sub: c.company || c.email || '', right: byName[c.name] ? formatMoney(byName[c.name]) : '—', nav: `/clients/${c.id}` }))
+        } else if (kpiDrill === 'team') {
+          title = 'Team Members'
+          const byName: Record<string, typeof computed.employeePerformance[0]> = {}
+          for (const e of computed.employeePerformance) byName[e.name] = e
+          items = store.employees.map(e => {
+            const perf = byName[e.name]
+            return { label: e.name, sub: e.role || e.employmentType || '', right: perf ? fmtHoursHM(perf.hours) : '—', nav: `/employees/${e.id}` }
+          })
+        }
+
+        return (
+          <div className="modal-overlay" onClick={() => setKpiDrill(null)}>
+            <div className="modal" style={{ maxWidth: 580 }} onClick={e => e.stopPropagation()}>
+              <div className="modal-header">
+                <h2 className="modal-title">{title}</h2>
+                <button className="modal-close btn-icon" onClick={() => setKpiDrill(null)}>✕</button>
+              </div>
+              {summary && (
+                <div style={{ padding: '8px 20px', fontSize: 13, color: 'var(--muted)', borderBottom: '1px solid var(--border)' }}>{summary}</div>
+              )}
+              <div style={{ maxHeight: '65vh', overflowY: 'auto' }}>
+                {items.length === 0 ? (
+                  <div style={{ padding: '32px 20px', textAlign: 'center', color: 'var(--muted)', fontSize: 13 }}>No data for this period.</div>
+                ) : items.map((item, i) => (
+                  <div
+                    key={i}
+                    style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 20px', borderBottom: '1px solid var(--border)', cursor: item.nav ? 'pointer' : undefined, transition: 'background .15s' }}
+                    onClick={() => { if (item.nav) { navigate(item.nav); setKpiDrill(null) } }}
+                    onMouseEnter={e => { if (item.nav) (e.currentTarget as HTMLElement).style.background = 'var(--surf2)' }}
+                    onMouseLeave={e => { if (item.nav) (e.currentTarget as HTMLElement).style.background = '' }}
+                  >
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.label}</div>
+                      {item.sub && <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 1 }}>{item.sub}</div>}
+                    </div>
+                    {item.badge && <span className={`badge ${item.badge}`} style={{ fontSize: 10, flexShrink: 0 }}>{item.badgeLabel}</span>}
+                    {item.right && <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--gold)', flexShrink: 0 }}>{item.right}</div>}
+                    {item.nav && <span style={{ fontSize: 11, color: 'var(--muted)', flexShrink: 0 }}>→</span>}
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
         )

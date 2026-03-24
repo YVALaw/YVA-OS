@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { useLocation } from 'react-router-dom'
 import type { AppSettings, Client, Invoice, Project } from '../data/types'
 import {
   loadInvoices, saveInvoices,
@@ -227,6 +228,7 @@ const EMPTY_FORM: QuickForm = {
 }
 
 export default function InvoicePage() {
+  const location = useLocation()
   const [invoices,    setInvoices]    = useState<Invoice[]>([])
   const [clients,     setClients]     = useState<Client[]>([])
   const [allProjects, setAllProjects] = useState<Project[]>([])
@@ -243,7 +245,8 @@ export default function InvoicePage() {
   const [newAmountPaid, setNewAmountPaid] = useState('')
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
   const [form, setForm] = useState<QuickForm>(EMPTY_FORM)
-  const [search, setSearch] = useState('')
+  const urlQ = new URLSearchParams(location.search).get('q') || ''
+  const [search, setSearch] = useState(urlQ)
   const [previewInv, setPreviewInv] = useState<Invoice | null>(null)
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
 
@@ -252,6 +255,12 @@ export default function InvoicePage() {
       setInvoices(snap.invoices)
       setClients(snap.clients)
       setAllProjects(snap.projects)
+      // If navigated here with ?q=, expand all project groups so the invoice is visible
+      if (urlQ) {
+        const keys = new Set<string>()
+        for (const inv of snap.invoices) keys.add(inv.projectId || inv.projectName || '__unassigned__')
+        setExpanded(keys)
+      }
     })
     loadSettings().then(setSettings)
   }, [])
