@@ -2,6 +2,8 @@ import { useEffect, useState, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import type { Attachment, Candidate, CandidateStage } from '../data/types'
 import { loadCandidates, saveCandidates } from '../services/storage'
+import { useRole } from '../context/RoleContext'
+import { can } from '../lib/roles'
 
 const ONBOARDING_TASKS = [
   'Set up work email address',
@@ -42,8 +44,10 @@ const EMPTY_FORM: Omit<Candidate, 'id' | 'updatedAt'> = {
 
 export default function CandidatesPage() {
   const navigate = useNavigate()
+  const { role } = useRole()
+  const hiredOnly = can.viewHiredOnly(role)
   const [candidates, setCandidates] = useState<Candidate[]>([])
-  useEffect(() => { loadCandidates().then(setCandidates) }, [])
+  useEffect(() => { loadCandidates().then(all => setCandidates(hiredOnly ? all.filter(c => c.stage === 'hired') : all)) }, [hiredOnly])
   const [modal, setModal] = useState<null | 'add'>(null)
   const [form, setForm] = useState<Omit<Candidate, 'id' | 'updatedAt'>>(EMPTY_FORM)
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
@@ -111,6 +115,36 @@ export default function CandidatesPage() {
   }
 
   const byStage = (stage: CandidateStage) => candidates.filter((c) => c.stage === stage)
+
+  if (hiredOnly) {
+    return (
+      <div className="page-wrap">
+        <div className="page-header">
+          <div className="page-header-left">
+            <h1 className="page-title">Hired Staff</h1>
+            <p className="page-sub">Candidates who have been hired — for payroll reference</p>
+          </div>
+        </div>
+        <div className="card-grid">
+          {candidates.map(c => (
+            <div key={c.id} className="entity-card" style={{ cursor: 'pointer' }} onClick={() => navigate('/candidates/' + c.id)}>
+              <div className="card-avatar avatar" style={{ background: '#22c55e', fontWeight: 800 }}>
+                {c.name.split(' ').map((w: string) => w[0]).slice(0, 2).join('').toUpperCase()}
+              </div>
+              <div className="card-info">
+                <div className="card-name">{c.name}</div>
+                {c.role && <div className="card-meta">{c.role}</div>}
+                {c.email && <div className="card-meta">{c.email}</div>}
+              </div>
+            </div>
+          ))}
+          {candidates.length === 0 && (
+            <div style={{ color: 'var(--muted)', fontSize: 13, padding: 20 }}>No hired candidates yet.</div>
+          )}
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="page-wrap">

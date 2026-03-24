@@ -257,3 +257,16 @@ export async function loadSnapshot(): Promise<DataSnapshot> {
 export function loadSnapshotFromLocalStorage(): DataSnapshot {
   return { employees: [], projects: [], clients: [], invoices: [], invoiceCounter: 1 }
 }
+
+// ─── User Roles ───────────────────────────────────────────────────────────────
+
+export type UserRoleRow = { user_id: string; email: string; role: string }
+
+export async function loadUserRoles(): Promise<UserRoleRow[]> {
+  const { data } = await supabase.from('user_roles').select('*').order('email')
+  return (data || []) as UserRoleRow[]
+}
+
+export async function upsertUserRole(userId: string, email: string, role: string): Promise<void> {
+  await supabase.from('user_roles').upsert({ user_id: userId, email, role })
+}

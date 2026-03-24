@@ -7,8 +7,10 @@ import {
   type DateRange,
 } from '../services/reportsService'
 import { formatMoney, fmtHoursHM } from '../utils/money'
-import { loadSettings, loadGeneralExpenses } from '../services/storage'
-import type { AppSettings, DataSnapshot, Expense, Invoice } from '../data/types'
+import { loadSettings, loadGeneralExpenses, loadCandidates } from '../services/storage'
+import type { AppSettings, Candidate, DataSnapshot, Expense, Invoice } from '../data/types'
+import { useRole } from '../context/RoleContext'
+import { can } from '../lib/roles'
 
 function downloadCSV(filename: string, rows: string[][]): void {
   const escape = (v: string) => `"${String(v ?? '').replace(/"/g, '""')}"`
@@ -93,6 +95,7 @@ function filterInvoices(
 }
 
 export default function ReportsPage() {
+  const { role } = useRole()
   const [preset, setPreset] = useState<Preset>('month')
   const [from, setFrom] = useState<string>(getCurrentMonthRange().from)
   const [to, setTo]     = useState<string>(getCurrentMonthRange().to)
@@ -117,11 +120,13 @@ export default function ReportsPage() {
   const [settings, setSettings] = useState<AppSettings>({ usdToDop: 0, companyName: 'YVA Staffing', companyEmail: '', emailSignature: '' })
   const [store, setStore] = useState<DataSnapshot>({ employees: [], clients: [], projects: [], invoices: [], invoiceCounter: 1 })
   const [generalExpenses, setGeneralExpenses] = useState<Expense[]>([])
+  const [candidates, setCandidates] = useState<Candidate[]>([])
 
   useEffect(() => {
     void loadSettings().then(setSettings)
     void getAllDataSnapshot().then(setStore)
     void loadGeneralExpenses().then(setGeneralExpenses)
+    void loadCandidates().then(setCandidates)
   }, [])
 
   const computed = useMemo(() => computeReports(store, range), [store, range])
@@ -168,6 +173,147 @@ export default function ReportsPage() {
       return d >= today && d <= in60
     }).sort((a, b) => new Date(a.contractEnd!).getTime() - new Date(b.contractEnd!).getTime())
   }, [store])
+
+  // ── Recruiter dashboard ────────────────────────────────────────────────────
+  if (role === 'recruiter') {
+    const now = new Date()
+    const thisMonthStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
+    const hiringProjects = store.projects.filter(p => (p.status || '').toLowerCase() === 'hiring')
+    const hiredThisMonth = candidates.filter(c => {
+      if (c.stage !== 'hired') return false
+      const d = new Date(c.updatedAt || c.createdAt || 0)
+      return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}` === thisMonthStr
+    })
+    const inPipeline = candidates.filter(c => !['hired','rejected'].includes(c.stage))
+    const stageCounts: Record<string, number> = {}
+    for (const c of candidates) stageCounts[c.stage] = (stageCounts[c.stage] || 0) + 1
+
+    return (
+      <div className="page-wrap">
+        <div className="page-header">
+          <div className="page-header-left">
+            <h1 className="page-title">Dashboard</h1>
+            <p className="page-sub">Recruiting pipeline overview</p>
+          </div>
+        </div>
+        <div className="kpi-grid">
+          {[
+            { label: 'Total Candidates', value: String(candidates.length), color: 'var(--text)' },
+            { label: 'In Pipeline',      value: String(inPipeline.length),  color: '#a855f7' },
+            { label: 'Hired This Month', value: String(hiredThisMonth.length), color: '#4ade80' },
+            { label: 'Hiring Projects',  value: String(hiringProjects.length), color: '#f97316' },
+          ].map(({ label, value, color }) => (
+            <div key={label} className="kpi-card">
+              <div className="kpi-label">{label}</div>
+              <div className="kpi-value" style={{ color, fontSize: 26 }}>{value}</div>
+            </div>
+          ))}
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginTop: 16 }}>
+          <div className="data-card">
+            <div className="data-card-title">Pipeline by Stage</div>
+            {['applied','screening','interview','offer','hired','rejected'].map(stage => (
+              <div key={stage} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0', borderBottom: '1px solid rgba(255,255,255,.05)' }}>
+                <span style={{ fontSize: 13, textTransform: 'capitalize', color: 'var(--muted)' }}>{stage}</span>
+                <span style={{ fontWeight: 700, fontSize: 14, color: stage === 'hired' ? '#4ade80' : stage === 'rejected' ? '#f87171' : 'var(--text)' }}>
+                  {stageCounts[stage] || 0}
+                </span>
+              </div>
+            ))}
+          </div>
+          <div className="data-card">
+            <div className="data-card-title">Projects Actively Hiring</div>
+            {hiringProjects.length === 0 ? (
+              <div style={{ color: 'var(--muted)', fontSize: 13, padding: '16px 0' }}>No projects in hiring stage.</div>
+            ) : hiringProjects.map(p => (
+              <div key={p.id} style={{ padding: '8px 0', borderBottom: '1px solid rgba(255,255,255,.05)' }}>
+                <div style={{ fontSize: 13, fontWeight: 600 }}>{p.name}</div>
+                {p.projectNeeds && <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2 }}>{p.projectNeeds}</div>}
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  // ── Lead Gen dashboard ──────────────────────────────────────────────────────
+  if (role === 'lead_gen') {
+    const today = new Date(); today.setHours(0,0,0,0)
+    const in60 = new Date(today); in60.setDate(in60.getDate() + 60)
+    const ago60 = new Date(today); ago60.setDate(ago60.getDate() - 60)
+
+    const contractsExpiring = store.clients.filter(c => {
+      if (!c.contractEnd) return false
+      const d = new Date(c.contractEnd)
+      return d >= today && d <= in60
+    }).sort((a, b) => new Date(a.contractEnd!).getTime() - new Date(b.contractEnd!).getTime())
+
+    const retentionRisk = store.clients.filter(c => {
+      const lastInv = store.invoices
+        .filter(i => i.clientName === c.name)
+        .sort((a, b) => (b.date || '').localeCompare(a.date || ''))[0]
+      if (!lastInv?.date) return true
+      return new Date(lastInv.date) < ago60
+    })
+
+    const thisMonthStr = new Date().toISOString().slice(0, 7)
+    const activeClients = new Set(
+      store.invoices
+        .filter(i => (i.date || '').startsWith(thisMonthStr))
+        .map(i => i.clientName)
+    ).size
+
+    return (
+      <div className="page-wrap">
+        <div className="page-header">
+          <div className="page-header-left">
+            <h1 className="page-title">Dashboard</h1>
+            <p className="page-sub">Client pipeline &amp; retention</p>
+          </div>
+        </div>
+        <div className="kpi-grid">
+          {[
+            { label: 'Total Clients',       value: String(store.clients.length),    color: 'var(--text)' },
+            { label: 'Active This Month',   value: String(activeClients),            color: '#4ade80' },
+            { label: 'Contracts Expiring',  value: String(contractsExpiring.length), color: contractsExpiring.length > 0 ? '#f5b533' : 'var(--muted)' },
+            { label: 'Retention Alerts',    value: String(retentionRisk.length),     color: retentionRisk.length > 0 ? '#f87171' : 'var(--muted)' },
+          ].map(({ label, value, color }) => (
+            <div key={label} className="kpi-card">
+              <div className="kpi-label">{label}</div>
+              <div className="kpi-value" style={{ color, fontSize: 26 }}>{value}</div>
+            </div>
+          ))}
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginTop: 16 }}>
+          <div className="data-card">
+            <div className="data-card-title">Contracts Expiring (60 days)</div>
+            {contractsExpiring.length === 0 ? (
+              <div style={{ color: 'var(--muted)', fontSize: 13, padding: '16px 0' }}>No contracts expiring soon.</div>
+            ) : contractsExpiring.map(c => {
+              const days = Math.round((new Date(c.contractEnd!).getTime() - today.getTime()) / 86400000)
+              return (
+                <div key={c.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid rgba(255,255,255,.05)' }}>
+                  <span style={{ fontSize: 13, fontWeight: 600 }}>{c.name}</span>
+                  <span style={{ fontSize: 12, color: days <= 14 ? '#f87171' : '#f5b533' }}>{days}d left</span>
+                </div>
+              )
+            })}
+          </div>
+          <div className="data-card">
+            <div className="data-card-title">Retention Risk (60+ days inactive)</div>
+            {retentionRisk.length === 0 ? (
+              <div style={{ color: 'var(--muted)', fontSize: 13, padding: '16px 0' }}>All clients are active.</div>
+            ) : retentionRisk.map(c => (
+              <div key={c.id} style={{ padding: '8px 0', borderBottom: '1px solid rgba(255,255,255,.05)', fontSize: 13, color: 'var(--muted)' }}>
+                {c.name}
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="page-wrap">

@@ -1,6 +1,8 @@
 import { ReactNode, useEffect, useRef, useState } from 'react'
 import { NavLink, useLocation, useNavigate } from 'react-router-dom'
 import { loadSnapshot, loadCandidates } from '../services/storage'
+import { useRole } from '../context/RoleContext'
+import { can, ROLE_LABELS } from '../lib/roles'
 
 type Props = {
   children: ReactNode
@@ -213,6 +215,16 @@ function PageTitle({ pathname }: { pathname: string }) {
 
 export default function Shell({ children }: Props) {
   const location = useLocation()
+  const { role, email } = useRole()
+
+  const visibleNav = nav.filter(item => {
+    if (item.to === '/invoice')    return can.viewInvoices(role)
+    if (item.to === '/clients')    return can.viewClients(role)
+    if (item.to === '/employees')  return can.viewEmployees(role)
+    if (item.to === '/candidates') return can.viewAllCandidates(role) || can.viewHiredOnly(role)
+    if (item.to === '/expenses')   return can.viewExpenses(role)
+    return true // dashboard, projects, settings always visible
+  })
 
   return (
     <div className="shell">
@@ -226,7 +238,7 @@ export default function Shell({ children }: Props) {
         </div>
 
         <nav className="sidebar-nav">
-          {nav.map((item) => (
+          {visibleNav.map((item) => (
             <NavLink
               key={item.to}
               to={item.to}
@@ -240,7 +252,8 @@ export default function Shell({ children }: Props) {
         </nav>
 
         <div className="sidebar-footer">
-          <div className="sidebar-footer-label">YVA Staffing © 2026</div>
+          {email && <div className="sidebar-footer-label" style={{ marginBottom: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{email}</div>}
+          <div className="sidebar-footer-label" style={{ color: 'var(--gold)', fontSize: 10, textTransform: 'uppercase', letterSpacing: '.06em' }}>{ROLE_LABELS[role]}</div>
         </div>
       </aside>
 

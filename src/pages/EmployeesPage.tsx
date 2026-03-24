@@ -6,6 +6,8 @@ import {
   loadEmployeeCounter, saveEmployeeCounter, loadSettings,
 } from '../services/storage'
 import { formatMoney, fmtHoursHM } from '../utils/money'
+import { useRole } from '../context/RoleContext'
+import { can } from '../lib/roles'
 
 function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2) }
 
@@ -300,6 +302,8 @@ function EmployeeStatementsPanel({ emp, invoices }: { emp: Employee; invoices: I
 
 export default function EmployeesPage() {
   const navigate = useNavigate()
+  const { role } = useRole()
+  const showPayRates = can.viewPayRates(role)
   const [employees, setEmployees] = useState<Employee[]>([])
   const [invoices,  setInvoices]  = useState<Invoice[]>([])
   const [projects,  setProjects]  = useState<{ id: string; name: string; employeeIds?: string[]; status?: string }[]>([])
@@ -415,7 +419,7 @@ export default function EmployeesPage() {
                     <th>Role</th>
                     <th>Assigned Projects</th>
                     <th style={{textAlign:'right'}}>Hrs This Month</th>
-                    <th style={{textAlign:'right'}}>Earned (USD)</th>
+                    {showPayRates && <th style={{textAlign:'right'}}>Earned (USD)</th>}
                   </tr>
                 </thead>
                 <tbody>
@@ -441,7 +445,7 @@ export default function EmployeesPage() {
                             ))}
                         </td>
                         <td style={{textAlign:'right',fontWeight:600}}>{monthHours > 0 ? `${monthHours.toFixed(1)}h` : '—'}</td>
-                        <td style={{textAlign:'right',color:'var(--gold)',fontWeight:700}}>{monthHours > 0 && payRate > 0 ? formatMoney(monthHours*payRate) : '—'}</td>
+                        {showPayRates && <td style={{textAlign:'right',color:'var(--gold)',fontWeight:700}}>{monthHours > 0 && payRate > 0 ? formatMoney(monthHours*payRate) : '—'}</td>}
                       </tr>
                     )
                   })}
@@ -470,7 +474,7 @@ export default function EmployeesPage() {
                 <span className={`badge ${statusBadge(e.status)}`}>{e.status || 'Active'}</span>
               </div>
               <div className="card-stats">
-                {e.payRate && (
+                {showPayRates && e.payRate && (
                   <div className="stat-item">
                     <div className="stat-label">Pay Rate</div>
                     <div className="stat-value stat-value-gold">${e.payRate}/hr</div>
@@ -574,10 +578,12 @@ export default function EmployeesPage() {
                     {TYPE_OPTIONS.map(t => <option key={t} value={t}>{t || '— Not set —'}</option>)}
                   </select>
                 </div>
-                <div className="form-group">
-                  <label className="form-label">Pay Rate ($/hr)</label>
-                  <input className="form-input" type="number" value={form.payRate} onChange={(e) => setForm({ ...form, payRate: e.target.value })} placeholder="4.50" />
-                </div>
+                {showPayRates && (
+                  <div className="form-group">
+                    <label className="form-label">Pay Rate ($/hr)</label>
+                    <input className="form-input" type="number" value={form.payRate} onChange={(e) => setForm({ ...form, payRate: e.target.value })} placeholder="4.50" />
+                  </div>
+                )}
                 <div className="form-group">
                   <label className="form-label">Status</label>
                   <select className="form-select" value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}>

@@ -5,10 +5,12 @@ import {
   loadSnapshot, loadExpenses, loadGeneralExpenses,
   saveEmployees, saveClients, saveProjects, saveInvoices,
   saveCandidates, saveInvoiceCounter,
-  loadInvoices,
+  loadInvoices, loadUserRoles, upsertUserRole, type UserRoleRow,
 } from '../services/storage'
 import { supabase } from '../lib/supabase'
 import { initiateGmailAuth, disconnectGmail, isGmailConnected } from '../services/gmail'
+import { useRole } from '../context/RoleContext'
+import { can, ROLE_LABELS, ROLE_OPTIONS } from '../lib/roles'
 
 
 async function fetchLafiseRate(): Promise<number | null> {
@@ -24,18 +26,21 @@ async function fetchLafiseRate(): Promise<number | null> {
   }
 }
 
-type SettingsTab = 'company' | 'email' | 'integrations' | 'currency' | 'notifications' | 'data'
+type SettingsTab = 'company' | 'email' | 'integrations' | 'currency' | 'notifications' | 'data' | 'access'
 
-const TABS: { id: SettingsTab; label: string }[] = [
+const ALL_TABS: { id: SettingsTab; label: string; adminOnly?: boolean }[] = [
   { id: 'company',       label: 'Company' },
   { id: 'email',         label: 'Email' },
   { id: 'integrations',  label: 'Integrations' },
   { id: 'currency',      label: 'Currency' },
   { id: 'notifications', label: 'Notifications' },
   { id: 'data',          label: 'Data' },
+  { id: 'access',        label: 'Team Access', adminOnly: true },
 ]
 
 export default function SettingsPage() {
+  const { role: currentRole } = useRole()
+  const TABS = ALL_TABS.filter(t => !t.adminOnly || can.manageRoles(currentRole))
   const fileRef = useRef<HTMLInputElement>(null)
   const [settings, setSettingsState] = useState<AppSettings>({
     usdToDop: 0, companyName: 'YVA Staffing', companyEmail: '', emailSignature: '',
@@ -59,6 +64,7 @@ export default function SettingsPage() {
   )
   const [gmailConnected, setGmailConnected] = useState(false)
   const [gmailEmail, setGmailEmail] = useState<string | undefined>()
+  const [userRoles, setUserRoles] = useState<UserRoleRow[]>([])
 
   useEffect(() => {
     void loadSettings().then(setSettingsState)
@@ -67,6 +73,12 @@ export default function SettingsPage() {
       setGmailEmail(user?.user_metadata?.gmailEmail as string | undefined)
     })
   }, [])
+
+  useEffect(() => {
+    if (activeTab === 'access' && can.manageRoles(currentRole)) {
+      void loadUserRoles().then(setUserRoles)
+    }
+  }, [activeTab, currentRole])
 
   useEffect(() => {
     if (activeTab !== 'data') return
@@ -591,6 +603,57 @@ export default function SettingsPage() {
             {cleared && <div className="settings-notice settings-notice-success">All data cleared. Reload the page.</div>}
           </div>
         </>
+      )}
+
+      {/* ── Team Access ── */}
+      {activeTab === 'access' && can.manageRoles(currentRole) && (
+        <div className="settings-section">
+          <div className="settings-section-title">Team Access</div>
+          <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 16 }}>
+            Manage what each user can see. New users default to Recruiter until assigned a role.
+          </div>
+          {userRoles.length === 0 ? (
+            <div style={{ color: 'var(--muted)', fontSize: 13, padding: '16px 0' }}>No users found. Users appear here after they first log in.</div>
+          ) : (
+            <div className="table-wrap">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Email</th>
+                    <th>Role</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {userRoles.map(u => (
+                    <tr key={u.user_id}>
+                      <td className="td-name">{u.email || '—'}</td>
+                      <td>
+                        <select
+                          className="form-select"
+                          style={{ width: 160, fontSize: 12 }}
+                          value={u.role}
+                          onChange={async e => {
+                            const newRole = e.target.value
+                            await upsertUserRole(u.user_id, u.email, newRole)
+                            setUserRoles(prev => prev.map(r => r.user_id === u.user_id ? { ...r, role: newRole } : r))
+                          }}
+                        >
+                          {ROLE_OPTIONS.map(r => (
+                            <option key={r} value={r}>{ROLE_LABELS[r]}</option>
+                          ))}
+                        </select>
+                      </td>
+                      <td>
+                        <span className="badge badge-blue" style={{ fontSize: 10 }}>{ROLE_LABELS[u.role as keyof typeof ROLE_LABELS] || u.role}</span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
       )}
 
       {confirmClear && (

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { Navigate, Route, Routes } from 'react-router-dom'
 import type { Session } from '@supabase/supabase-js'
 import { supabase } from './lib/supabase'
@@ -19,6 +19,16 @@ import CandidatesPage from './pages/CandidatesPage'
 import CandidateProfilePage from './pages/CandidateProfilePage'
 import GeneralExpensesPage from './pages/GeneralExpensesPage'
 import { loadSettings, saveSettings, loadInvoices } from './services/storage'
+import { RoleProvider, useRole } from './context/RoleContext'
+import type { UserRole } from './lib/roles'
+import { can } from './lib/roles'
+
+function RoleGuard({ allow, children }: { allow: (r: UserRole) => boolean; children: ReactNode }) {
+  const { role, loading } = useRole()
+  if (loading) return null
+  if (!allow(role)) return <Navigate to="/" replace />
+  return <>{children}</>
+}
 
 async function maybeFireReminder() {
   if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return
@@ -77,23 +87,25 @@ export default function App() {
       {/* Protected routes */}
       <Route path="/*" element={
         !session ? <Navigate to="/login" replace /> : (
-          <Shell>
-            <Routes>
-              <Route path="/" element={<ReportsPage />} />
-              <Route path="/invoice" element={<InvoicePage />} />
-              <Route path="/employees" element={<EmployeesPage />} />
-              <Route path="/employees/:id" element={<EmployeeProfilePage />} />
-              <Route path="/clients" element={<ClientsPage />} />
-              <Route path="/clients/:id" element={<ClientProfilePage />} />
-              <Route path="/projects" element={<ProjectsPage />} />
-              <Route path="/projects/:id" element={<ProjectProfilePage />} />
-              <Route path="/candidates" element={<CandidatesPage />} />
-              <Route path="/candidates/:id" element={<CandidateProfilePage />} />
-              <Route path="/expenses" element={<GeneralExpensesPage />} />
-              <Route path="/settings" element={<SettingsPage />} />
-              <Route path="*" element={<Navigate to="/" replace />} />
-            </Routes>
-          </Shell>
+          <RoleProvider>
+            <Shell>
+              <Routes>
+                <Route path="/" element={<ReportsPage />} />
+                <Route path="/invoice" element={<RoleGuard allow={can.viewInvoices}><InvoicePage /></RoleGuard>} />
+                <Route path="/employees" element={<RoleGuard allow={can.viewEmployees}><EmployeesPage /></RoleGuard>} />
+                <Route path="/employees/:id" element={<RoleGuard allow={can.viewEmployees}><EmployeeProfilePage /></RoleGuard>} />
+                <Route path="/clients" element={<RoleGuard allow={can.viewClients}><ClientsPage /></RoleGuard>} />
+                <Route path="/clients/:id" element={<RoleGuard allow={can.viewClients}><ClientProfilePage /></RoleGuard>} />
+                <Route path="/projects" element={<ProjectsPage />} />
+                <Route path="/projects/:id" element={<ProjectProfilePage />} />
+                <Route path="/candidates" element={<RoleGuard allow={r => can.viewAllCandidates(r) || can.viewHiredOnly(r)}><CandidatesPage /></RoleGuard>} />
+                <Route path="/candidates/:id" element={<RoleGuard allow={r => can.viewAllCandidates(r) || can.viewHiredOnly(r)}><CandidateProfilePage /></RoleGuard>} />
+                <Route path="/expenses" element={<RoleGuard allow={can.viewExpenses}><GeneralExpensesPage /></RoleGuard>} />
+                <Route path="/settings" element={<SettingsPage />} />
+                <Route path="*" element={<Navigate to="/" replace />} />
+              </Routes>
+            </Shell>
+          </RoleProvider>
         )
       } />
     </Routes>
