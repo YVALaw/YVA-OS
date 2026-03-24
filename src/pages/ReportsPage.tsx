@@ -181,7 +181,7 @@ export default function ReportsPage() {
     const hiringProjects = store.projects.filter(p => (p.status || '').toLowerCase() === 'hiring')
     const hiredThisMonth = candidates.filter(c => {
       if (c.stage !== 'hired') return false
-      const d = new Date(c.updatedAt || c.createdAt || 0)
+      const d = new Date(c.updatedAt || 0)
       return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}` === thisMonthStr
     })
     const inPipeline = candidates.filter(c => !['hired','rejected'].includes(c.stage))
