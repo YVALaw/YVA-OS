@@ -14,22 +14,27 @@ export function RoleProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     void (async () => {
-      const { data: { user } } = await supabase.auth.getUser()
+      const { data: { session } } = await supabase.auth.getSession()
+      const user = session?.user
       if (!user) { setLoading(false); return }
       setUserId(user.id)
       setEmail(user.email ?? null)
 
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from('user_roles')
         .select('role')
         .eq('user_id', user.id)
         .single()
 
+      console.log('[RoleContext] user:', user.email, 'data:', data, 'error:', error)
+
       if (data?.role) {
         setRole(data.role as UserRole)
       } else {
-        // New user — auto-register with default role
-        await supabase.from('user_roles').insert({ user_id: user.id, email: user.email, role: 'recruiter' })
+        const { error: insertError } = await supabase
+          .from('user_roles')
+          .insert({ user_id: user.id, email: user.email, role: 'recruiter' })
+        console.log('[RoleContext] insert error:', insertError)
         setRole('recruiter')
       }
       setLoading(false)
