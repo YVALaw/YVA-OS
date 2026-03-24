@@ -175,10 +175,11 @@ export default function InvoiceBuilder({ onCreated, onCancel, initialProjectId, 
 
   function handleEmpSelect(rowId: string, name: string) {
     const emp = employees.find(e => e.name === name)
-    updateRow(rowId, {
-      employeeName: name,
-      rate: emp?.payRate != null ? String(emp.payRate) : '',
-    })
+    // Use the project billing rate for client invoices; fall back to employee pay rate if no project rate set
+    const billingRate = selectedProject?.rate != null && selectedProject.rate !== ''
+      ? String(selectedProject.rate)
+      : emp?.payRate != null ? String(emp.payRate) : ''
+    updateRow(rowId, { employeeName: name, rate: billingRate })
   }
 
   function addRow() { setRows(prev => [...prev, emptyRow()]) }
