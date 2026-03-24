@@ -6,31 +6,47 @@
 ## Tech Stack
 - React 18 + TypeScript + Vite
 - React Router v6
-- localStorage for all data persistence (no backend)
+- **Supabase** (PostgreSQL + Auth + RLS) — all data persistence
 - Plain CSS (no Tailwind) — design system in `src/styles.css`
 - No npm UI libraries — all components hand-built
+- Deployed on **Netlify** from GitHub repo: https://github.com/YVALaw/YVA-OS.git
 
-## Data Storage (localStorage keys)
-| Key | Contents |
-|-----|----------|
-| `yvaEmployeesV1` | Employee[] |
-| `yvaProjectsV2` | Project[] |
-| `yvaClientsV1` | Client[] |
-| `yvaInvoicesV1` | Invoice[] |
-| `yvaInvoiceCounterV1` | number (global INV-NNN auto-increment) |
-| `yvaEmployeeCounterV1` | number (YVA{YY}{NNN} auto-increment) |
-| `yvaCandidatesV1` | Candidate[] |
-| `yvaSettingsV1` | AppSettings (exchange rate, company info, reminder day) |
-| `yvaExpensesV1` | Expense[] (per-project expenses) |
-| `yvaTasksV1` | Task[] (per-project kanban tasks) |
-| `yvaActivityLogV1` | ActivityLogEntry[] (per-client timeline notes) |
-| `yvaInvoiceTemplatesV1` | InvoiceTemplate[] (saved builder templates) |
+## Data Storage (Supabase tables)
+| Table | Contents |
+|-------|----------|
+| `employees` | Employee[] |
+| `projects` | Project[] |
+| `clients` | Client[] |
+| `invoices` | Invoice[] |
+| `candidates` | Candidate[] |
+| `expenses` | Expense[] (per-project expenses) |
+| `general_expenses` | Expense[] (business-wide expenses) |
+| `tasks` | Task[] (per-project kanban tasks) |
+| `activity_log` | ActivityLogEntry[] (per-client timeline notes) |
+| `invoice_templates` | InvoiceTemplate[] (saved builder templates) |
+| `settings` | AppSettings (single row — exchange rate, company info, etc.) |
+| `counters` | { key: 'invoice' | 'employee', value: number } |
+
+All data is scoped to the authenticated user via Supabase RLS.
+
+### Storage service (`src/services/storage.ts`)
+- All load/save functions go through this module — no direct Supabase calls in pages
+- `toSnake` / `toCamel` converters handle JS camelCase ↔ DB snake_case mapping
+- `syncAll(table, items)` upserts all items and deletes removed rows
+- Strips `created_at` from upserted rows; converts empty strings to `null`
+
+## Authentication
+- Supabase Auth (email + password)
+- Login page: `src/pages/LoginPage.tsx`
+- Sign-up available to anyone with the link (no invite required)
+- **Remember me** checkbox (default: on) — if unchecked, signs out on tab/window close via `beforeunload`
+- Session handled by Supabase SDK automatically when Remember Me is on
 
 ## Pages & Routes
 | Route | Page | Notes |
 |-------|------|-------|
 | `/` | ReportsPage | Dashboard: KPI cards, 6-month bar chart, attention panel, invoice history |
-| `/invoice` | InvoicePage | Kanban pipeline + React builder + bulk status update |
+| `/invoice` | InvoicePage | Project-grouped collapsible list + React builder + bulk status update |
 | `/clients` | ClientsPage | Kanban + cards + outstanding balance per card + Remind button |
 | `/clients/:id` | ClientProfilePage | Full profile: KPIs, inline edit, projects, invoice history, activity log |
 | `/employees` | EmployeesPage | Card grid + Statements panel + auto employee number |
@@ -42,6 +58,7 @@
 | `/settings` | SettingsPage | Tabbed: Company, Email (templates), Integrations (Gmail), Currency, Notifications, Data (backup/restore/danger) |
 | `/portal` | PortalPage | Read-only client-facing invoice view (outside Shell, no nav) |
 | `/oauth-callback` | OAuthCallbackPage | Handles Google OAuth2 redirect after Gmail authorization (outside Shell) |
+| `/login` | LoginPage | Email/password login + sign-up toggle + Remember Me |
 
 ## Profile Page Architecture
 - All entity list pages (Clients, Employees, Projects, Candidates) navigate to profile routes on card click
@@ -67,6 +84,8 @@
 - **"Quick Invoice"** → simple modal for fixed-price invoices — always creates as `sent`, auto-emails client
 - When invoice is created via builder or Quick Invoice → status auto-set to `sent` + email auto-sent
 - Invoices page is **project-grouped**: collapsible sections per project, table rows per invoice; Unassigned section at bottom
+  - **All groups collapsed by default** — uses an `expanded` Set (empty = all closed)
+  - Each group header shows **unpaid count** (sent/overdue/partial) in red dot badge
 - Each project group has "+ Quick" and "+ Invoice" buttons that pre-fill the project
 - Email button: sends via Gmail if connected, otherwise opens mailto:
 - PDF button: opens print-formatted window with logo, due date, notes, DOP
@@ -80,7 +99,7 @@
 
 ## Employee Auto-Numbering
 - Format: `YVA{2-digit-year}{3-digit-seq}` → e.g. `YVA26001`
-- Counter stored in `yvaEmployeeCounterV1`
+- Counter stored in `counters` table (key: `employee`)
 - Assigned on employee creation (not editable)
 
 ## Client Portal
@@ -101,7 +120,7 @@
 - "Activity" button on each client card (both views)
 - Opens modal with chronological timeline of free-text notes
 - Add note with Enter key or button; delete individual entries
-- Stored in `yvaActivityLogV1` keyed by `clientId`
+- Stored in `activity_log` table keyed by `clientId`
 
 ## Task Board (Projects)
 - "Tasks" button on each project card opens 3-column kanban (To Do / In Progress / Done)
@@ -128,7 +147,8 @@
 | Total Billed | Sum of invoices in date range |
 | Total Hours | Hours billed in range (h mm format) |
 | Est. Payroll | Hours × employee pay rates |
-| Net Earnings | Billed minus payroll |
+| Business Expenses | Sum of general expenses in date range (orange) |
+| Net Earnings | Billed minus payroll minus business expenses |
 | Paid | Count of paid invoices |
 | Unpaid | Count of unpaid invoices |
 | Top Client | Highest revenue client in range |
@@ -140,7 +160,7 @@ Also shows: Employee Performance table, Revenue by Client/Project, All-Time Clie
 ## Currency Conversion
 - Settings page has USD→DOP exchange rate field
 - "Auto-fetch" button tries `allorigins.win` proxy → `lafise.com/blrd/` to extract Compra rate
-- Rate stored in `yvaSettingsV1`
+- Rate stored in `settings` table
 - Shown on invoice cards, PDFs, and portal as `RD$XXXXX`
 
 ## Notifications
@@ -149,7 +169,7 @@ Also shows: Employee Performance table, Revenue by Client/Project, All-Time Clie
 - "Check Now" sends test notifications for overdue/draft invoices
 - Uses `/public/yva-logo.png` as notification icon
 - **Weekly reminder scheduler**: Settings → select day-of-week → fires on app open if not yet fired today
-  - Stored as `reminderDay` (0=Sun…6=Sat) + `reminderLastFired` (ISO date) in `yvaSettingsV1`
+  - Stored as `reminderDay` (0=Sun…6=Sat) + `reminderLastFired` (ISO date) in settings
   - Fires from `maybeFireReminder()` in `App.tsx` via `useEffect` on mount
 
 ## Invoice Statuses
@@ -160,12 +180,22 @@ Also shows: Employee Performance table, Revenue by Client/Project, All-Time Clie
 ## Gmail Integration
 - Service: `src/services/gmail.ts` — OAuth2 PKCE flow, token refresh, `sendGmailMessage()`, `sendEmail()` (universal)
 - `sendEmail(to, subject, body)` — uses Gmail API if connected, falls back to `mailto:` if not
-- **OAuth flow**: User enters Google OAuth Client ID in Settings → clicks "Connect Gmail" → PKCE redirect to Google → callback at `/oauth-callback` → tokens saved to `yvaSettingsV1`
-- Tokens stored in `AppSettings`: `gmailClientId`, `gmailAccessToken`, `gmailRefreshToken`, `gmailTokenExpiry`, `gmailEmail`
+- **Per-user OAuth**: each logged-in user connects their own Gmail account independently
+  - `gmailClientId` stored in shared `settings` table (one per org)
+  - `gmailAccessToken`, `gmailRefreshToken`, `gmailTokenExpiry`, `gmailEmail` stored in **Supabase user metadata** (`supabase.auth.updateUser({ data: {...} })`)
+  - Read via `supabase.auth.getUser()` → `user.user_metadata`
+- **OAuth flow**: User enters Google OAuth Client ID in Settings → clicks "Connect Gmail" → PKCE redirect to Google → callback at `/oauth-callback` → tokens saved to user metadata
 - Token auto-refreshes on expiry using stored refresh token
-- Disconnect option in Settings clears all Gmail tokens
+- Disconnect option in Settings clears all Gmail tokens from user metadata
 - **Setup**: Google Cloud Console → enable Gmail API → OAuth 2.0 Client ID (Web application) → add `{origin}/oauth-callback` as Authorized Redirect URI
 - All email-sending functions (invoice email, payment reminder, statement email, client reminder) use `sendEmail()` and therefore support Gmail automatically
+
+## Expense Tracking
+- Projects have an "Expenses" button → modal to log expenses per project (stored in `expenses` table)
+- **General/Business Expenses** stored in `general_expenses` table — org-wide costs not tied to a project
+- Expense fields: description, amount, date, category
+- Project cards show: budget, billed, expenses totals with % used; red warning at 90%+
+- General expenses shown as "Business Expenses" KPI on dashboard, deducted from Net Earnings
 
 ## Invoice Duplication
 - Duplicate button on invoice cards copies an invoice, resets status to `draft`, assigns new INV-NNN number, sets today's date
@@ -184,13 +214,6 @@ Also shows: Employee Performance table, Revenue by Client/Project, All-Time Clie
 - Client records have `contractEnd?: string` field
 - Clients within 60 days of expiry show warning on their card (orange ≤60d, red = expired)
 - ReportsPage Needs Attention panel also shows each expiring contract with days remaining
-
-## Expense Tracking
-- Projects have an "Expenses" button → modal to log expenses per project
-- Expense fields: description, amount, date, category
-- Project cards show: budget, billed, expenses totals with % used; red warning at 90%+
-- Expenses stored in `yvaExpensesV1` via `loadExpenses`/`saveExpenses`
-- Project type has `budget?: number` field
 
 ## Employee Capacity View
 - EmployeesPage has a "Capacity" toggle above the card grid
@@ -261,24 +284,36 @@ Also shows: Employee Performance table, Revenue by Client/Project, All-Time Clie
 - [x] Invoice page: project-grouped collapsible list view (replaced kanban — sections per project, table rows per invoice)
 - [x] Invoice auto-send on creation (status → `sent` + email via `sendEmail()`)
 - [x] Gmail OAuth2 PKCE integration (`src/services/gmail.ts`) — actual Gmail API send, mailto: fallback if not connected
+- [x] **Supabase migration** — all data moved from localStorage to Supabase PostgreSQL + Auth
+- [x] **Login page** — email/password auth with sign-up toggle and Remember Me checkbox
+- [x] **Invoice groups collapsed by default** — all project sections closed on load; unpaid count shown in header
+- [x] **Business Expenses KPI on dashboard** — general expenses card + deducted from Net Earnings
+- [x] **Per-user Gmail OAuth** — each user's Gmail tokens stored in Supabase user metadata (not shared)
 
 ---
 
 ## Architecture Notes
 
 ### App.tsx routing
-- `/portal` renders `PortalPage` **outside** Shell (no nav/sidebar)
-- All other routes render inside `Shell`
+- `/portal` and `/oauth-callback` and `/login` render **outside** Shell (no nav/sidebar)
+- All other routes render inside `Shell`, protected by auth check
+- Unauthenticated users redirected to `/login`
 
 ### Storage service (`src/services/storage.ts`)
-Single module exports all load/save functions. No direct localStorage calls in pages (except legacy `saveClients` in ClientsPage which should eventually migrate).
+Single module exports all load/save functions. No direct Supabase calls in pages (except SettingsPage `doClear` and `exportData` which need direct table access).
 
 ### Invoice builder (`src/components/InvoiceBuilder.tsx`)
 Standalone component used inside the builder modal in InvoicePage. Handles:
 - Employee row management, daily hours grid, simple totals mode
 - `parseHours(val)` supports: `"8"`, `"8.5"`, `"8,5"`, `"8:30"` → decimal
-- Template save/load via `yvaInvoiceTemplatesV1`
+- Template save/load via `invoice_templates` table
 - Per-project invoice number generation with `nextInvoiceSeq` mutation
+
+### Supabase schema notes
+- `name`, `role`, `location`, `timestamp` are PostgreSQL reserved words — wrapped in double quotes in SQL
+- `created_at` is a DB-managed `timestamptz` — never included in upserts
+- Empty strings converted to `null` before upsert (avoids numeric column errors)
+- After schema changes, run: `notify pgrst, 'reload schema'` in Supabase SQL editor
 
 ---
 
@@ -291,7 +326,7 @@ Standalone component used inside the builder modal in InvoicePage. Handles:
 - **Team size:** ~27 members
 
 ## Key Constraints
-- No backend — all data in localStorage (single browser/device)
 - No npm UI libraries — keep CSS self-contained
 - Logo at `/public/yva-logo.png`
 - Legacy builder at `/public/legacy/` — kept for reference but no longer used in app
+- Netlify SPA routing: `public/_redirects` contains `/* /index.html 200`

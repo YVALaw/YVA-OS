@@ -2,12 +2,13 @@ import { useState } from 'react'
 import { supabase } from '../lib/supabase'
 
 export default function LoginPage() {
-  const [mode, setMode]         = useState<'login' | 'signup'>('login')
-  const [email, setEmail]       = useState('')
-  const [password, setPassword] = useState('')
-  const [loading, setLoading]   = useState(false)
-  const [error, setError]       = useState<string | null>(null)
-  const [success, setSuccess]   = useState<string | null>(null)
+  const [mode, setMode]           = useState<'login' | 'signup'>('login')
+  const [email, setEmail]         = useState('')
+  const [password, setPassword]   = useState('')
+  const [rememberMe, setRememberMe] = useState(true)
+  const [loading, setLoading]     = useState(false)
+  const [error, setError]         = useState<string | null>(null)
+  const [success, setSuccess]     = useState<string | null>(null)
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -18,7 +19,11 @@ export default function LoginPage() {
     if (mode === 'login') {
       const { error } = await supabase.auth.signInWithPassword({ email, password })
       setLoading(false)
-      if (error) setError(error.message)
+      if (error) { setError(error.message); return }
+      if (!rememberMe) {
+        // Sign out when tab/window closes
+        window.addEventListener('beforeunload', () => { void supabase.auth.signOut() }, { once: true })
+      }
     } else {
       const { error } = await supabase.auth.signUp({ email, password })
       setLoading(false)
@@ -74,6 +79,13 @@ export default function LoginPage() {
               required
             />
           </div>
+
+          {mode === 'login' && (
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--muted)', cursor: 'pointer' }}>
+              <input type="checkbox" checked={rememberMe} onChange={e => setRememberMe(e.target.checked)} />
+              Remember me
+            </label>
+          )}
 
           {error && (
             <div style={{

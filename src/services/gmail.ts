@@ -1,5 +1,22 @@
 import type { AppSettings } from '../data/types'
 import { loadSettings, saveSettings } from './storage'
+import { supabase } from '../lib/supabase'
+
+type GmailUserData = {
+  gmailAccessToken?: string
+  gmailRefreshToken?: string
+  gmailTokenExpiry?: number
+  gmailEmail?: string
+}
+
+async function getGmailUserData(): Promise<GmailUserData> {
+  const { data: { user } } = await supabase.auth.getUser()
+  return (user?.user_metadata || {}) as GmailUserData
+}
+
+async function saveGmailUserData(data: GmailUserData): Promise<void> {
+  await supabase.auth.updateUser({ data: data as Record<string, unknown> })
+}
 
 const AUTH_ENDPOINT  = 'https://accounts.google.com/o/oauth2/v2/auth'
 const TOKEN_ENDPOINT = 'https://oauth2.googleapis.com/token'
@@ -76,15 +93,16 @@ export async function exchangeCode(code: string, clientId: string): Promise<stri
   })
   const ui = await uiRes.json()
 
-  const settings = await loadSettings()
-  void saveSettings({
-    ...settings,
-    gmailClientId:    clientId,
-    gmailAccessToken: data.access_token,
-    gmailRefreshToken: data.refresh_token || settings.gmailRefreshToken,
-    gmailTokenExpiry: Date.now() + (data.expires_in - 60) * 1000,
-    gmailEmail:       ui.email,
+  const existing = await getGmailUserData()
+  await saveGmailUserData({
+    gmailAccessToken:  data.access_token,
+    gmailRefreshToken: data.refresh_token || existing.gmailRefreshToken,
+    gmailTokenExpiry:  Date.now() + (data.expires_in - 60) * 1000,
+    gmailEmail:        ui.email as string,
   })
+  // Also save clientId to shared settings
+  const settings = await loadSettings()
+  void saveSettings({ ...settings, gmailClientId: clientId })
 
   localStorage.removeItem('gmail_pkce_verifier')
   localStorage.removeItem('gmail_pkce_state')
@@ -92,7 +110,7 @@ export async function exchangeCode(code: string, clientId: string): Promise<stri
   return ui.email as string
 }
 
-async function refreshToken(settings: AppSettings): Promise<string> {
+async function refreshToken(settings: AppSettings & GmailUserData): Promise<string> {
   if (!settings.gmailRefreshToken || !settings.gmailClientId) {
     throw new Error('Gmail not connected — no refresh token.')
   }
@@ -107,9 +125,7 @@ async function refreshToken(settings: AppSettings): Promise<string> {
   })
   if (!res.ok) throw new Error('Token refresh failed — please reconnect Gmail.')
   const data = await res.json()
-  const fresh = await loadSettings()
-  void saveSettings({
-    ...fresh,
+  void saveGmailUserData({
     gmailAccessToken: data.access_token,
     gmailTokenExpiry: Date.now() + (data.expires_in - 60) * 1000,
   })
@@ -117,23 +133,24 @@ async function refreshToken(settings: AppSettings): Promise<string> {
 }
 
 async function getValidToken(): Promise<string | null> {
-  const settings = await loadSettings()
-  if (!settings.gmailAccessToken) return null
-  if (settings.gmailTokenExpiry && Date.now() > settings.gmailTokenExpiry) {
-    try { return await refreshToken(settings) } catch { return null }
+  const userData = await getGmailUserData()
+  if (!userData.gmailAccessToken) return null
+  if (userData.gmailTokenExpiry && Date.now() > userData.gmailTokenExpiry) {
+    try {
+      const settings = await loadSettings()
+      return await refreshToken({ ...settings, ...userData } as AppSettings)
+    } catch { return null }
   }
-  return settings.gmailAccessToken
+  return userData.gmailAccessToken
 }
 
 export async function isGmailConnected(): Promise<boolean> {
-  const s = await loadSettings()
-  return !!(s.gmailAccessToken && s.gmailEmail)
+  const userData = await getGmailUserData()
+  return !!(userData.gmailAccessToken && userData.gmailEmail)
 }
 
 export async function disconnectGmail(): Promise<void> {
-  const s = await loadSettings()
-  void saveSettings({
-    ...s,
+  await saveGmailUserData({
     gmailAccessToken:  undefined,
     gmailRefreshToken: undefined,
     gmailTokenExpiry:  undefined,
@@ -158,15 +175,15 @@ function buildRaw(to: string, subject: string, body: string, from: string): stri
 }
 
 export async function sendGmailMessage(to: string, subject: string, body: string): Promise<void> {
-  const settings = await loadSettings()
-  if (!settings.gmailEmail) throw new Error('Gmail not connected.')
+  const userData = await getGmailUserData()
+  if (!userData.gmailEmail) throw new Error('Gmail not connected.')
   const token = await getValidToken()
   if (!token) throw new Error('Gmail session expired — please reconnect in Settings.')
 
   const res = await fetch(SEND_ENDPOINT, {
     method:  'POST',
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body:    JSON.stringify({ raw: buildRaw(to, subject, body, settings.gmailEmail) }),
+    body:    JSON.stringify({ raw: buildRaw(to, subject, body, userData.gmailEmail) }),
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({}))

@@ -221,7 +221,7 @@ export default function InvoicePage() {
   const [form, setForm] = useState<QuickForm>(EMPTY_FORM)
   const [search, setSearch] = useState('')
   const [previewInv, setPreviewInv] = useState<Invoice | null>(null)
-  const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
+  const [expanded, setExpanded] = useState<Set<string>>(new Set())
 
   useEffect(() => {
     loadSnapshot().then(snap => {
@@ -295,7 +295,7 @@ export default function InvoicePage() {
   }
 
   function toggleCollapse(key: string) {
-    setCollapsed(prev => {
+    setExpanded(prev => {
       const next = new Set(prev)
       next.has(key) ? next.delete(key) : next.add(key)
       return next
@@ -397,7 +397,8 @@ export default function InvoicePage() {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           {groups.map(({ key, label, projectId: pId, invoices: groupInvs }) => {
             const groupTotal = groupInvs.reduce((s, i) => s + (Number(i.subtotal)||0), 0)
-            const isOpen = !collapsed.has(key)
+            const unpaid = groupInvs.filter(i => ['sent','overdue','partial'].includes((i.status||'').toLowerCase())).length
+            const isOpen = expanded.has(key)
             return (
               <div key={key} className="invoice-group">
                 <div className="invoice-group-header" onClick={() => toggleCollapse(key)}>
@@ -406,6 +407,7 @@ export default function InvoicePage() {
                   <span className="invoice-group-meta">
                     {groupInvs.length} invoice{groupInvs.length !== 1 ? 's' : ''} · {formatMoney(groupTotal)}
                     {settings.usdToDop > 0 ? ` · RD$${(groupTotal * settings.usdToDop).toLocaleString('en-US',{maximumFractionDigits:0})}` : ''}
+                    {unpaid > 0 && <span style={{ marginLeft: 8, color: '#f87171', fontSize: 11 }}>● {unpaid} unpaid</span>}
                   </span>
                   <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }} onClick={e => e.stopPropagation()}>
                     <button className="btn-xs btn-ghost" onClick={() => openQuickForProject(pId || undefined)}>+ Quick</button>

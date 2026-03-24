@@ -7,8 +7,8 @@ import {
   type DateRange,
 } from '../services/reportsService'
 import { formatMoney, fmtHoursHM } from '../utils/money'
-import { loadSettings } from '../services/storage'
-import type { AppSettings, DataSnapshot, Invoice } from '../data/types'
+import { loadSettings, loadGeneralExpenses } from '../services/storage'
+import type { AppSettings, DataSnapshot, Expense, Invoice } from '../data/types'
 
 function downloadCSV(filename: string, rows: string[][]): void {
   const escape = (v: string) => `"${String(v ?? '').replace(/"/g, '""')}"`
@@ -116,10 +116,12 @@ export default function ReportsPage() {
 
   const [settings, setSettings] = useState<AppSettings>({ usdToDop: 0, companyName: 'YVA Staffing', companyEmail: '', emailSignature: '' })
   const [store, setStore] = useState<DataSnapshot>({ employees: [], clients: [], projects: [], invoices: [], invoiceCounter: 1 })
+  const [generalExpenses, setGeneralExpenses] = useState<Expense[]>([])
 
   useEffect(() => {
     void loadSettings().then(setSettings)
     void getAllDataSnapshot().then(setStore)
+    void loadGeneralExpenses().then(setGeneralExpenses)
   }, [])
 
   const computed = useMemo(() => computeReports(store, range), [store, range])
@@ -232,13 +234,30 @@ export default function ReportsPage() {
           <div className="kpi-value" style={{ color: '#f87171' }}>{formatMoney(computed.totalPayroll)}</div>
           <div className="kpi-sub">based on employee pay rates</div>
         </div>
-        <div className="kpi-card">
-          <div className="kpi-label">Net Earnings</div>
-          <div className="kpi-value" style={{ color: computed.totalNetEarnings >= 0 ? '#4ade80' : '#f87171' }}>
-            {formatMoney(computed.totalNetEarnings)}
-          </div>
-          <div className="kpi-sub">billed minus payroll</div>
-        </div>
+        {(() => {
+          const rangeExpenses = generalExpenses.filter(e => {
+            if (!e.date) return true
+            if (from && e.date < from) return false
+            if (to && e.date > to) return false
+            return true
+          })
+          const totalExpenses = rangeExpenses.reduce((s, e) => s + (Number(e.amount) || 0), 0)
+          const netAfterExpenses = computed.totalNetEarnings - totalExpenses
+          return (<>
+            <div className="kpi-card">
+              <div className="kpi-label">Business Expenses</div>
+              <div className="kpi-value" style={{ color: '#fb923c' }}>{formatMoney(totalExpenses)}</div>
+              <div className="kpi-sub">{rangeExpenses.length} expense{rangeExpenses.length !== 1 ? 's' : ''} in range</div>
+            </div>
+            <div className="kpi-card">
+              <div className="kpi-label">Net Earnings</div>
+              <div className="kpi-value" style={{ color: netAfterExpenses >= 0 ? '#4ade80' : '#f87171' }}>
+                {formatMoney(netAfterExpenses)}
+              </div>
+              <div className="kpi-sub">billed − payroll − expenses</div>
+            </div>
+          </>)
+        })()}
         <div className="kpi-card">
           <div className="kpi-label">Paid</div>
           <div className="kpi-value" style={{ color: '#4ade80' }}>{computed.paidCount}</div>

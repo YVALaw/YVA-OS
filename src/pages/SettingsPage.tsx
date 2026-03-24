@@ -8,7 +8,7 @@ import {
   loadInvoices,
 } from '../services/storage'
 import { supabase } from '../lib/supabase'
-import { initiateGmailAuth, disconnectGmail } from '../services/gmail'
+import { initiateGmailAuth, disconnectGmail, isGmailConnected } from '../services/gmail'
 
 const LAFISE_URL = 'https://www.lafise.com/blrd/'
 
@@ -72,9 +72,15 @@ export default function SettingsPage() {
   const [notifPerm, setNotifPerm] = useState<NotificationPermission>(
     typeof Notification !== 'undefined' ? Notification.permission : 'default'
   )
+  const [gmailConnected, setGmailConnected] = useState(false)
+  const [gmailEmail, setGmailEmail] = useState<string | undefined>()
 
   useEffect(() => {
     void loadSettings().then(setSettingsState)
+    void isGmailConnected().then(setGmailConnected)
+    void supabase.auth.getUser().then(({ data: { user } }) => {
+      setGmailEmail(user?.user_metadata?.gmailEmail as string | undefined)
+    })
   }, [])
 
   useEffect(() => {
@@ -385,16 +391,16 @@ export default function SettingsPage() {
         <div className="settings-section">
           <div className="settings-section-title">Gmail</div>
 
-          {!!(settings.gmailAccessToken && settings.gmailEmail) ? (
+          {gmailConnected ? (
             <div className="settings-row">
               <div className="settings-row-info">
                 <div className="settings-row-label">Connected Account</div>
                 <div className="settings-row-sub" style={{ color: '#22c55e' }}>
-                  ✓ Emails sent via Gmail as <strong>{settings.gmailEmail}</strong>
+                  ✓ Emails sent via Gmail as <strong>{gmailEmail}</strong>
                 </div>
               </div>
               <button className="btn-ghost btn-sm" style={{ color: '#f87171' }}
-                onClick={() => void disconnectGmail().then(() => loadSettings()).then(setSettingsState)}>
+                onClick={() => void disconnectGmail().then(() => { setGmailConnected(false); setGmailEmail(undefined) })}>
                 Disconnect
               </button>
             </div>
