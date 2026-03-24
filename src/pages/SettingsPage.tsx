@@ -39,8 +39,8 @@ const ALL_TABS: { id: SettingsTab; label: string; adminOnly?: boolean }[] = [
 ]
 
 export default function SettingsPage() {
-  const { role: currentRole } = useRole()
-  const TABS = ALL_TABS.filter(t => !t.adminOnly || can.manageRoles(currentRole))
+  const { role: currentRole, loading: roleLoading } = useRole()
+  const TABS = roleLoading ? ALL_TABS.filter(t => !t.adminOnly) : ALL_TABS.filter(t => !t.adminOnly || can.manageRoles(currentRole))
   const fileRef = useRef<HTMLInputElement>(null)
   const [settings, setSettingsState] = useState<AppSettings>({
     usdToDop: 0, companyName: 'YVA Staffing', companyEmail: '', emailSignature: '',
