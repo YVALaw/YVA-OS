@@ -1,0 +1,2 @@
+Place your yva-logo.png (or .svg) in /public and rename to yva-logo.png.
+This placeholder exists because the asset was not present in the uploaded zip.
