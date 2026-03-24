@@ -5,12 +5,13 @@ import { loadSnapshot, saveProjects, loadTasks, saveTasks, loadExpenses, saveExp
 import { formatMoney } from '../utils/money'
 function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2) }
 
-type ProjectStage = 'planning' | 'active' | 'review' | 'completed' | 'on-hold'
+type ProjectStage = 'planning' | 'active' | 'hiring' | 'review' | 'completed' | 'on-hold'
 type ViewMode = 'cards' | 'kanban'
 
 const STAGES: { key: ProjectStage; label: string }[] = [
   { key: 'planning',  label: 'Planning' },
   { key: 'active',    label: 'Active' },
+  { key: 'hiring',    label: 'Hiring' },
   { key: 'review',    label: 'Review' },
   { key: 'completed', label: 'Completed' },
   { key: 'on-hold',   label: 'On Hold' },
@@ -25,6 +26,7 @@ const TASK_COLS: { key: TaskStatus; label: string }[] = [
 function stageColor(s?: string): string {
   switch ((s || 'planning').toLowerCase()) {
     case 'active':    return '#22c55e'
+    case 'hiring':    return '#f97316'
     case 'review':    return '#a855f7'
     case 'completed': return '#14b8a6'
     case 'on-hold':   return '#f5b533'
@@ -34,6 +36,7 @@ function stageColor(s?: string): string {
 function stageBadge(s?: string): string {
   switch ((s || 'planning').toLowerCase()) {
     case 'active':    return 'badge-green'
+    case 'hiring':    return 'badge-orange'
     case 'review':    return 'badge-purple'
     case 'completed': return 'badge-teal'
     case 'on-hold':   return 'badge-yellow'

@@ -55,6 +55,8 @@ export type Project = {
   billingModel?: string
   startDate?: string
   endDate?: string
+  description?: string
+  projectNeeds?: string
   notes?: string
   links?: { label: string; url: string }[]
 }

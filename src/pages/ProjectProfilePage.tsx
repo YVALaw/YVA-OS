@@ -16,7 +16,7 @@ function stageBadge(s?: string): string {
   }
 }
 
-const STAGES = ['planning','active','review','completed','on-hold']
+const STAGES = ['planning','active','hiring','review','completed','on-hold']
 const BILLING_MODELS = ['hourly','fixed','retainer']
 const TASK_COLS: { key: TaskStatus; label: string }[] = [
   { key: 'todo', label: 'To Do' },
@@ -55,6 +55,7 @@ export default function ProjectProfilePage() {
   const [form, setForm] = useState({
     name: '', rate: '', budget: '', clientId: '', status: 'planning',
     billingModel: 'hourly', startDate: '', endDate: '', notes: '',
+    description: '', projectNeeds: '',
     links: [] as LinkEntry[], employeeIds: [] as string[],
   })
   const [newLinkLabel, setNewLinkLabel] = useState('')
@@ -74,6 +75,8 @@ export default function ProjectProfilePage() {
         startDate:    project.startDate ?? '',
         endDate:      project.endDate ?? '',
         notes:        project.notes ?? '',
+        description:  project.description ?? '',
+        projectNeeds: project.projectNeeds ?? '',
         links:        (project.links ?? []) as LinkEntry[],
         employeeIds:  project.employeeIds ?? [],
       })
@@ -124,6 +127,8 @@ export default function ProjectProfilePage() {
       billingModel: form.billingModel,
       startDate: form.startDate || undefined,
       endDate: form.endDate || undefined,
+      description: form.description || undefined,
+      projectNeeds: form.projectNeeds || undefined,
       notes: form.notes || undefined,
       links: form.links.length > 0 ? form.links : undefined,
       employeeIds: form.employeeIds,
@@ -143,6 +148,8 @@ export default function ProjectProfilePage() {
       startDate: projectNN.startDate ?? '',
       endDate: projectNN.endDate ?? '',
       notes: projectNN.notes ?? '',
+      description: projectNN.description ?? '',
+      projectNeeds: projectNN.projectNeeds ?? '',
       links: projectNN.links ?? [],
       employeeIds: projectNN.employeeIds ?? [],
     })
@@ -318,6 +325,14 @@ export default function ProjectProfilePage() {
                     <input className="form-input form-input-sm" type="date" value={form.endDate} onChange={e => setForm(f => ({...f, endDate: e.target.value}))} />
                   </div>
                   <div className="profile-field profile-field-tall">
+                    <span className="profile-field-label">Description</span>
+                    <textarea className="form-textarea" rows={3} value={form.description} onChange={e => setForm(f => ({...f, description: e.target.value}))} placeholder="Overview of the project..." />
+                  </div>
+                  <div className="profile-field profile-field-tall">
+                    <span className="profile-field-label">Project Needs</span>
+                    <textarea className="form-textarea" rows={3} value={form.projectNeeds} onChange={e => setForm(f => ({...f, projectNeeds: e.target.value}))} placeholder="Skills, roles, or requirements needed..." />
+                  </div>
+                  <div className="profile-field profile-field-tall">
                     <span className="profile-field-label">Notes</span>
                     <textarea className="form-textarea" rows={3} value={form.notes} onChange={e => setForm(f => ({...f, notes: e.target.value}))} />
                   </div>
@@ -368,6 +383,18 @@ export default function ProjectProfilePage() {
                       <span className="profile-field-value">{value}</span>
                     </div>
                   ) : null)}
+                  {projectNN.description && (
+                    <div className="profile-field profile-field-tall">
+                      <span className="profile-field-label">Description</span>
+                      <span className="profile-field-value" style={{ whiteSpace: 'pre-wrap' }}>{projectNN.description}</span>
+                    </div>
+                  )}
+                  {projectNN.projectNeeds && (
+                    <div className="profile-field profile-field-tall">
+                      <span className="profile-field-label">Project Needs</span>
+                      <span className="profile-field-value" style={{ whiteSpace: 'pre-wrap' }}>{projectNN.projectNeeds}</span>
+                    </div>
+                  )}
                   {projectNN.notes && (
                     <div className="profile-field profile-field-tall">
                       <span className="profile-field-label">Notes</span>
