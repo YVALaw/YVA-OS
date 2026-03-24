@@ -302,7 +302,7 @@ export default function EmployeesPage() {
   const navigate = useNavigate()
   const [employees, setEmployees] = useState<Employee[]>([])
   const [invoices,  setInvoices]  = useState<Invoice[]>([])
-  const [projects,  setProjects]  = useState<{ id: string; name: string; employeeIds?: string[] }[]>([])
+  const [projects,  setProjects]  = useState<{ id: string; name: string; employeeIds?: string[]; status?: string }[]>([])
   useEffect(() => {
     loadSnapshot().then(snap => {
       setEmployees(snap.employees)

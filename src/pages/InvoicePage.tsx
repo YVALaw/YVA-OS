@@ -180,7 +180,7 @@ function applyInvoiceTemplate(template: string, inv: Invoice, settings: AppSetti
 }
 
 // ── Email invoice ──────────────────────────────────────────
-function emailInvoice(inv: Invoice, settings: ReturnType<typeof loadSettings>) {
+function emailInvoice(inv: Invoice, settings: AppSettings) {
   const to      = inv.clientEmail || ''
   const subject = `Invoice ${inv.number} — ${settings.companyName || 'YVA Staffing'}`
   const body    = applyInvoiceTemplate(settings.invoiceEmailTemplate || DEFAULT_INVOICE_EMAIL, inv, settings)
@@ -188,7 +188,7 @@ function emailInvoice(inv: Invoice, settings: ReturnType<typeof loadSettings>) {
 }
 
 // ── Payment reminder email ──────────────────────────────────
-function reminderEmail(inv: Invoice, settings: ReturnType<typeof loadSettings>) {
+function reminderEmail(inv: Invoice, settings: AppSettings) {
   const to      = inv.clientEmail || ''
   const subject = `Payment Reminder — Invoice ${inv.number} — ${settings.companyName || 'YVA Staffing'}`
   const body    = applyInvoiceTemplate(settings.reminderEmailTemplate || DEFAULT_REMINDER_EMAIL, inv, settings)
