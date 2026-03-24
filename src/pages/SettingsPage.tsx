@@ -10,29 +10,14 @@ import {
 import { supabase } from '../lib/supabase'
 import { initiateGmailAuth, disconnectGmail, isGmailConnected } from '../services/gmail'
 
-const LAFISE_URL = 'https://www.lafise.com/blrd/'
 
 async function fetchLafiseRate(): Promise<number | null> {
   try {
-    const proxy = `https://api.allorigins.win/get?url=${encodeURIComponent(LAFISE_URL)}`
-    const res  = await fetch(proxy)
-    const data = await res.json() as { contents: string }
-    const html = data.contents || ''
-    // Look for patterns like "59.5" or "59,50" near "Compra" text
-    // Lafise page typically shows: Compra | Venta columns
-    const patterns = [
-      /[Cc]ompra[\s\S]{0,200}?(\d{2,3}[.,]\d{1,4})/,
-      /DOP[\s\S]{0,400}?(\d{2,3}[.,]\d{1,4})/,
-      /(\d{55,70}[.,]\d{1,4})/,
-    ]
-    for (const re of patterns) {
-      const m = html.match(re)
-      if (m) {
-        const raw = m[1].replace(',', '.')
-        const n   = parseFloat(raw)
-        if (n > 50 && n < 80) return n  // sanity check: DOP rate is ~55–65
-      }
-    }
+    const res  = await fetch('https://open.er-api.com/v6/latest/USD')
+    if (!res.ok) return null
+    const data = await res.json() as { rates?: Record<string, number> }
+    const rate = data.rates?.DOP
+    if (rate && rate > 50 && rate < 100) return Math.round(rate * 100) / 100
     return null
   } catch {
     return null
@@ -471,9 +456,7 @@ export default function SettingsPage() {
             <div className="settings-row-info">
               <div className="settings-row-label">Exchange Rate (USD → DOP)</div>
               <div className="settings-row-sub">
-                Source: Banco Lafise RD —{' '}
-                <a href={LAFISE_URL} target="_blank" rel="noreferrer" style={{ color: 'var(--gold)' }}>Compra rate</a>.
-                Click Auto-fetch or enter manually.
+                Auto-fetched from open.er-api.com (live mid-market rate). Click Auto-fetch or enter manually.
               </div>
             </div>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
