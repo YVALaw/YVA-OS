@@ -53,23 +53,60 @@ function buildInvoiceHTML(inv: Invoice, rate: number, settings: AppSettings, aut
     return parseFloat(s) || 0
   }
 
-  const itemsHtml = (inv.items || []).map(it => {
-    const dailyEntries = it.daily
-      ? Object.entries(it.daily).filter(([,v]) => parseH(v) > 0).sort(([a],[b]) => a.localeCompare(b))
-      : []
-    const dailyRows = dailyEntries.map(([date, hrs]) => {
-      const h = parseH(hrs)
-      const dayLabel = new Date(date + 'T12:00:00').toLocaleDateString('en-US', { weekday:'short', month:'short', day:'numeric' })
-      return `<tr style="background:#fafafa"><td style="padding-left:28px;font-size:11px;color:#888;border-bottom:none">${dayLabel}</td><td style="text-align:right;font-size:11px;color:#888;border-bottom:none">${h % 1 === 0 ? h : h.toFixed(2)}h</td><td></td><td></td></tr>`
+  const dayAbbr = ['Su','Mo','Tu','We','Th','Fr','Sa']
+  const hasDailyGrid = (inv.items || []).some(it => it.daily && Object.keys(it.daily).length > 0)
+  const allDates: string[] = []
+  if (hasDailyGrid && inv.billingStart && inv.billingEnd) {
+    const cs = new Date(inv.billingStart + 'T12:00:00')
+    const ce = new Date(inv.billingEnd   + 'T12:00:00')
+    const cc = new Date(cs)
+    while (cc <= ce && allDates.length < 31) { allDates.push(cc.toISOString().slice(0,10)); cc.setDate(cc.getDate()+1) }
+  }
+
+  let itemsSection = ''
+  if ((inv.items || []).length === 0) {
+    itemsSection = `
+    <div class="section">
+      <div class="label">Amount Due</div>
+      <div style="font-size:28px;font-weight:900;color:#f5b533">${formatMoney(Number(inv.subtotal) || 0)}</div>
+      ${dop ? `<div class="dop">${dop}</div>` : ''}
+    </div>`
+  } else if (allDates.length > 0) {
+    const dateHeaders = allDates.map(d => {
+      const dt = new Date(d + 'T12:00:00')
+      return '<th style="text-align:center;font-size:9px;padding:6px 2px;min-width:26px">' + dayAbbr[dt.getDay()] + '<br>' + (dt.getMonth()+1) + '/' + dt.getDate() + '</th>'
     }).join('')
-    return `
-    <tr>
-      <td><strong>${it.employeeName}</strong>${it.position ? `<br><span style="font-size:11px;color:#888">${it.position}</span>` : ''}</td>
-      <td style="text-align:right">${it.hoursTotal}h</td>
-      <td style="text-align:right">$${it.rate}/hr</td>
-      <td style="text-align:right"><strong>$${(it.hoursTotal * it.rate).toFixed(2)}</strong></td>
-    </tr>${dailyRows}`
-  }).join('')
+    const bodyRows = (inv.items || []).map(it => {
+      const dayCells = allDates.map(d => {
+        const h = parseH(it.daily?.[d] || '')
+        return '<td style="text-align:center;font-size:11px;color:' + (h > 0 ? '#111' : '#ccc') + '">' + (h > 0 ? (h % 1 === 0 ? String(h) : h.toFixed(1)) : '—') + '</td>'
+      }).join('')
+      return '<tr><td style="white-space:nowrap"><strong>' + it.employeeName + '</strong>' + (it.position ? '<br><span style="font-size:10px;color:#888">' + it.position + '</span>' : '') + '</td>' + dayCells + '<td style="text-align:right;font-weight:700;white-space:nowrap">' + it.hoursTotal + 'h</td><td style="text-align:right;white-space:nowrap">$' + it.rate + '/hr</td><td style="text-align:right;font-weight:700;white-space:nowrap">$' + (it.hoursTotal * it.rate).toFixed(2) + '</td></tr>'
+    }).join('')
+    const colSpan = allDates.length + 3
+    itemsSection = `
+    <div style="overflow-x:auto;margin-top:16px">
+    <table style="font-size:12px;width:100%">
+      <thead><tr><th style="min-width:140px">Team Member</th>${dateHeaders}<th style="text-align:right">Hours</th><th style="text-align:right">Rate</th><th style="text-align:right">Amount</th></tr></thead>
+      <tbody>${bodyRows}
+        <tr class="total-row"><td colspan="${colSpan}">Total Due</td><td style="text-align:right">${formatMoney(Number(inv.subtotal) || 0)}</td></tr>
+      </tbody>
+    </table>
+    </div>
+    ${dop ? `<div class="dop">${dop}</div>` : ''}`
+  } else {
+    const bodyRows = (inv.items || []).map(it =>
+      '<tr><td><strong>' + it.employeeName + '</strong>' + (it.position ? '<br><span style="font-size:11px;color:#888">' + it.position + '</span>' : '') + '</td><td style="text-align:right">' + it.hoursTotal + 'h</td><td style="text-align:right">$' + it.rate + '/hr</td><td style="text-align:right"><strong>$' + (it.hoursTotal * it.rate).toFixed(2) + '</strong></td></tr>'
+    ).join('')
+    itemsSection = `
+    <table>
+      <thead><tr><th>Team Member</th><th style="text-align:right">Hours</th><th style="text-align:right">Rate</th><th style="text-align:right">Amount</th></tr></thead>
+      <tbody>${bodyRows}
+        <tr class="total-row"><td colspan="3">Total Due</td><td style="text-align:right">${formatMoney(Number(inv.subtotal) || 0)}</td></tr>
+      </tbody>
+    </table>
+    ${dop ? `<div class="dop">${dop}</div>` : ''}`
+  }
 
   return `<!DOCTYPE html><html><head>
     <title>${inv.number}</title>
@@ -124,22 +161,7 @@ function buildInvoiceHTML(inv: Invoice, rate: number, settings: AppSettings, aut
         ${inv.projectName ? `<div style="font-size:13px;color:#666">Project: ${inv.projectName}</div>` : ''}
       </div>
     </div>
-    ${itemsHtml ? `
-    <table>
-      <thead><tr><th>Team Member</th><th style="text-align:right">Hours</th><th style="text-align:right">Rate</th><th style="text-align:right">Amount</th></tr></thead>
-      <tbody>${itemsHtml}
-        <tr class="total-row">
-          <td colspan="3">Total Due</td>
-          <td style="text-align:right">${formatMoney(Number(inv.subtotal) || 0)}</td>
-        </tr>
-      </tbody>
-    </table>
-    ${dop ? `<div class="dop">${dop}</div>` : ''}` : `
-    <div class="section">
-      <div class="label">Amount Due</div>
-      <div style="font-size:28px;font-weight:900;color:#f5b533">${formatMoney(Number(inv.subtotal) || 0)}</div>
-      ${dop ? `<div class="dop">${dop}</div>` : ''}
-    </div>`}
+    ${itemsSection}
     ${inv.notes ? `<div class="notes-box">${inv.notes}</div>` : ''}
     <div class="footer">${companyName} · yvastaffing.net</div>
     ${autoPrint ? '<script>window.onload = function(){ window.print(); }</script>' : ''}
@@ -211,6 +233,8 @@ export default function InvoicePage() {
   const [settings,    setSettings]    = useState<AppSettings>({ usdToDop: 0 })
   const [builderOpen, setBuilderOpen] = useState(false)
   const [builderProjectId, setBuilderProjectId] = useState<string | undefined>()
+  const [editingInvoice, setEditingInvoice] = useState<Invoice | undefined>()
+  const [sendConfirmInv, setSendConfirmInv] = useState<Invoice | null>(null)
   const [quickModal, setQuickModal] = useState(false)
   const [quickProjectId, setQuickProjectId] = useState<string | undefined>()
   const [statusModal, setStatusModal] = useState(false)
@@ -235,21 +259,14 @@ export default function InvoicePage() {
   function persist(next: Invoice[]) { setInvoices(next); void saveInvoices(next) }
 
   function openBuilder(projectId?: string) { setBuilderProjectId(projectId); setBuilderOpen(true) }
+  function openEditInvoice(inv: Invoice) { setEditingInvoice(inv); setBuilderProjectId(inv.projectId || undefined); setBuilderOpen(true) }
   async function closeBuilder(inv?: Invoice) {
     const fresh = await loadInvoices()
-    if (inv) {
-      const updated = fresh.map(i => i.id === inv.id
-        ? { ...i, status: 'sent', statusHistory: [...(i.statusHistory||[]), { status: 'sent', changedAt: Date.now() }] }
-        : i)
-      void saveInvoices(updated)
-      setInvoices(updated)
-      const sentInv = updated.find(i => i.id === inv.id)
-      if (sentInv) emailInvoice(sentInv, settings)
-    } else {
-      setInvoices(fresh)
-    }
+    setInvoices(fresh)
     setBuilderOpen(false)
     setBuilderProjectId(undefined)
+    setEditingInvoice(undefined)
+    if (inv && inv.status === 'draft') setSendConfirmInv(inv)
   }
 
   function openQuickForProject(projectId?: string) {
@@ -456,6 +473,7 @@ export default function InvoicePage() {
                                   <button className="btn-xs btn-ghost" title="PDF" onClick={() => printInvoice(inv, settings.usdToDop, settings)}>⎙</button>
                                   <button className="btn-xs btn-ghost" title="Share portal" onClick={() => shareInvoice(inv, settings.usdToDop)}>🔗</button>
                                   <button className="btn-xs btn-ghost" title="Duplicate" onClick={() => duplicateInvoice(inv)}>⧉</button>
+                                  <button className="btn-xs btn-ghost" title="Edit invoice" onClick={() => openEditInvoice(inv)}>✏</button>
                                   <button className="btn-xs btn-ghost" title="Update status" onClick={() => openStatusEdit(inv)}>✎</button>
                                   <button className="btn-xs btn-danger" onClick={() => setConfirmDelete(inv.id)}>×</button>
                                 </div>
@@ -478,11 +496,11 @@ export default function InvoicePage() {
         <div className="modal-overlay" onClick={() => closeBuilder()}>
           <div className="builder-modal" onClick={(e) => e.stopPropagation()}>
             <div className="builder-modal-header">
-              <span>New Invoice</span>
+              <span>{editingInvoice ? `Edit Invoice — ${editingInvoice.number}` : 'New Invoice'}</span>
               <button className="modal-close btn-icon" onClick={() => closeBuilder()}>✕</button>
             </div>
             <div className="builder-modal-body">
-              <InvoiceBuilder onCreated={closeBuilder} onCancel={() => closeBuilder()} initialProjectId={builderProjectId} />
+              <InvoiceBuilder onCreated={closeBuilder} onCancel={() => closeBuilder()} initialProjectId={builderProjectId} editInvoice={editingInvoice} />
             </div>
           </div>
         </div>
@@ -593,6 +611,42 @@ export default function InvoicePage() {
             <div className="confirm-actions">
               <button className="btn-ghost" onClick={() => setConfirmDelete(null)}>Cancel</button>
               <button className="btn-danger" onClick={() => doDelete(confirmDelete)}>Delete</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Send Confirmation Modal */}
+      {sendConfirmInv && (
+        <div className="modal-overlay" onClick={() => setSendConfirmInv(null)}>
+          <div className="modal" style={{ maxWidth: 420 }} onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <h2 className="modal-title">Invoice Saved</h2>
+              <button className="modal-close btn-icon" onClick={() => setSendConfirmInv(null)}>✕</button>
+            </div>
+            <div className="modal-body">
+              <p style={{ fontSize: 14, color: 'var(--soft)', marginBottom: 8 }}>
+                <strong>{sendConfirmInv.number}</strong> has been saved as a draft.
+              </p>
+              {sendConfirmInv.clientEmail ? (
+                <p style={{ fontSize: 13, color: 'var(--muted)' }}>
+                  Send to <strong>{sendConfirmInv.clientEmail}</strong> now?
+                </p>
+              ) : (
+                <p style={{ fontSize: 13, color: 'var(--muted)' }}>No client email on file. Mark as sent manually when ready.</p>
+              )}
+            </div>
+            <div className="modal-footer">
+              <button className="btn-ghost" onClick={() => setSendConfirmInv(null)}>Keep as Draft</button>
+              <button className="btn-primary" onClick={() => {
+                const updated = invoices.map(i => i.id === sendConfirmInv.id
+                  ? { ...i, status: 'sent' as const, statusHistory: [...(i.statusHistory||[]), { status: 'sent', changedAt: Date.now() }] }
+                  : i)
+                void saveInvoices(updated)
+                setInvoices(updated)
+                if (sendConfirmInv.clientEmail) emailInvoice(sendConfirmInv, settings)
+                setSendConfirmInv(null)
+              }}>{sendConfirmInv.clientEmail ? 'Send Now' : 'Mark as Sent'}</button>
             </div>
           </div>
         </div>

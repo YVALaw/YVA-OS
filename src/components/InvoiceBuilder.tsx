@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { AppSettings, Client, Employee, Invoice, InvoiceItem, InvoiceTemplate, Project } from '../data/types'
 import {
   loadInvoiceCounter, loadInvoices, loadSettings,
@@ -72,9 +72,10 @@ type Props = {
   onCreated: (inv: Invoice) => void
   onCancel: () => void
   initialProjectId?: string
+  editInvoice?: Invoice
 }
 
-export default function InvoiceBuilder({ onCreated, onCancel, initialProjectId }: Props) {
+export default function InvoiceBuilder({ onCreated, onCancel, initialProjectId, editInvoice }: Props) {
   const [employees, setEmployees] = useState<Employee[]>([])
   const [clients,   setClients]   = useState<Client[]>([])
   const [projects,  setProjects]  = useState<Project[]>([])
@@ -101,6 +102,31 @@ export default function InvoiceBuilder({ onCreated, onCancel, initialProjectId }
       if (proj?.clientId) setClientId(proj.clientId)
     }
   }, [projects])
+
+  // Populate all fields when editing an existing invoice
+  const editLoaded = useRef(false)
+  useEffect(() => {
+    if (!editInvoice || editLoaded.current || clients.length === 0) return
+    editLoaded.current = true
+    setDate(editInvoice.date || new Date().toISOString().slice(0, 10))
+    setDueDate(editInvoice.dueDate || '')
+    setBillingStart(editInvoice.billingStart || '')
+    setBillingEnd(editInvoice.billingEnd || '')
+    setNotes(editInvoice.notes || '')
+    if (editInvoice.projectId) setProjectId(editInvoice.projectId)
+    const client = clients.find(c => c.name === editInvoice.clientName)
+    if (client) setClientId(client.id)
+    if (editInvoice.items && editInvoice.items.length > 0) {
+      setRows(editInvoice.items.map(it => ({
+        _id: uid(),
+        employeeName: it.employeeName,
+        position: it.position || '',
+        rate: String(it.rate),
+        hoursManual: String(it.hoursTotal),
+        daily: it.daily ? { ...it.daily } : {},
+      })))
+    }
+  }, [clients.length, editInvoice])
   const [date,         setDate]         = useState(new Date().toISOString().slice(0, 10))
   const [dueDate,      setDueDate]      = useState('')
 
@@ -196,7 +222,42 @@ export default function InvoiceBuilder({ onCreated, onCancel, initialProjectId }
     if (!selectedClient && !rows.some(r => r.employeeName)) return
     setSaving(true)
     void (async () => {
-      // Determine invoice number: per-project prefix+seq or global INV-NNN
+      const items: InvoiceItem[] = rows
+        .filter(r => r.employeeName.trim())
+        .map(r => ({
+          employeeName: r.employeeName,
+          position:     r.position || undefined,
+          hoursTotal:   rowHours(r, dates),
+          rate:         parseFloat(r.rate) || 0,
+          daily:        dates.length > 0 ? { ...r.daily } : undefined,
+        }))
+
+      if (editInvoice) {
+        // Update existing invoice
+        const inv: Invoice = {
+          ...editInvoice,
+          date,
+          dueDate:       dueDate || undefined,
+          clientName:    selectedClient?.name    || editInvoice.clientName || '',
+          clientEmail:   selectedClient?.email   || editInvoice.clientEmail || '',
+          clientAddress: selectedClient?.address || editInvoice.clientAddress || '',
+          billingStart:  billingStart || undefined,
+          billingEnd:    billingEnd   || undefined,
+          projectId:     selectedProject?.id   ?? editInvoice.projectId ?? null,
+          projectName:   selectedProject?.name ?? editInvoice.projectName ?? '',
+          subtotal:      grandTotal,
+          notes:         notes || undefined,
+          items,
+          updatedAt:     Date.now(),
+        }
+        const existing = await loadInvoices()
+        await saveInvoices(existing.map(i => i.id === inv.id ? inv : i))
+        setSaving(false)
+        onCreated(inv)
+        return
+      }
+
+      // Create new invoice
       let invNumber: string
       if (selectedProject) {
         const allProjects = await loadProjects()
@@ -214,16 +275,6 @@ export default function InvoiceBuilder({ onCreated, onCancel, initialProjectId }
         invNumber = `INV-${String(counter).padStart(3, '0')}`
         void saveInvoiceCounter(counter + 1)
       }
-
-      const items: InvoiceItem[] = rows
-        .filter(r => r.employeeName.trim())
-        .map(r => ({
-          employeeName: r.employeeName,
-          position:     r.position || undefined,
-          hoursTotal:   rowHours(r, dates),
-          rate:         parseFloat(r.rate) || 0,
-          daily:        dates.length > 0 ? { ...r.daily } : undefined,
-        }))
 
       const inv: Invoice = {
         id:            uid(),
@@ -512,7 +563,7 @@ export default function InvoiceBuilder({ onCreated, onCancel, initialProjectId }
           onClick={createInvoice}
           disabled={saving || grandTotal === 0 || !clientId}
         >
-          {saving ? 'Saving…' : 'Create Invoice'}
+          {saving ? 'Saving…' : (editInvoice ? 'Update Invoice' : 'Create Invoice')}
         </button>
       </div>
 
