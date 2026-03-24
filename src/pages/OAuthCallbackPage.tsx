@@ -36,7 +36,7 @@ export default function OAuthCallbackPage() {
         return
       }
       try {
-        const email = await exchangeCode(code, clientId)
+        const email = await exchangeCode(code, clientId, settings.gmailClientSecret)
         setMsg(`Connected as ${email}`)
         setOk(true)
         setTimeout(() => navigate('/settings'), 1500)

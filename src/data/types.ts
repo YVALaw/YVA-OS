@@ -171,6 +171,7 @@ export type AppSettings = {
   reminderEmailTemplate?: string
   // Gmail OAuth integration
   gmailClientId?: string
+  gmailClientSecret?: string
   gmailAccessToken?: string
   gmailRefreshToken?: string
   gmailTokenExpiry?: number  // unix ms

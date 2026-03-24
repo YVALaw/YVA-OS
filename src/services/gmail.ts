@@ -65,21 +65,23 @@ export async function initiateGmailAuth(clientId: string): Promise<void> {
   window.location.href = `${AUTH_ENDPOINT}?${params}`
 }
 
-export async function exchangeCode(code: string, clientId: string): Promise<string> {
+export async function exchangeCode(code: string, clientId: string, clientSecret?: string): Promise<string> {
   const verifier = localStorage.getItem('gmail_pkce_verifier')
   if (!verifier) throw new Error('PKCE verifier missing — please try connecting again.')
 
   const redirect = window.location.origin + '/oauth-callback'
+  const params: Record<string, string> = {
+    code,
+    client_id:     clientId,
+    code_verifier: verifier,
+    grant_type:    'authorization_code',
+    redirect_uri:  redirect,
+  }
+  if (clientSecret) params['client_secret'] = clientSecret
   const res = await fetch(TOKEN_ENDPOINT, {
     method:  'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body:    new URLSearchParams({
-      code,
-      client_id:     clientId,
-      code_verifier: verifier,
-      grant_type:    'authorization_code',
-      redirect_uri:  redirect,
-    }),
+    body:    new URLSearchParams(params),
   })
   if (!res.ok) {
     const txt = await res.text()
@@ -100,9 +102,9 @@ export async function exchangeCode(code: string, clientId: string): Promise<stri
     gmailTokenExpiry:  Date.now() + (data.expires_in - 60) * 1000,
     gmailEmail:        ui.email as string,
   })
-  // Also save clientId to shared settings
+  // Also save clientId + clientSecret to shared settings
   const settings = await loadSettings()
-  void saveSettings({ ...settings, gmailClientId: clientId })
+  void saveSettings({ ...settings, gmailClientId: clientId, gmailClientSecret: clientSecret })
 
   localStorage.removeItem('gmail_pkce_verifier')
   localStorage.removeItem('gmail_pkce_state')
@@ -114,14 +116,16 @@ async function refreshToken(settings: AppSettings & GmailUserData): Promise<stri
   if (!settings.gmailRefreshToken || !settings.gmailClientId) {
     throw new Error('Gmail not connected — no refresh token.')
   }
+  const params: Record<string, string> = {
+    client_id:     settings.gmailClientId,
+    refresh_token: settings.gmailRefreshToken,
+    grant_type:    'refresh_token',
+  }
+  if (settings.gmailClientSecret) params['client_secret'] = settings.gmailClientSecret
   const res = await fetch(TOKEN_ENDPOINT, {
     method:  'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body:    new URLSearchParams({
-      client_id:     settings.gmailClientId,
-      refresh_token: settings.gmailRefreshToken,
-      grant_type:    'refresh_token',
-    }),
+    body:    new URLSearchParams(params),
   })
   if (!res.ok) throw new Error('Token refresh failed — please reconnect Gmail.')
   const data = await res.json()

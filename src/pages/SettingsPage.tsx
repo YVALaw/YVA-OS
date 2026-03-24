@@ -410,7 +410,7 @@ export default function SettingsPage() {
                 <div className="settings-row-info">
                   <div className="settings-row-label">Google OAuth Client ID</div>
                   <div className="settings-row-sub">
-                    From Google Cloud Console → APIs &amp; Services → Credentials → OAuth 2.0 Client ID.<br />
+                    From Google Cloud Console → APIs &amp; Services → Credentials → OAuth 2.0 Client ID (Web application).<br />
                     Authorized Redirect URI:{' '}
                     <code style={{ background: 'rgba(255,255,255,.07)', padding: '1px 5px', borderRadius: 3, fontSize: 11 }}>{window.location.origin}/oauth-callback</code>
                   </div>
@@ -421,6 +421,20 @@ export default function SettingsPage() {
                   placeholder="123456789-abc123.apps.googleusercontent.com"
                   value={settings.gmailClientId || ''}
                   onChange={e => updateSettings({ gmailClientId: e.target.value })}
+                />
+              </div>
+              <div className="settings-row">
+                <div className="settings-row-info">
+                  <div className="settings-row-label">Google OAuth Client Secret</div>
+                  <div className="settings-row-sub">Required for Web application OAuth clients.</div>
+                </div>
+                <input
+                  className="form-input"
+                  style={{ width: 320, fontSize: 12 }}
+                  type="password"
+                  placeholder="GOCSPX-…"
+                  value={settings.gmailClientSecret || ''}
+                  onChange={e => updateSettings({ gmailClientSecret: e.target.value })}
                 />
               </div>
               <div className="settings-row">
