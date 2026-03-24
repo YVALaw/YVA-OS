@@ -86,12 +86,11 @@ async function printPayslip(emp: Employee, empInvoices: Invoice[], dateFrom: str
   const rows = empInvoices.map(inv => {
     const items = (inv.items||[]).filter(it=>it.employeeName?.toLowerCase()===emp.name.toLowerCase())
     const hrs = items.reduce((h,it)=>h+(Number(it.hoursTotal)||0),0)
-    const rate = items[0]?.rate || payRate
     return `<tr>
       <td>${inv.number}</td><td>${inv.clientName||'—'}</td><td>${inv.projectName||'—'}</td>
       <td>${inv.date||'—'}</td><td style="text-align:right">${hrs.toFixed(1)}h</td>
-      <td style="text-align:right">$${rate}/hr</td>
-      <td style="text-align:right"><strong>${rate>0?'$'+(hrs*rate).toFixed(2):'—'}</strong></td>
+      <td style="text-align:right">$${payRate}/hr</td>
+      <td style="text-align:right"><strong>${payRate>0?'$'+(hrs*payRate).toFixed(2):'—'}</strong></td>
     </tr>`
   }).join('')
 
@@ -257,8 +256,7 @@ function EmployeeStatementsPanel({ emp, invoices }: { emp: Employee; invoices: I
               <tbody>
                 {empInvoices.map(inv => {
                   const items = (inv.items || []).filter(it => it.employeeName?.toLowerCase() === emp.name.toLowerCase())
-                  const hrs  = items.reduce((h, it) => h + (Number(it.hoursTotal) || 0), 0)
-                  const rate = items[0]?.rate || payRate
+                  const hrs = items.reduce((h, it) => h + (Number(it.hoursTotal) || 0), 0)
                   return (
                     <tr key={inv.id}>
                       <td className="td-name">{inv.number}</td>
@@ -266,8 +264,8 @@ function EmployeeStatementsPanel({ emp, invoices }: { emp: Employee; invoices: I
                       <td className="td-muted">{inv.projectName || '—'}</td>
                       <td className="td-muted">{inv.date || '—'}</td>
                       <td>{fmtHoursHM(hrs)}</td>
-                      <td className="td-muted">${rate}/hr</td>
-                      <td style={{ color: 'var(--gold)', fontWeight: 700 }}>{rate > 0 ? formatMoney(hrs * rate) : '—'}</td>
+                      <td className="td-muted">{payRate > 0 ? `$${payRate}/hr` : '—'}</td>
+                      <td style={{ color: 'var(--gold)', fontWeight: 700 }}>{payRate > 0 ? formatMoney(hrs * payRate) : '—'}</td>
                     </tr>
                   )
                 })}
