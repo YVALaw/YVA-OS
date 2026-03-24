@@ -53,6 +53,10 @@ async function syncAll<T extends { id: string }>(
     const rows = items.map(i => {
       const row = toSnake(i as unknown as Record<string, unknown>)
       delete row['created_at']  // let DB manage this column
+      // Convert empty strings to null for all values (numeric columns reject "")
+      for (const key of Object.keys(row)) {
+        if (row[key] === '') row[key] = null
+      }
       return row
     })
     const { error } = await supabase.from(table).upsert(rows)
