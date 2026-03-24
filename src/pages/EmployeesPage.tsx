@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import type { Attachment, Employee, Invoice } from '../data/types'
 import {
@@ -83,15 +83,32 @@ async function printPayslip(emp: Employee, empInvoices: Invoice[], dateFrom: str
   const totalUSD = totalHours * payRate
   const totalDOP = dopRate > 0 ? totalUSD * dopRate : 0
 
+  function ph(v: string): number {
+    if (!v) return 0; const s = v.trim().replace(',','.')
+    if (s.includes(':')) { const [h,m]=s.split(':'); return (parseInt(h)||0)+(parseInt(m)||0)/60 }
+    return parseFloat(s)||0
+  }
   const rows = empInvoices.map(inv => {
     const items = (inv.items||[]).filter(it=>it.employeeName?.toLowerCase()===emp.name.toLowerCase())
     const hrs = items.reduce((h,it)=>h+(Number(it.hoursTotal)||0),0)
+    const earned = payRate > 0 ? hrs * payRate : 0
+    const period = inv.billingStart ? inv.billingStart+(inv.billingEnd?' – '+inv.billingEnd:'') : (inv.date||'—')
+    const daily = items[0]?.daily
+    const dailyRows = daily
+      ? Object.entries(daily).filter(([,v])=>ph(v)>0).sort(([a],[b])=>a.localeCompare(b))
+          .map(([date,val])=>{
+            const h=ph(val)
+            const lbl=new Date(date+'T12:00:00').toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'})
+            return `<tr style="background:#fafafa"><td></td><td style="padding-left:20px;font-size:11px;color:#999;border-bottom:none">${lbl}</td><td></td><td style="text-align:right;font-size:11px;color:#999;border-bottom:none">${h%1===0?h:h.toFixed(1)}h</td><td></td></tr>`
+          }).join('')
+      : ''
     return `<tr>
-      <td>${inv.number}</td><td>${inv.clientName||'—'}</td><td>${inv.projectName||'—'}</td>
-      <td>${inv.date||'—'}</td><td style="text-align:right">${hrs.toFixed(1)}h</td>
-      <td style="text-align:right">$${payRate}/hr</td>
-      <td style="text-align:right"><strong>${payRate>0?'$'+(hrs*payRate).toFixed(2):'—'}</strong></td>
-    </tr>`
+      <td style="font-weight:600">${inv.number}</td>
+      <td>${inv.projectName||'—'}</td>
+      <td style="color:#666;font-size:11px">${period}</td>
+      <td style="text-align:right;font-weight:600">${hrs.toFixed(1)}h</td>
+      <td style="text-align:right;font-weight:700;color:#f5b533">${earned>0?'$'+earned.toFixed(2):'—'}</td>
+    </tr>${dailyRows}`
   }).join('')
 
   const period = dateFrom && dateTo ? `${dateFrom} – ${dateTo}` : dateFrom || dateTo || 'All time'
@@ -127,10 +144,11 @@ async function printPayslip(emp: Employee, empInvoices: Invoice[], dateFrom: str
   <div class="kpis">
     <div class="kpi"><div class="kpi-v">${empInvoices.length}</div><div class="kpi-l">Invoices</div></div>
     <div class="kpi"><div class="kpi-v">${totalHours.toFixed(1)}h</div><div class="kpi-l">Total Hours</div></div>
+    <div class="kpi"><div class="kpi-v">${payRate>0?'$'+payRate+'/hr':'—'}</div><div class="kpi-l">Pay Rate</div></div>
     <div class="kpi"><div class="kpi-v">${payRate>0?'$'+totalUSD.toFixed(2):'—'}</div><div class="kpi-l">Total Earned (USD)</div></div>
-    ${totalDOP>0?`<div class="kpi" style="grid-column:1/-1"><div class="kpi-v">RD$${totalDOP.toLocaleString('en-US',{maximumFractionDigits:0})}</div><div class="kpi-l">Total Earned (DOP @ ${dopRate})</div></div>`:''}
+    ${totalDOP>0?`<div class="kpi"><div class="kpi-v">RD$${totalDOP.toLocaleString('en-US',{maximumFractionDigits:0})}</div><div class="kpi-l">Total Earned (DOP @ ${dopRate})</div></div>`:''}
   </div>
-  ${rows ? `<table><thead><tr><th>Invoice</th><th>Client</th><th>Project</th><th>Date</th><th style="text-align:right">Hours</th><th style="text-align:right">Rate</th><th style="text-align:right">Amount</th></tr></thead><tbody>${rows}</tbody></table>` : '<p style="color:#999;text-align:center;padding:24px">No invoice data for this period.</p>'}
+  ${rows ? `<table><thead><tr><th>Invoice</th><th>Project</th><th>Period</th><th style="text-align:right">Hours</th><th style="text-align:right">Earned</th></tr></thead><tbody>${rows}<tr style="font-weight:800;border-top:2px solid #111"><td colspan="3">Total</td><td style="text-align:right">${totalHours.toFixed(1)}h</td><td style="text-align:right;color:#f5b533">${payRate>0?'$'+totalUSD.toFixed(2):'—'}</td></tr></tbody></table>` : '<p style="color:#999;text-align:center;padding:24px">No invoice data for this period.</p>'}
   <div class="footer">YVA Staffing · Bilingual Virtual Professionals · yvastaffing.net</div>
   <script>window.onload=function(){window.print()}</script>
   </body></html>`)
@@ -227,7 +245,7 @@ function EmployeeStatementsPanel({ emp, invoices }: { emp: Employee; invoices: I
       </div>
 
       {/* Summary KPIs */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 10 }}>
         <div className="settings-stat-card">
           <div className="settings-stat-count">{empInvoices.length}</div>
           <div className="settings-stat-label">Invoices</div>
@@ -235,6 +253,10 @@ function EmployeeStatementsPanel({ emp, invoices }: { emp: Employee; invoices: I
         <div className="settings-stat-card">
           <div className="settings-stat-count">{fmtHoursHM(totalHours)}</div>
           <div className="settings-stat-label">Total Hours</div>
+        </div>
+        <div className="settings-stat-card">
+          <div className="settings-stat-count" style={{ fontSize: 15 }}>{payRate > 0 ? `$${payRate}/hr` : '—'}</div>
+          <div className="settings-stat-label">Pay Rate</div>
         </div>
         <div className="settings-stat-card">
           <div className="settings-stat-count" style={{ fontSize: 15 }}>{payRate > 0 ? formatMoney(totalEarned) : '—'}</div>
@@ -251,22 +273,41 @@ function EmployeeStatementsPanel({ emp, invoices }: { emp: Employee; invoices: I
           <div className="table-wrap">
             <table className="data-table">
               <thead>
-                <tr><th>Invoice</th><th>Client</th><th>Project</th><th>Date</th><th>Hours</th><th>Rate</th><th>Amount</th></tr>
+                <tr><th>Invoice</th><th>Project</th><th>Period</th><th>Hours</th><th>Earned</th></tr>
               </thead>
               <tbody>
                 {empInvoices.map(inv => {
                   const items = (inv.items || []).filter(it => it.employeeName?.toLowerCase() === emp.name.toLowerCase())
                   const hrs = items.reduce((h, it) => h + (Number(it.hoursTotal) || 0), 0)
+                  const period = inv.billingStart
+                    ? `${inv.billingStart}${inv.billingEnd ? ' – ' + inv.billingEnd : ''}`
+                    : (inv.date || '—')
+                  const daily = items[0]?.daily
+                  const dailyEntries = daily
+                    ? Object.entries(daily).filter(([, v]) => parseFloat(v) > 0).sort(([a], [b]) => a.localeCompare(b))
+                    : []
                   return (
-                    <tr key={inv.id}>
-                      <td className="td-name">{inv.number}</td>
-                      <td className="td-muted">{inv.clientName || '—'}</td>
-                      <td className="td-muted">{inv.projectName || '—'}</td>
-                      <td className="td-muted">{inv.date || '—'}</td>
-                      <td>{fmtHoursHM(hrs)}</td>
-                      <td className="td-muted">{payRate > 0 ? `$${payRate}/hr` : '—'}</td>
-                      <td style={{ color: 'var(--gold)', fontWeight: 700 }}>{payRate > 0 ? formatMoney(hrs * payRate) : '—'}</td>
-                    </tr>
+                    <React.Fragment key={inv.id}>
+                      <tr>
+                        <td className="td-name">{inv.number}</td>
+                        <td className="td-muted">{inv.projectName || '—'}</td>
+                        <td className="td-muted" style={{ fontSize: 11 }}>{period}</td>
+                        <td>{fmtHoursHM(hrs)}</td>
+                        <td style={{ color: 'var(--gold)', fontWeight: 700 }}>{payRate > 0 ? formatMoney(hrs * payRate) : '—'}</td>
+                      </tr>
+                      {dailyEntries.map(([date, val]) => {
+                        const h = parseFloat(val) || 0
+                        const lbl = new Date(date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
+                        return (
+                          <tr key={date} style={{ background: 'rgba(255,255,255,.025)' }}>
+                            <td></td>
+                            <td colSpan={2} style={{ fontSize: 11, color: 'var(--muted)', paddingLeft: 20 }}>{lbl}</td>
+                            <td style={{ fontSize: 11, color: 'var(--muted)' }}>{h % 1 === 0 ? h : h.toFixed(1)}h</td>
+                            <td></td>
+                          </tr>
+                        )
+                      })}
+                    </React.Fragment>
                   )
                 })}
               </tbody>
