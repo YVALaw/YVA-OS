@@ -50,7 +50,11 @@ async function syncAll<T extends { id: string }>(
 
   // Upsert current rows
   if (items.length > 0) {
-    const rows = items.map(i => toSnake(i as unknown as Record<string, unknown>))
+    const rows = items.map(i => {
+      const row = toSnake(i as unknown as Record<string, unknown>)
+      delete row['created_at']  // let DB manage this column
+      return row
+    })
     const { error } = await supabase.from(table).upsert(rows)
     if (error) console.error(`syncAll(${table})`, error)
   }
