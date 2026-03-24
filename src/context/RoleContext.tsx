@@ -26,15 +26,12 @@ export function RoleProvider({ children }: { children: ReactNode }) {
         .eq('user_id', user.id)
         .single()
 
-      console.log('[RoleContext] user:', user.email, 'data:', data, 'error:', error)
-
       if (data?.role) {
         setRole(data.role as UserRole)
       } else {
-        const { error: insertError } = await supabase
+        await supabase
           .from('user_roles')
           .insert({ user_id: user.id, email: user.email, role: 'recruiter' })
-        console.log('[RoleContext] insert error:', insertError)
         setRole('recruiter')
       }
       setLoading(false)
