@@ -6,6 +6,18 @@ import { uploadFile, deleteFile } from '../services/fileStorage'
 
 function uid() { return crypto.randomUUID() }
 
+const VIDEO_EXTS = ['mp4','mov','avi','webm','mkv','m4v','wmv','3gp']
+const AUDIO_EXTS = ['mp3','wav','ogg','m4a','aac','flac','wma']
+function fileExt(name: string) { return name.split('.').pop()?.toLowerCase() ?? '' }
+function isVideo(att: Attachment) { return att.mimeType.startsWith('video') || VIDEO_EXTS.includes(fileExt(att.name)) }
+function isAudio(att: Attachment) { return att.mimeType.startsWith('audio') || AUDIO_EXTS.includes(fileExt(att.name)) }
+function attIcon(att: Attachment) {
+  if (att.mimeType.startsWith('image')) return '🖼'
+  if (isVideo(att)) return '🎬'
+  if (isAudio(att)) return '🎵'
+  return '📄'
+}
+
 const AVATAR_COLORS = ['#f5b533','#3b82f6','#22c55e','#a855f7','#14b8a6','#f97316','#ec4899']
 function avatarColor(name: string) {
   let h = 0
@@ -160,7 +172,8 @@ export default function CandidateProfilePage() {
     try {
       const resp = await fetch(url)
       const blob = await resp.blob()
-      const blobUrl = URL.createObjectURL(blob)
+      const forceBlob = new Blob([blob], { type: 'application/octet-stream' })
+      const blobUrl = URL.createObjectURL(forceBlob)
       const a = document.createElement('a')
       a.href = blobUrl; a.download = name
       document.body.appendChild(a); a.click()
@@ -350,16 +363,16 @@ export default function CandidateProfilePage() {
                 {attachments.map(att => (
                   <div key={att.id} style={{ display: 'flex', flexDirection: 'column', gap: 6, background: 'var(--surf3)', borderRadius: 8, padding: '8px 12px' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                      <span style={{ fontSize: 18 }}>{att.mimeType.startsWith('image') ? '🖼' : att.mimeType.startsWith('audio') ? '🎵' : att.mimeType.startsWith('video') ? '🎬' : '📄'}</span>
+                      <span style={{ fontSize: 18 }}>{attIcon(att)}</span>
                       <div style={{ flex: 1, overflow: 'hidden' }}>
                         <div style={{ fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{att.name}</div>
                         <div style={{ fontSize: 11, color: 'var(--muted)' }}>{att.size >= 1024*1024 ? (att.size/1024/1024).toFixed(1)+' MB' : (att.size/1024).toFixed(1)+' KB'} · {new Date(att.uploadedAt).toLocaleDateString()}</div>
                       </div>
-                      {att.mimeType.startsWith('audio') && <audio controls src={att.storageUrl || att.dataUrl} style={{ height: 28, maxWidth: 140 }} />}
+                      {isAudio(att) && <audio controls src={att.storageUrl || att.dataUrl} style={{ height: 28, maxWidth: 140 }} />}
                       <button className="btn-ghost btn-sm" style={{ fontSize: 11, padding: '3px 8px' }} onClick={() => downloadAttachment(att.storageUrl || att.dataUrl, att.name)}>↓</button>
                       <button className="btn-icon btn-danger" style={{ fontSize: 11, padding: '3px 6px' }} onClick={() => removeAttachment(att.id)}>×</button>
                     </div>
-                    {att.mimeType.startsWith('video') && (
+                    {isVideo(att) && (
                       <video controls src={att.storageUrl || att.dataUrl} style={{ width: '100%', maxHeight: 200, borderRadius: 6, marginTop: 2 }} />
                     )}
                   </div>
