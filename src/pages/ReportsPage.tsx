@@ -195,6 +195,333 @@ export default function ReportsPage() {
     }).sort((a, b) => new Date(a.contractEnd!).getTime() - new Date(b.contractEnd!).getTime())
   }, [store])
 
+  // ── Admin dashboard ─────────────────────────────────────────────────────────
+  if (role === 'admin') {
+    const activeProjects = store.projects.filter(p => (p.status||'').toLowerCase() === 'active').length
+    const inPipeline = candidates.filter(c => !['hired','rejected'].includes(c.stage))
+    const sentPending = store.invoices.filter(inv => ['sent','viewed','partial'].includes((inv.status||'').toLowerCase()))
+    const thisMonthStr = new Date().toISOString().slice(0, 7)
+    const paidThisMonth = store.invoices.filter(inv =>
+      (inv.status||'').toLowerCase() === 'paid' && (inv.date || inv.billingEnd || '').startsWith(thisMonthStr)
+    )
+    const stageCounts: Record<string, number> = {}
+    for (const c of candidates) stageCounts[c.stage] = (stageCounts[c.stage] || 0) + 1
+
+    return (
+      <div className="page-wrap">
+        <div className="page-header">
+          <div className="page-header-left">
+            <h1 className="page-title">Dashboard</h1>
+            <p className="page-sub">Operations overview</p>
+          </div>
+        </div>
+
+        <div className="kpi-grid">
+          {[
+            { label: 'Active Projects',  value: String(activeProjects),          color: '#60a5fa' },
+            { label: 'Team Members',     value: String(store.employees.length),  color: '#c084fc' },
+            { label: 'Total Clients',    value: String(store.clients.length),    color: 'var(--text)' },
+            { label: 'Open Candidates',  value: String(inPipeline.length),       color: '#a855f7' },
+            { label: 'Draft Invoices',   value: String(draftInvoices.length),    color: draftInvoices.length > 0 ? '#f5b533' : 'var(--muted)' },
+            { label: 'Overdue',          value: String(overdueInvoices.length),  color: overdueInvoices.length > 0 ? '#f87171' : 'var(--muted)' },
+            { label: 'Sent / Pending',   value: String(sentPending.length),      color: '#60a5fa' },
+            { label: 'Paid This Month',  value: String(paidThisMonth.length),    color: '#4ade80' },
+          ].map(({ label, value, color }) => (
+            <div key={label} className="kpi-card">
+              <div className="kpi-label">{label}</div>
+              <div className="kpi-value" style={{ color, fontSize: 26 }}>{value}</div>
+            </div>
+          ))}
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 340px', gap: 16, alignItems: 'start' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            <div className="data-card">
+              <div className="data-card-title">Invoice Status — Open</div>
+              <div className="table-wrap">
+                <table className="data-table">
+                  <thead><tr><th>Invoice #</th><th>Client</th><th>Project</th><th>Due Date</th><th>Status</th></tr></thead>
+                  <tbody>
+                    {store.invoices
+                      .filter(inv => (inv.status||'draft') !== 'paid')
+                      .sort((a,b) => (a.dueDate||a.date||'') < (b.dueDate||b.date||'') ? -1 : 1)
+                      .slice(0, 10)
+                      .map(inv => (
+                        <tr key={inv.id}>
+                          <td className="td-name">{inv.number}</td>
+                          <td>{inv.clientName||'—'}</td>
+                          <td className="td-muted">{inv.projectName||'—'}</td>
+                          <td className="td-muted">{inv.dueDate||inv.date||'—'}</td>
+                          <td><span className={`badge ${sBadge(inv.status)}`}>{inv.status||'draft'}</span></td>
+                        </tr>
+                      ))}
+                    {store.invoices.filter(inv => (inv.status||'draft') !== 'paid').length === 0 && (
+                      <tr><td colSpan={5} className="td-empty">All invoices paid.</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div className="data-card">
+              <div className="data-card-title">Candidate Pipeline</div>
+              {['applied','screening','interview','offer','hired','rejected'].map(stage => (
+                <div key={stage} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0', borderBottom: '1px solid rgba(255,255,255,.05)' }}>
+                  <span style={{ fontSize: 13, textTransform: 'capitalize', color: 'var(--muted)' }}>{stage}</span>
+                  <span style={{ fontWeight: 700, fontSize: 14, color: stage === 'hired' ? '#4ade80' : stage === 'rejected' ? '#f87171' : 'var(--text)' }}>
+                    {stageCounts[stage] || 0}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="data-card">
+            <div className="data-card-title">Needs Attention</div>
+            <div className="attention-list">
+              {overdueInvoices.length > 0 && (
+                <div className="attention-item">
+                  <div className="attention-item-dot" />
+                  <div className="attention-item-body">
+                    <div className="attention-item-title">{overdueInvoices.length} Overdue Invoice{overdueInvoices.length > 1 ? 's' : ''}</div>
+                    <div className="attention-item-sub">Update status in Invoices</div>
+                  </div>
+                </div>
+              )}
+              {draftInvoices.length > 0 && (
+                <div className="attention-item">
+                  <div className="attention-item-dot attention-item-dot-warn" />
+                  <div className="attention-item-body">
+                    <div className="attention-item-title">{draftInvoices.length} Draft Invoice{draftInvoices.length > 1 ? 's' : ''}</div>
+                    <div className="attention-item-sub">Ready to send to clients</div>
+                  </div>
+                </div>
+              )}
+              {expiringContracts.map(c => {
+                const daysLeft = Math.ceil((new Date(c.contractEnd!).getTime() - Date.now()) / 86400000)
+                return (
+                  <div key={c.id} className="attention-item">
+                    <div className="attention-item-dot" style={{ background: daysLeft <= 14 ? '#ef4444' : '#f97316' }} />
+                    <div className="attention-item-body">
+                      <div className="attention-item-title">Contract Expiring — {c.name}</div>
+                      <div className="attention-item-sub">{daysLeft === 0 ? 'Expires today' : `${daysLeft} day${daysLeft !== 1 ? 's' : ''} left`}</div>
+                    </div>
+                  </div>
+                )
+              })}
+              {anniversaries.map(a => (
+                <div key={a.name} className="attention-item">
+                  <div className="attention-item-dot" style={{ background: '#a855f7' }} />
+                  <div className="attention-item-body">
+                    <div className="attention-item-title">{a.name} — {a.years} Year{a.years !== 1 ? 's' : ''}</div>
+                    <div className="attention-item-sub">{a.years} year{a.years !== 1 ? 's' : ''} with YVA Staffing</div>
+                  </div>
+                </div>
+              ))}
+              {overdueInvoices.length === 0 && draftInvoices.length === 0 && expiringContracts.length === 0 && anniversaries.length === 0 && (
+                <div style={{ fontSize: 13, color: 'var(--muted)', padding: '12px 0', textAlign: 'center' }}>All clear — nothing needs attention</div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {store.employees.length > 0 && (
+          <div className="data-card">
+            <div className="data-card-title">Team Capacity</div>
+            <div className="table-wrap">
+              <table className="data-table">
+                <thead><tr><th>Employee</th><th>Role</th><th>Status</th><th>Assigned Projects</th><th>Hours This Month</th></tr></thead>
+                <tbody>
+                  {store.employees.map(emp => {
+                    const assigned = store.projects.filter(p => (p.employeeIds || []).includes(emp.id))
+                    const hoursThisMonth = store.invoices
+                      .filter(inv => (inv.date || inv.billingEnd || '').startsWith(thisMonthStr))
+                      .flatMap(inv => inv.items || [])
+                      .filter(it => it.employeeName?.toLowerCase() === emp.name.toLowerCase())
+                      .reduce((s, it) => s + (Number(it.hoursTotal) || 0), 0)
+                    return (
+                      <tr key={emp.id}>
+                        <td className="td-name">{emp.name}</td>
+                        <td className="td-muted">{emp.role || '—'}</td>
+                        <td><span style={{ fontSize: 11, textTransform: 'capitalize', color: (emp.status||'active') === 'active' ? '#4ade80' : 'var(--muted)' }}>{emp.status || 'active'}</span></td>
+                        <td className="td-muted">{assigned.map(p => p.name).join(', ') || '—'}</td>
+                        <td className="td-muted">{hoursThisMonth > 0 ? fmtHoursHM(hoursThisMonth) : '—'}</td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  // ── Accounting dashboard ─────────────────────────────────────────────────────
+  if (role === 'accounting') {
+    const thisMonthStr = new Date().toISOString().slice(0, 7)
+    const sentPending = store.invoices.filter(inv => ['sent','viewed','partial'].includes((inv.status||'').toLowerCase()))
+    const paidThisMonth = store.invoices.filter(inv =>
+      (inv.status||'').toLowerCase() === 'paid' && (inv.date || inv.billingEnd || '').startsWith(thisMonthStr)
+    )
+    const outstanding = store.invoices.filter(inv => !['paid','draft'].includes((inv.status||'draft').toLowerCase()))
+
+    return (
+      <div className="page-wrap">
+        <div className="page-header">
+          <div className="page-header-left">
+            <h1 className="page-title">Dashboard</h1>
+            <p className="page-sub">Invoice &amp; billing overview</p>
+          </div>
+        </div>
+
+        <div className="kpi-grid">
+          {[
+            { label: 'Draft (to send)',  value: String(draftInvoices.length),   color: draftInvoices.length > 0 ? '#f5b533' : 'var(--muted)' },
+            { label: 'Overdue',          value: String(overdueInvoices.length), color: overdueInvoices.length > 0 ? '#f87171' : 'var(--muted)' },
+            { label: 'Sent / Pending',   value: String(sentPending.length),     color: '#60a5fa' },
+            { label: 'Paid This Month',  value: String(paidThisMonth.length),   color: '#4ade80' },
+          ].map(({ label, value, color }) => (
+            <div key={label} className="kpi-card">
+              <div className="kpi-label">{label}</div>
+              <div className="kpi-value" style={{ color, fontSize: 26 }}>{value}</div>
+            </div>
+          ))}
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 340px', gap: 16, alignItems: 'start' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            <div className="data-card">
+              <div className="data-card-title">Outstanding Invoices</div>
+              <div className="table-wrap">
+                <table className="data-table">
+                  <thead><tr><th>Invoice #</th><th>Client</th><th>Project</th><th>Date</th><th>Due</th><th>Status</th></tr></thead>
+                  <tbody>
+                    {outstanding
+                      .sort((a,b) => (a.dueDate||a.date||'') < (b.dueDate||b.date||'') ? -1 : 1)
+                      .map(inv => (
+                        <tr key={inv.id}>
+                          <td className="td-name">{inv.number}</td>
+                          <td>{inv.clientName||'—'}</td>
+                          <td className="td-muted">{inv.projectName||'—'}</td>
+                          <td className="td-muted">{inv.date||'—'}</td>
+                          <td className="td-muted">{inv.dueDate||'—'}</td>
+                          <td><span className={`badge ${sBadge(inv.status)}`}>{inv.status||'draft'}</span></td>
+                        </tr>
+                      ))}
+                    {outstanding.length === 0 && (
+                      <tr><td colSpan={6} className="td-empty">No outstanding invoices.</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {draftInvoices.length > 0 && (
+              <div className="data-card">
+                <div className="data-card-title">Drafts to Send</div>
+                <div className="table-wrap">
+                  <table className="data-table">
+                    <thead><tr><th>Invoice #</th><th>Client</th><th>Project</th><th>Date</th></tr></thead>
+                    <tbody>
+                      {draftInvoices.map(inv => (
+                        <tr key={inv.id}>
+                          <td className="td-name">{inv.number}</td>
+                          <td>{inv.clientName||'—'}</td>
+                          <td className="td-muted">{inv.projectName||'—'}</td>
+                          <td className="td-muted">{inv.date||'—'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            <div className="data-card">
+              <div className="data-card-title">Employee Statements This Month</div>
+              <div className="table-wrap">
+                <table className="data-table">
+                  <thead><tr><th>Employee</th><th>Hours This Month</th><th>Invoices</th><th>Payment Status</th></tr></thead>
+                  <tbody>
+                    {(() => {
+                      const rows = store.employees.map(emp => {
+                        const empInvs = store.invoices.filter(inv =>
+                          (inv.date || inv.billingEnd || '').startsWith(thisMonthStr) &&
+                          (inv.items || []).some(it => it.employeeName?.toLowerCase() === emp.name.toLowerCase())
+                        )
+                        if (empInvs.length === 0) return null
+                        const hours = empInvs.flatMap(inv => inv.items || [])
+                          .filter(it => it.employeeName?.toLowerCase() === emp.name.toLowerCase())
+                          .reduce((s, it) => s + (Number(it.hoursTotal) || 0), 0)
+                        const paidCount = empInvs.filter(inv => inv.employeePayments?.[emp.id]?.status === 'paid').length
+                        const pendingCount = empInvs.length - paidCount
+                        return (
+                          <tr key={emp.id}>
+                            <td className="td-name">{emp.name}</td>
+                            <td className="td-muted">{hours > 0 ? fmtHoursHM(hours) : '—'}</td>
+                            <td className="td-muted">{empInvs.length}</td>
+                            <td>
+                              {paidCount > 0 && <span style={{ color: '#4ade80', fontWeight: 600, fontSize: 12, marginRight: 8 }}>{paidCount} paid</span>}
+                              {pendingCount > 0 && <span style={{ color: '#f5b533', fontWeight: 600, fontSize: 12 }}>{pendingCount} pending</span>}
+                            </td>
+                          </tr>
+                        )
+                      }).filter(Boolean)
+                      return rows.length > 0 ? rows : (
+                        <tr><td colSpan={4} className="td-empty">No employee hours logged this month.</td></tr>
+                      )
+                    })()}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <div className="data-card">
+            <div className="data-card-title">Needs Attention</div>
+            <div className="attention-list">
+              {overdueInvoices.length > 0 && (
+                <div className="attention-item">
+                  <div className="attention-item-dot" />
+                  <div className="attention-item-body">
+                    <div className="attention-item-title">{overdueInvoices.length} Overdue Invoice{overdueInvoices.length > 1 ? 's' : ''}</div>
+                    <div className="attention-item-sub">Update status in Invoices</div>
+                  </div>
+                </div>
+              )}
+              {draftInvoices.length > 0 && (
+                <div className="attention-item">
+                  <div className="attention-item-dot attention-item-dot-warn" />
+                  <div className="attention-item-body">
+                    <div className="attention-item-title">{draftInvoices.length} Draft Invoice{draftInvoices.length > 1 ? 's' : ''}</div>
+                    <div className="attention-item-sub">Ready to send to clients</div>
+                  </div>
+                </div>
+              )}
+              {expiringContracts.map(c => {
+                const daysLeft = Math.ceil((new Date(c.contractEnd!).getTime() - Date.now()) / 86400000)
+                return (
+                  <div key={c.id} className="attention-item">
+                    <div className="attention-item-dot" style={{ background: daysLeft <= 14 ? '#ef4444' : '#f97316' }} />
+                    <div className="attention-item-body">
+                      <div className="attention-item-title">Contract Expiring — {c.name}</div>
+                      <div className="attention-item-sub">{daysLeft === 0 ? 'Expires today' : `${daysLeft} day${daysLeft !== 1 ? 's' : ''} left`}</div>
+                    </div>
+                  </div>
+                )
+              })}
+              {overdueInvoices.length === 0 && draftInvoices.length === 0 && expiringContracts.length === 0 && (
+                <div style={{ fontSize: 13, color: 'var(--muted)', padding: '12px 0', textAlign: 'center' }}>All clear</div>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   // ── Recruiter dashboard ────────────────────────────────────────────────────
   if (role === 'recruiter') {
     const now = new Date()
@@ -342,7 +669,7 @@ export default function ReportsPage() {
       <div className="page-header">
         <div className="page-header-left">
           <h1 className="page-title">Dashboard</h1>
-          <p className="page-sub">Revenue overview &amp; insights</p>
+          <p className="page-sub">Financial overview &amp; insights</p>
         </div>
         <div className="page-header-actions">
           <div className="form-group" style={{ margin: 0 }}>
