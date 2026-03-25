@@ -397,33 +397,39 @@ export default function ReportsPage() {
         const cardStyle: React.CSSProperties = { cursor: 'pointer' }
         return (
           <div className="kpi-grid">
-            <div className="kpi-card" style={cardStyle} onClick={() => setKpiDrill('billed')}>
-              <div className="kpi-label">Total Billed</div>
-              <div className="kpi-value">{formatMoney(computed.totalBilled)}</div>
-              <div className="kpi-sub">{computed.invoiceCount} invoice{computed.invoiceCount === 1 ? '' : 's'} in range</div>
-            </div>
+            {can.viewOwnerStats(role) && (
+              <div className="kpi-card" style={cardStyle} onClick={() => setKpiDrill('billed')}>
+                <div className="kpi-label">Total Billed</div>
+                <div className="kpi-value">{formatMoney(computed.totalBilled)}</div>
+                <div className="kpi-sub">{computed.invoiceCount} invoice{computed.invoiceCount === 1 ? '' : 's'} in range</div>
+              </div>
+            )}
             <div className="kpi-card" style={cardStyle} onClick={() => setKpiDrill('hours')}>
               <div className="kpi-label">Total Hours</div>
               <div className="kpi-value" style={{ fontSize: 22 }}>{fmtHoursHM(computed.totalHours)}</div>
               <div className="kpi-sub">billed in range</div>
             </div>
-            <div className="kpi-card" style={cardStyle} onClick={() => setKpiDrill('payroll')}>
-              <div className="kpi-label">Est. Payroll</div>
-              <div className="kpi-value" style={{ color: '#f87171' }}>{formatMoney(computed.totalPayroll)}</div>
-              <div className="kpi-sub">based on employee pay rates</div>
-            </div>
+            {can.viewOwnerStats(role) && (
+              <div className="kpi-card" style={cardStyle} onClick={() => setKpiDrill('payroll')}>
+                <div className="kpi-label">Est. Payroll</div>
+                <div className="kpi-value" style={{ color: '#f87171' }}>{formatMoney(computed.totalPayroll)}</div>
+                <div className="kpi-sub">based on employee pay rates</div>
+              </div>
+            )}
             <div className="kpi-card" style={cardStyle} onClick={() => setKpiDrill('expenses')}>
               <div className="kpi-label">Business Expenses</div>
               <div className="kpi-value" style={{ color: '#fb923c' }}>{formatMoney(totalExpenses)}</div>
               <div className="kpi-sub">{rangeExpenses.length} expense{rangeExpenses.length !== 1 ? 's' : ''} in range</div>
             </div>
-            <div className="kpi-card" style={cardStyle} onClick={() => setKpiDrill('net')}>
-              <div className="kpi-label">Net Earnings</div>
-              <div className="kpi-value" style={{ color: netAfterExpenses >= 0 ? '#4ade80' : '#f87171' }}>
-                {formatMoney(netAfterExpenses)}
+            {can.viewOwnerStats(role) && (
+              <div className="kpi-card" style={cardStyle} onClick={() => setKpiDrill('net')}>
+                <div className="kpi-label">Net Earnings</div>
+                <div className="kpi-value" style={{ color: netAfterExpenses >= 0 ? '#4ade80' : '#f87171' }}>
+                  {formatMoney(netAfterExpenses)}
+                </div>
+                <div className="kpi-sub">billed − payroll − expenses</div>
               </div>
-              <div className="kpi-sub">billed − payroll − expenses</div>
-            </div>
+            )}
             <div className="kpi-card" style={cardStyle} onClick={() => setKpiDrill('paid')}>
               <div className="kpi-label">Paid</div>
               <div className="kpi-value" style={{ color: '#4ade80' }}>{computed.paidCount}</div>
@@ -577,8 +583,8 @@ export default function ReportsPage() {
                   <th>Employee</th>
                   <th>Hours</th>
                   <th>Billed</th>
-                  <th>Payroll Cost</th>
-                  <th>Margin</th>
+                  {can.viewOwnerStats(role) && <th>Payroll Cost</th>}
+                  {can.viewOwnerStats(role) && <th>Margin</th>}
                   <th>Invoices</th>
                 </tr>
               </thead>
@@ -588,10 +594,12 @@ export default function ReportsPage() {
                     <td className="td-name">{e.name}</td>
                     <td className="td-muted">{fmtHoursHM(e.hours)}</td>
                     <td style={{ color: 'var(--gold)', fontWeight: 700 }}>{formatMoney(e.billed)}</td>
-                    <td style={{ color: '#f87171' }}>{e.payroll > 0 ? formatMoney(e.payroll) : <span className="td-muted">—</span>}</td>
-                    <td style={{ color: e.margin >= 0 ? '#4ade80' : '#f87171', fontWeight: 600 }}>
-                      {e.payroll > 0 ? formatMoney(e.margin) : <span className="td-muted">—</span>}
-                    </td>
+                    {can.viewOwnerStats(role) && <td style={{ color: '#f87171' }}>{e.payroll > 0 ? formatMoney(e.payroll) : <span className="td-muted">—</span>}</td>}
+                    {can.viewOwnerStats(role) && (
+                      <td style={{ color: e.margin >= 0 ? '#4ade80' : '#f87171', fontWeight: 600 }}>
+                        {e.payroll > 0 ? formatMoney(e.margin) : <span className="td-muted">—</span>}
+                      </td>
+                    )}
                     <td className="td-muted">{e.invoiceCount}</td>
                   </tr>
                 ))}
@@ -870,7 +878,7 @@ export default function ReportsPage() {
                 <button className="btn-ghost btn-sm" onClick={() => { setHFrom(isoThisYear().from); setHTo(isoThisYear().to) }}>This Year</button>
                 <button className="btn-ghost btn-sm" onClick={() => { setHFrom(''); setHTo(''); setHClient(''); setHProject(''); setHStatus('') }}>Clear</button>
                 <button className="btn-ghost btn-sm" onClick={exportHistCSV}>Export CSV</button>
-                <button className="btn-ghost btn-sm" onClick={exportPayrollCSV}>Payroll CSV</button>
+                {can.viewOwnerStats(role) && <button className="btn-ghost btn-sm" onClick={exportPayrollCSV}>Payroll CSV</button>}
               </div>
             </div>
 
