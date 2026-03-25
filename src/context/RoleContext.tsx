@@ -4,13 +4,16 @@ import type { UserRole } from '../lib/roles'
 
 type RoleCtx = { role: UserRole; userId: string | null; email: string | null; loading: boolean }
 
+const ROLE_CACHE_KEY = 'yva_role'
 const Ctx = createContext<RoleCtx>({ role: 'recruiter', userId: null, email: null, loading: true })
 
 export function RoleProvider({ children }: { children: ReactNode }) {
-  const [role,    setRole]    = useState<UserRole>('recruiter')
+  const cached = sessionStorage.getItem(ROLE_CACHE_KEY) as UserRole | null
+  const [role,    setRole]    = useState<UserRole>(cached ?? 'recruiter')
   const [userId,  setUserId]  = useState<string | null>(null)
   const [email,   setEmail]   = useState<string | null>(null)
-  const [loading, setLoading] = useState(true)
+  // If we have a cached role, skip the loading gate — render immediately
+  const [loading, setLoading] = useState(!cached)
 
   useEffect(() => {
     void (async () => {
@@ -20,7 +23,7 @@ export function RoleProvider({ children }: { children: ReactNode }) {
       setUserId(user.id)
       setEmail(user.email ?? null)
 
-      const { data, error } = await supabase
+      const { data } = await supabase
         .from('user_roles')
         .select('role')
         .eq('user_id', user.id)
@@ -28,11 +31,13 @@ export function RoleProvider({ children }: { children: ReactNode }) {
 
       if (data?.role) {
         setRole(data.role as UserRole)
+        sessionStorage.setItem(ROLE_CACHE_KEY, data.role)
       } else {
         await supabase
           .from('user_roles')
           .insert({ user_id: user.id, email: user.email, role: 'recruiter' })
         setRole('recruiter')
+        sessionStorage.setItem(ROLE_CACHE_KEY, 'recruiter')
       }
       setLoading(false)
     })()

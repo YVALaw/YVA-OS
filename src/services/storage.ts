@@ -70,7 +70,7 @@ export async function loadEmployees(): Promise<Employee[]> {
   return fetchAll<Employee>('employees')
 }
 export async function saveEmployees(employees: Employee[]): Promise<void> {
-  return syncAll('employees', employees)
+  invalidateSnapshotCache(); return syncAll('employees', employees)
 }
 
 // ─── Clients ──────────────────────────────────────────────────────────────────
@@ -79,7 +79,7 @@ export async function loadClients(): Promise<Client[]> {
   return fetchAll<Client>('clients')
 }
 export async function saveClients(clients: Client[]): Promise<void> {
-  return syncAll('clients', clients)
+  invalidateSnapshotCache(); return syncAll('clients', clients)
 }
 
 // ─── Projects ─────────────────────────────────────────────────────────────────
@@ -88,7 +88,7 @@ export async function loadProjects(): Promise<Project[]> {
   return fetchAll<Project>('projects')
 }
 export async function saveProjects(projects: Project[]): Promise<void> {
-  return syncAll('projects', projects)
+  invalidateSnapshotCache(); return syncAll('projects', projects)
 }
 
 // ─── Invoices ─────────────────────────────────────────────────────────────────
@@ -102,7 +102,7 @@ export async function loadInvoices(): Promise<Invoice[]> {
   return (data || []).map(row => toCamel<Invoice>(row as Record<string, unknown>))
 }
 export async function saveInvoices(invoices: Invoice[]): Promise<void> {
-  return syncAll('invoices', invoices)
+  invalidateSnapshotCache(); return syncAll('invoices', invoices)
 }
 
 // ─── Candidates ───────────────────────────────────────────────────────────────
@@ -240,9 +240,17 @@ export async function saveSettings(s: AppSettings): Promise<void> {
   if (error) console.error('saveSettings', error)
 }
 
+// ─── Snapshot cache ───────────────────────────────────────────────────────────
+
+let _snapCache: { data: DataSnapshot; at: number } | null = null
+const SNAP_TTL = 30_000 // 30 seconds
+
+export function invalidateSnapshotCache() { _snapCache = null }
+
 // ─── Snapshot (loads all core data in parallel) ───────────────────────────────
 
 export async function loadSnapshot(): Promise<DataSnapshot> {
+  if (_snapCache && Date.now() - _snapCache.at < SNAP_TTL) return _snapCache.data
   const [employees, projects, clients, invoices, invoiceCounter] = await Promise.all([
     loadEmployees(),
     loadProjects(),
@@ -250,7 +258,9 @@ export async function loadSnapshot(): Promise<DataSnapshot> {
     loadInvoices(),
     loadInvoiceCounter(),
   ])
-  return { employees, projects, clients, invoices, invoiceCounter }
+  const data = { employees, projects, clients, invoices, invoiceCounter }
+  _snapCache = { data, at: Date.now() }
+  return data
 }
 
 /** @deprecated — use loadSnapshot() */
