@@ -60,11 +60,7 @@ async function syncAll<T extends { id: string }>(
       return row
     })
     const { error } = await supabase.from(table).upsert(rows)
-    if (error) {
-      console.error(`syncAll(${table})`, error)
-      // Temporarily surface the error so we can diagnose
-      alert(`Save error (${table}): ${error.message} [code: ${error.code}]`)
-    }
+    if (error) console.error(`syncAll(${table})`, error)
   }
 }
 
