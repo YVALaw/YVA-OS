@@ -80,6 +80,13 @@ export type InvoiceItem = {
   daily?: Record<string, string>
 }
 
+export type EmployeePaymentRecord = {
+  status: 'paid' | 'pending'
+  paidDate?: string
+  amount?: number
+  notes?: string
+}
+
 export type Invoice = {
   id: string
   number: string
@@ -98,6 +105,7 @@ export type Invoice = {
   notes?: string
   items?: InvoiceItem[]
   statusHistory?: { status: string; changedAt: number }[]
+  employeePayments?: Record<string, EmployeePaymentRecord>
   createdAt?: number
   updatedAt?: number
 }

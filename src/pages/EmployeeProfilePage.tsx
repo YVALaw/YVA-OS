@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import type { Attachment, Employee, Invoice, Project } from '../data/types'
-import { loadSnapshot, saveEmployees, loadSettings } from '../services/storage'
+import { loadSnapshot, saveEmployees, saveInvoices, loadSettings } from '../services/storage'
 import { sendEmail } from '../services/gmail'
 import { formatMoney, fmtHoursHM } from '../utils/money'
 
@@ -171,6 +171,9 @@ export default function EmployeeProfilePage() {
   // Statements state
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo,   setDateTo]   = useState('')
+  const [payModal, setPayModal] = useState<{ inv: Invoice } | null>(null)
+  const [payDate,  setPayDate]  = useState('')
+  const [payNotes, setPayNotes] = useState('')
 
   if (!emp) {
     return (
@@ -191,7 +194,40 @@ export default function EmployeeProfilePage() {
   const totalHours  = empInvoices.reduce((s, inv) =>
     s + (inv.items||[]).filter(it => it.employeeName?.toLowerCase() === empNN.name.toLowerCase())
       .reduce((h, it) => h + (Number(it.hoursTotal)||0), 0), 0)
-  const totalEarned = payRate > 0 ? totalHours * payRate : 0
+  const totalEarned  = payRate > 0 ? totalHours * payRate : 0
+  const paidCount    = empInvoices.filter(inv => inv.employeePayments?.[empNN.name]?.status === 'paid').length
+  const pendingCount = empInvoices.length - paidCount
+  const totalPaid    = empInvoices.reduce((s, inv) => {
+    if (inv.employeePayments?.[empNN.name]?.status !== 'paid') return s
+    const hrs = (inv.items||[]).filter(it => it.employeeName?.toLowerCase() === empNN.name.toLowerCase())
+      .reduce((h, it) => h + (Number(it.hoursTotal)||0), 0)
+    return s + hrs * payRate
+  }, 0)
+
+  async function markPaid(inv: Invoice) {
+    const hrs = (inv.items||[]).filter(it => it.employeeName?.toLowerCase() === empNN.name.toLowerCase())
+      .reduce((h, it) => h + (Number(it.hoursTotal)||0), 0)
+    const updated = invoices.map(i => i.id === inv.id ? {
+      ...i,
+      employeePayments: {
+        ...(i.employeePayments || {}),
+        [empNN.name]: { status: 'paid' as const, paidDate: payDate || new Date().toISOString().slice(0,10), amount: hrs * payRate, notes: payNotes || undefined }
+      }
+    } : i)
+    setInvoices(updated)
+    await saveInvoices(updated)
+    setPayModal(null); setPayDate(''); setPayNotes('')
+  }
+
+  async function markPending(inv: Invoice) {
+    const updated = invoices.map(i => i.id === inv.id ? {
+      ...i,
+      employeePayments: { ...(i.employeePayments || {}), [empNN.name]: { status: 'pending' as const } }
+    } : i)
+    setInvoices(updated)
+    await saveInvoices(updated)
+  }
+
   const assignedProjects = projects.filter(p => (p.employeeIds || []).includes(empNN.id))
 
   function persistUpdate(updated: Employee) {
@@ -486,17 +522,27 @@ export default function EmployeeProfilePage() {
           </div>
 
           {/* KPI summary */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8, marginBottom: 16 }}>
-            {[
-              { label: 'Invoices',    value: String(empInvoices.length) },
-              { label: 'Total Hours', value: fmtHoursHM(totalHours) },
-              { label: 'Total Earned', value: payRate > 0 ? formatMoney(totalEarned) : '—' },
-            ].map(({ label, value }) => (
-              <div key={label} className="settings-stat-card">
-                <div className="settings-stat-count" style={{ fontSize: 16 }}>{value}</div>
-                <div className="settings-stat-label">{label}</div>
-              </div>
-            ))}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 8, marginBottom: 16 }}>
+            <div className="settings-stat-card">
+              <div className="settings-stat-count" style={{ fontSize: 16 }}>{empInvoices.length}</div>
+              <div className="settings-stat-label">Invoices</div>
+            </div>
+            <div className="settings-stat-card">
+              <div className="settings-stat-count" style={{ fontSize: 16 }}>{fmtHoursHM(totalHours)}</div>
+              <div className="settings-stat-label">Total Hours</div>
+            </div>
+            <div className="settings-stat-card">
+              <div className="settings-stat-count" style={{ fontSize: 15 }}>{payRate > 0 ? formatMoney(totalEarned) : '—'}</div>
+              <div className="settings-stat-label">Total Earned</div>
+            </div>
+            <div className="settings-stat-card" style={{ borderColor: paidCount > 0 ? 'var(--gold)' : undefined }}>
+              <div className="settings-stat-count" style={{ fontSize: 15, color: paidCount > 0 ? 'var(--gold)' : undefined }}>{payRate > 0 ? formatMoney(totalPaid) : paidCount}</div>
+              <div className="settings-stat-label">{paidCount} Paid</div>
+            </div>
+            <div className="settings-stat-card">
+              <div className="settings-stat-count" style={{ fontSize: 15, color: pendingCount > 0 ? 'var(--muted)' : undefined }}>{pendingCount}</div>
+              <div className="settings-stat-label">Pending</div>
+            </div>
           </div>
 
           {/* Action buttons */}
@@ -535,14 +581,31 @@ export default function EmployeeProfilePage() {
                     allDates = Object.keys(daily).filter(d => parseFloat(daily[d]) > 0).sort()
                   }
                 }
+                const payment = inv.employeePayments?.[empNN.name]
+                const isPaid  = payment?.status === 'paid'
                 return (
                   <div key={inv.id} style={{ marginBottom: 10, border: '1px solid var(--border)', borderRadius: 6, overflow: 'hidden' }}>
-                    <div style={{ background: 'var(--surf2)', padding: '7px 12px', fontSize: 12, borderBottom: '1px solid var(--border)' }}>
+                    <div style={{ background: 'var(--surf2)', padding: '7px 12px', fontSize: 12, borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 8 }}>
                       <strong>{inv.number}</strong>
-                      <span style={{ color: 'var(--muted)', margin: '0 6px' }}>·</span>
+                      <span style={{ color: 'var(--muted)' }}>·</span>
                       {inv.projectName || '—'}
-                      <span style={{ color: 'var(--muted)', margin: '0 6px' }}>·</span>
+                      <span style={{ color: 'var(--muted)' }}>·</span>
                       <span style={{ color: 'var(--muted)', fontSize: 11 }}>{period2}</span>
+                      <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
+                        {isPaid ? (
+                          <>
+                            <span style={{ fontSize: 11, color: '#22c55e', fontWeight: 600 }}>
+                              ✓ Paid {payment?.paidDate ? new Date(payment.paidDate + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : ''}
+                            </span>
+                            <button className="btn-ghost btn-sm" style={{ fontSize: 10, padding: '2px 8px' }} onClick={() => markPending(inv)}>Undo</button>
+                          </>
+                        ) : (
+                          <button className="btn-ghost btn-sm" style={{ fontSize: 11, padding: '3px 10px', borderColor: 'var(--gold)', color: 'var(--gold)' }}
+                            onClick={() => { setPayModal({ inv }); setPayDate(new Date().toISOString().slice(0,10)); setPayNotes('') }}>
+                            Mark as Paid
+                          </button>
+                        )}
+                      </span>
                     </div>
                     <div className="table-wrap">
                       <table className="data-table">
@@ -588,6 +651,32 @@ export default function EmployeeProfilePage() {
           )}
         </div>
       </div>
+
+      {/* Mark as Paid modal */}
+      {payModal && (
+        <div className="modal-overlay" onClick={() => setPayModal(null)}>
+          <div className="modal-dialog" style={{ maxWidth: 360 }} onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <div className="modal-title">Mark as Paid — {payModal.inv.number}</div>
+              <button className="modal-close btn-icon" onClick={() => setPayModal(null)}>✕</button>
+            </div>
+            <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+              <div className="form-group">
+                <label className="form-label">Payment Date</label>
+                <input className="form-input" type="date" value={payDate} onChange={e => setPayDate(e.target.value)} />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Notes (optional)</label>
+                <input className="form-input" type="text" placeholder="e.g. Bank transfer, Ref #1234" value={payNotes} onChange={e => setPayNotes(e.target.value)} />
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button className="btn-ghost" onClick={() => setPayModal(null)}>Cancel</button>
+              <button className="btn-primary" onClick={() => markPaid(payModal.inv)}>Confirm Payment</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Delete confirm */}
       {confirmDelete && (
