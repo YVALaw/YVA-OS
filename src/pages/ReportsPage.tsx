@@ -460,11 +460,13 @@ export default function ReportsPage() {
       })()}
 
       {/* Revenue chart + attention */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 340px', gap: 16, alignItems: 'start' }}>
-        <div className="data-card">
-          <div className="data-card-title">Revenue — Last 6 Months</div>
-          <BarChart data={chartData} />
-        </div>
+      <div style={{ display: 'grid', gridTemplateColumns: can.viewOwnerStats(role) ? '1fr 340px' : '340px', gap: 16, alignItems: 'start' }}>
+        {can.viewOwnerStats(role) && (
+          <div className="data-card">
+            <div className="data-card-title">Revenue — Last 6 Months</div>
+            <BarChart data={chartData} />
+          </div>
+        )}
 
         <div className="data-card">
           <div className="data-card-title">Needs Attention</div>
@@ -527,7 +529,7 @@ export default function ReportsPage() {
       </div>
 
       {/* By client + by project */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+      {can.viewOwnerStats(role) && <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
         <div className="data-card">
           <div className="data-card-title">Revenue by Client</div>
           <div className="table-wrap">
@@ -570,7 +572,7 @@ export default function ReportsPage() {
             </table>
           </div>
         </div>
-      </div>
+      </div>}
 
       {/* Employee Performance */}
       {computed.employeePerformance.length > 0 && (
