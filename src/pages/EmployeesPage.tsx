@@ -88,33 +88,32 @@ async function printPayslip(emp: Employee, empInvoices: Invoice[], dateFrom: str
     if (s.includes(':')) { const [h,m]=s.split(':'); return (parseInt(h)||0)+(parseInt(m)||0)/60 }
     return parseFloat(s)||0
   }
-  const rows = empInvoices.map(inv => {
+  const DA = ['Su','Mo','Tu','We','Th','Fr','Sa']
+  const sections = empInvoices.map(inv => {
     const items = (inv.items||[]).filter(it=>it.employeeName?.toLowerCase()===emp.name.toLowerCase())
     const hrs = items.reduce((h,it)=>h+(Number(it.hoursTotal)||0),0)
     const earned = payRate > 0 ? hrs * payRate : 0
-    const period = inv.billingStart ? inv.billingStart+(inv.billingEnd?' – '+inv.billingEnd:'') : (inv.date||'—')
+    const invPeriod = inv.billingStart ? inv.billingStart+(inv.billingEnd?' – '+inv.billingEnd:'') : (inv.date||'—')
     const daily = items[0]?.daily
-    const dayAbbr2 = ['Su','Mo','Tu','We','Th','Fr','Sa']
-    const dailyCards = daily
-      ? Object.entries(daily).filter(([,v])=>ph(v)>0).sort(([a],[b])=>a.localeCompare(b))
-          .map(([date,val])=>{
-            const h=ph(val)
-            const dt=new Date(date+'T12:00:00')
-            const lbl=dayAbbr2[dt.getDay()]+'<br>'+(dt.getMonth()+1)+'/'+dt.getDate()
-            return `<div style="text-align:center;background:#efefef;border-radius:4px;padding:4px 8px;min-width:38px"><div style="font-size:9px;color:#999;line-height:1.4">${lbl}</div><div style="font-size:12px;font-weight:700;color:#111">${h%1===0?h:h.toFixed(1)}h</div></div>`
-          }).join('')
-      : ''
-    const dailyRows = dailyCards
-      ? `<tr style="background:#fafafa"><td colspan="5" style="padding:4px 8px 12px;border-bottom:1px solid #eee"><div style="display:flex;gap:6px;flex-wrap:wrap">${dailyCards}</div></td></tr>`
-      : ''
-    return `<tr>
-      <td style="font-weight:600">${inv.number}</td>
-      <td>${inv.projectName||'—'}</td>
-      <td style="color:#666;font-size:11px">${period}</td>
-      <td style="text-align:right;font-weight:600">${hrs.toFixed(1)}h</td>
-      <td style="text-align:right;font-weight:700;color:#f5b533">${earned>0?'$'+earned.toFixed(2):'—'}</td>
-    </tr>${dailyRows}`
-  }).join('')
+    let allDates: string[] = []
+    if (daily) {
+      if (inv.billingStart && inv.billingEnd) {
+        const cur = new Date(inv.billingStart+'T12:00:00')
+        const end = new Date(inv.billingEnd+'T12:00:00')
+        while (cur <= end) { allDates.push(cur.toISOString().slice(0,10)); cur.setDate(cur.getDate()+1) }
+      } else {
+        allDates = Object.keys(daily).filter(d=>ph(daily[d])>0).sort()
+      }
+    }
+    const label = '<div style="font-size:11px;margin-bottom:6px"><strong style="font-size:13px">'+inv.number+'</strong>&nbsp;&middot;&nbsp;'+(inv.projectName||'—')+'&nbsp;&middot;&nbsp;<span style="color:#999">'+invPeriod+'</span></div>'
+    if (allDates.length > 0 && daily) {
+      const dateHeaders = allDates.map(d=>{const dt=new Date(d+'T12:00:00');return '<th style="text-align:center;font-size:9px;padding:5px 3px;min-width:22px;color:#999;border-bottom:2px solid #eee;white-space:nowrap">'+DA[dt.getDay()]+'<br>'+(dt.getMonth()+1)+'/'+dt.getDate()+'</th>'}).join('')
+      const dayCells = allDates.map(d=>{const h=ph(daily[d]||'');return '<td style="text-align:center;padding:7px 4px;font-size:12px;color:'+(h>0?'#111':'#ccc')+'">'+(h>0?(h%1===0?String(h):h.toFixed(1)):'—')+'</td>'}).join('')
+      return label+'<table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:20px"><thead><tr>'+dateHeaders+'<th style="text-align:right;font-size:9px;padding:5px 6px;color:#999;border-bottom:2px solid #eee">HOURS</th><th style="text-align:right;font-size:9px;padding:5px 6px;color:#999;border-bottom:2px solid #eee">RATE</th><th style="text-align:right;font-size:9px;padding:5px 6px;color:#999;border-bottom:2px solid #eee">EARNED</th></tr></thead><tbody><tr>'+dayCells+'<td style="text-align:right;font-weight:700;padding:8px 6px">'+hrs.toFixed(1)+'h</td><td style="text-align:right;color:#999;padding:8px 6px">'+(payRate>0?'$'+payRate+'/hr':'—')+'</td><td style="text-align:right;font-weight:700;color:#f5b533;padding:8px 6px">'+(earned>0?'$'+earned.toFixed(2):'—')+'</td></tr></tbody></table>'
+    } else {
+      return label+'<table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:20px"><thead><tr><th style="font-size:9px;padding:5px 6px;color:#999;border-bottom:2px solid #eee">HOURS</th><th style="text-align:right;font-size:9px;padding:5px 6px;color:#999;border-bottom:2px solid #eee">RATE</th><th style="text-align:right;font-size:9px;padding:5px 6px;color:#999;border-bottom:2px solid #eee">EARNED</th></tr></thead><tbody><tr><td style="font-weight:700;padding:8px 6px">'+hrs.toFixed(1)+'h</td><td style="text-align:right;color:#999;padding:8px 6px">'+(payRate>0?'$'+payRate+'/hr':'—')+'</td><td style="text-align:right;font-weight:700;color:#f5b533;padding:8px 6px">'+(earned>0?'$'+earned.toFixed(2):'—')+'</td></tr></tbody></table>'
+    }
+  }).join('<hr style="border:none;border-top:1px solid #eee;margin:0 0 16px">')
 
   const period = dateFrom && dateTo ? `${dateFrom} – ${dateTo}` : dateFrom || dateTo || 'All time'
   const win = window.open('', '_blank', 'width=800,height=600')
@@ -153,7 +152,7 @@ async function printPayslip(emp: Employee, empInvoices: Invoice[], dateFrom: str
     <div class="kpi"><div class="kpi-v">${payRate>0?'$'+totalUSD.toFixed(2):'—'}</div><div class="kpi-l">Total Earned (USD)</div></div>
     ${totalDOP>0?`<div class="kpi"><div class="kpi-v">RD$${totalDOP.toLocaleString('en-US',{maximumFractionDigits:0})}</div><div class="kpi-l">Total Earned (DOP @ ${dopRate})</div></div>`:''}
   </div>
-  ${rows ? `<table><thead><tr><th>Invoice</th><th>Project</th><th>Period</th><th style="text-align:right">Hours</th><th style="text-align:right">Earned</th></tr></thead><tbody>${rows}<tr style="font-weight:800;border-top:2px solid #111"><td colspan="3">Total</td><td style="text-align:right">${totalHours.toFixed(1)}h</td><td style="text-align:right;color:#f5b533">${payRate>0?'$'+totalUSD.toFixed(2):'—'}</td></tr></tbody></table>` : '<p style="color:#999;text-align:center;padding:24px">No invoice data for this period.</p>'}
+  ${sections?sections+'<div style="text-align:right;font-weight:800;font-size:13px;padding:10px 0;border-top:2px solid #111;margin-top:4px">Total &nbsp;&nbsp; '+totalHours.toFixed(1)+'h &nbsp;&nbsp; '+(payRate>0?'$'+totalUSD.toFixed(2):'—')+'</div>':'<p style="color:#999;text-align:center;padding:24px">No invoice data for this period.</p>'}
   <div class="footer">YVA Staffing · Bilingual Virtual Professionals · yvastaffing.net</div>
   <script>window.onload=function(){window.print()}</script>
   </body></html>`)
@@ -275,55 +274,74 @@ function EmployeeStatementsPanel({ emp, invoices }: { emp: Employee; invoices: I
         </div>
       ) : (
         <>
-          <div className="table-wrap">
-            <table className="data-table">
-              <thead>
-                <tr><th>Invoice</th><th>Project</th><th>Period</th><th>Hours</th><th>Earned</th></tr>
-              </thead>
-              <tbody>
-                {empInvoices.map(inv => {
-                  const items = (inv.items || []).filter(it => it.employeeName?.toLowerCase() === emp.name.toLowerCase())
-                  const hrs = items.reduce((h, it) => h + (Number(it.hoursTotal) || 0), 0)
-                  const period = inv.billingStart
-                    ? `${inv.billingStart}${inv.billingEnd ? ' – ' + inv.billingEnd : ''}`
-                    : (inv.date || '—')
-                  const daily = items[0]?.daily
-                  const dailyEntries = daily
-                    ? Object.entries(daily).filter(([, v]) => parseFloat(v) > 0).sort(([a], [b]) => a.localeCompare(b))
-                    : []
-                  return (
-                    <React.Fragment key={inv.id}>
-                      <tr>
-                        <td className="td-name">{inv.number}</td>
-                        <td className="td-muted">{inv.projectName || '—'}</td>
-                        <td className="td-muted" style={{ fontSize: 11 }}>{period}</td>
-                        <td>{fmtHoursHM(hrs)}</td>
-                        <td style={{ color: 'var(--gold)', fontWeight: 700 }}>{payRate > 0 ? formatMoney(hrs * payRate) : '—'}</td>
-                      </tr>
-                      {dailyEntries.length > 0 && (
-                        <tr style={{ background: 'rgba(255,255,255,.03)' }}>
-                          <td colSpan={5} style={{ padding: '4px 8px 10px' }}>
-                            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                              {dailyEntries.map(([date, val]) => {
-                                const h = parseFloat(val) || 0
-                                const dt = new Date(date + 'T12:00:00')
-                                const dayAbbr = ['Su','Mo','Tu','We','Th','Fr','Sa']
-                                return (
-                                  <div key={date} style={{ textAlign: 'center', background: 'rgba(255,255,255,.07)', borderRadius: 4, padding: '4px 8px', minWidth: 38 }}>
-                                    <div style={{ fontSize: 9, color: 'var(--muted)', lineHeight: 1.4 }}>{dayAbbr[dt.getDay()]}<br />{dt.getMonth()+1}/{dt.getDate()}</div>
-                                    <div style={{ fontSize: 12, fontWeight: 700 }}>{h % 1 === 0 ? h : h.toFixed(1)}h</div>
-                                  </div>
-                                )
-                              })}
-                            </div>
-                          </td>
+          <div>
+            {empInvoices.map(inv => {
+              const items = (inv.items || []).filter(it => it.employeeName?.toLowerCase() === emp.name.toLowerCase())
+              const hrs = items.reduce((h, it) => h + (Number(it.hoursTotal) || 0), 0)
+              const invPeriod = inv.billingStart
+                ? `${inv.billingStart}${inv.billingEnd ? ' – ' + inv.billingEnd : ''}`
+                : (inv.date || '—')
+              const daily = items[0]?.daily
+              const DA = ['Su','Mo','Tu','We','Th','Fr','Sa']
+              let allDates: string[] = []
+              if (daily) {
+                if (inv.billingStart && inv.billingEnd) {
+                  const cur = new Date(inv.billingStart + 'T12:00:00')
+                  const end = new Date(inv.billingEnd + 'T12:00:00')
+                  while (cur <= end) { allDates.push(cur.toISOString().slice(0, 10)); cur.setDate(cur.getDate() + 1) }
+                } else {
+                  allDates = Object.keys(daily).filter(d => parseFloat(daily[d]) > 0).sort()
+                }
+              }
+              return (
+                <div key={inv.id} style={{ marginBottom: 10, border: '1px solid var(--border)', borderRadius: 6, overflow: 'hidden' }}>
+                  <div style={{ background: 'var(--surf2)', padding: '7px 12px', fontSize: 12, borderBottom: '1px solid var(--border)' }}>
+                    <strong>{inv.number}</strong>
+                    <span style={{ color: 'var(--muted)', margin: '0 6px' }}>·</span>
+                    {inv.projectName || '—'}
+                    <span style={{ color: 'var(--muted)', margin: '0 6px' }}>·</span>
+                    <span style={{ color: 'var(--muted)', fontSize: 11 }}>{invPeriod}</span>
+                  </div>
+                  <div className="table-wrap">
+                    <table className="data-table">
+                      <thead>
+                        <tr>
+                          {allDates.map(d => {
+                            const dt = new Date(d + 'T12:00:00')
+                            return (
+                              <th key={d} style={{ textAlign: 'center', fontSize: 9, minWidth: 24, whiteSpace: 'nowrap', padding: '5px 3px' }}>
+                                {DA[dt.getDay()]}<br /><span style={{ color: 'var(--muted)' }}>{dt.getMonth()+1}/{dt.getDate()}</span>
+                              </th>
+                            )
+                          })}
+                          <th style={{ textAlign: 'right' }}>Hours</th>
+                          <th style={{ textAlign: 'right' }}>Rate</th>
+                          <th style={{ textAlign: 'right' }}>Earned</th>
                         </tr>
-                      )}
-                    </React.Fragment>
-                  )
-                })}
-              </tbody>
-            </table>
+                      </thead>
+                      <tbody>
+                        <tr>
+                          {allDates.map(d => {
+                            const h = daily ? (parseFloat(daily[d] || '') || 0) : 0
+                            return (
+                              <td key={d} style={{ textAlign: 'center', fontSize: 12, color: h > 0 ? undefined : 'var(--muted)', padding: '7px 3px' }}>
+                                {h > 0 ? (h % 1 === 0 ? h : h.toFixed(1)) : '—'}
+                              </td>
+                            )
+                          })}
+                          <td style={{ textAlign: 'right', fontWeight: 700 }}>{fmtHoursHM(hrs)}</td>
+                          <td style={{ textAlign: 'right', color: 'var(--muted)', fontSize: 11 }}>{payRate > 0 ? `$${payRate}/hr` : '—'}</td>
+                          <td style={{ textAlign: 'right', color: 'var(--gold)', fontWeight: 700 }}>{payRate > 0 ? formatMoney(hrs * payRate) : '—'}</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )
+            })}
+            <div style={{ textAlign: 'right', fontWeight: 800, fontSize: 13, padding: '8px 4px', borderTop: '2px solid var(--border)', marginTop: 4 }}>
+              Total &nbsp; {fmtHoursHM(totalHours)} &nbsp;&nbsp; {payRate > 0 ? formatMoney(totalEarned) : '—'}
+            </div>
           </div>
 
           {projectTotals.length > 0 && (
