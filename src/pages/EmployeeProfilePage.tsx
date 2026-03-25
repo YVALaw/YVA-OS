@@ -20,6 +20,26 @@ function attIcon(att: Attachment) {
   return '📄'
 }
 
+function VideoPlayer({ url }: { url: string }) {
+  const [blobUrl, setBlobUrl] = useState<string | null>(null)
+  const [loading, setLoading] = useState(false)
+  useEffect(() => () => { if (blobUrl) URL.revokeObjectURL(blobUrl) }, [blobUrl])
+  async function load() {
+    setLoading(true)
+    try {
+      const resp = await fetch(url)
+      const blob = await resp.blob()
+      setBlobUrl(URL.createObjectURL(blob))
+    } catch { /* ignore */ } finally { setLoading(false) }
+  }
+  if (blobUrl) return <video controls autoPlay src={blobUrl} style={{ width: '100%', maxHeight: 220, borderRadius: 6, marginTop: 4 }} />
+  return (
+    <button onClick={load} disabled={loading} style={{ marginTop: 4, width: '100%', background: 'var(--surf2)', border: '1px solid var(--border)', borderRadius: 6, padding: '10px', color: 'var(--muted)', cursor: loading ? 'wait' : 'pointer', fontSize: 13 }}>
+      {loading ? 'Loading video…' : '▶ Click to load video'}
+    </button>
+  )
+}
+
 const AVATAR_COLORS = ['#f5b533','#3b82f6','#22c55e','#a855f7','#14b8a6','#f97316','#ec4899']
 function avatarColor(name: string) {
   let h = 0
@@ -531,9 +551,7 @@ export default function EmployeeProfilePage() {
                       <button className="btn-ghost btn-sm" style={{ fontSize: 11, padding: '3px 8px' }} onClick={() => downloadAttachment(att.storageUrl || att.dataUrl, att.name)}>↓</button>
                       <button className="btn-icon btn-danger" style={{ fontSize: 11, padding: '3px 6px' }} onClick={() => removeAttachment(att.id)}>×</button>
                     </div>
-                    {isVideo(att) && (
-                      <video controls src={att.storageUrl || att.dataUrl} style={{ width: '100%', maxHeight: 200, borderRadius: 6, marginTop: 2 }} />
-                    )}
+                    {isVideo(att) && <VideoPlayer url={att.storageUrl || att.dataUrl} />}
                   </div>
                 ))}
               </div>
