@@ -296,6 +296,19 @@ export default function EmployeeProfilePage() {
     navigate('/employees')
   }
 
+  async function downloadAttachment(url: string, name: string) {
+    try {
+      const resp = await fetch(url)
+      const blob = await resp.blob()
+      const blobUrl = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = blobUrl; a.download = name
+      document.body.appendChild(a); a.click()
+      document.body.removeChild(a)
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 100)
+    } catch { window.open(url, '_blank') }
+  }
+
   function handleFileUpload(file: File) {
     if (file.size > 200 * 1024 * 1024) { alert('File too large (max 200 MB).'); return }
     void (async () => {
@@ -501,11 +514,11 @@ export default function EmployeeProfilePage() {
                       {att.mimeType.startsWith('audio') && (
                         <audio controls src={att.storageUrl || att.dataUrl} style={{ height: 28, maxWidth: 140 }} />
                       )}
-                      <a href={att.storageUrl || att.dataUrl} target="_blank" rel="noreferrer" className="btn-ghost btn-sm" style={{ fontSize: 11, padding: '3px 8px' }}>↓</a>
+                      <button className="btn-ghost btn-sm" style={{ fontSize: 11, padding: '3px 8px' }} onClick={() => downloadAttachment(att.storageUrl || att.dataUrl, att.name)}>↓</button>
                       <button className="btn-icon btn-danger" style={{ fontSize: 11, padding: '3px 6px' }} onClick={() => removeAttachment(att.id)}>×</button>
                     </div>
                     {att.mimeType.startsWith('video') && (
-                      <video controls src={att.storageUrl || att.dataUrl} style={{ width: '100%', maxHeight: 200, borderRadius: 6, marginTop: 2 }} />
+                      <video controls crossOrigin="anonymous" src={att.storageUrl || att.dataUrl} style={{ width: '100%', maxHeight: 200, borderRadius: 6, marginTop: 2 }} />
                     )}
                   </div>
                 ))}
