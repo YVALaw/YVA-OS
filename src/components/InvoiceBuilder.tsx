@@ -11,7 +11,7 @@ function projectPrefix(name: string): string {
   return name.split(/\s+/).map(w => w[0] || '').join('').toUpperCase().slice(0, 5)
 }
 
-function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2) }
+function uid() { return crypto.randomUUID() }
 
 function generateDateRange(start: string, end: string): string[] {
   const dates: string[] = []

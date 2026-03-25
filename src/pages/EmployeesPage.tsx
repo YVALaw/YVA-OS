@@ -9,7 +9,7 @@ import { formatMoney, fmtHoursHM } from '../utils/money'
 import { useRole } from '../context/RoleContext'
 import { can } from '../lib/roles'
 
-function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2) }
+function uid() { return crypto.randomUUID() }
 
 async function generateEmployeeNumber(): Promise<string> {
   const year = String(new Date().getFullYear()).slice(-2)

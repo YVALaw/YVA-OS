@@ -4,7 +4,7 @@ import type { Client, Employee, Expense, Invoice, Project, Task, TaskStatus } fr
 import { loadSnapshot, saveProjects, loadTasks, saveTasks, loadExpenses, saveExpenses } from '../services/storage'
 import { formatMoney } from '../utils/money'
 
-function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2) }
+function uid() { return crypto.randomUUID() }
 
 function stageBadge(s?: string): string {
   switch ((s || 'planning').toLowerCase()) {

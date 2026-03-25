@@ -26,7 +26,7 @@ const STAGES: { key: CandidateStage; label: string }[] = [
 ]
 
 function uid() {
-  return Date.now().toString(36) + Math.random().toString(36).slice(2)
+  return crypto.randomUUID()
 }
 
 const EMPTY_FORM: Omit<Candidate, 'id' | 'updatedAt'> = {

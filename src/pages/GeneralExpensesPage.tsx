@@ -3,7 +3,7 @@ import type { Expense } from '../data/types'
 import { loadGeneralExpenses, saveGeneralExpenses } from '../services/storage'
 import { formatMoney } from '../utils/money'
 
-function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2) }
+function uid() { return crypto.randomUUID() }
 
 const CATEGORIES = ['', 'Software', 'Hardware', 'Marketing', 'Office', 'Payroll', 'Legal', 'Accounting', 'Travel', 'Utilities', 'Insurance', 'Other']
 

@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import type { Client, Employee, Expense, Invoice, Project, Task, TaskStatus } from '../data/types'
 import { loadSnapshot, saveProjects, loadTasks, saveTasks, loadExpenses, saveExpenses } from '../services/storage'
 import { formatMoney } from '../utils/money'
-function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2) }
+function uid() { return crypto.randomUUID() }
 
 type ProjectStage = 'planning' | 'active' | 'hiring' | 'review' | 'completed' | 'on-hold'
 type ViewMode = 'cards' | 'kanban'

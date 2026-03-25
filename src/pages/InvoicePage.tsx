@@ -21,7 +21,7 @@ const STATUSES: { key: InvoiceStatus; label: string }[] = [
   { key: 'overdue', label: 'Overdue' },
 ]
 
-function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2) }
+function uid() { return crypto.randomUUID() }
 
 function statusBadge(s?: string): string {
   switch ((s || '').toLowerCase()) {

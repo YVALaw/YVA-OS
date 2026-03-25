@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import type { ActivityLogEntry, Client, Invoice, Project } from '../data/types'
 import { loadSnapshot, saveClients, loadActivityLog, saveActivityLog, loadSettings } from '../services/storage'
 import { sendEmail } from '../services/gmail'
-function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2) }
+function uid() { return crypto.randomUUID() }
 
 type ClientStage = 'lead' | 'prospect' | 'active' | 'paused' | 'churned'
 type ViewMode = 'cards' | 'kanban'
