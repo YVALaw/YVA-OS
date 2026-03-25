@@ -518,7 +518,7 @@ export default function EmployeeProfilePage() {
                       <button className="btn-icon btn-danger" style={{ fontSize: 11, padding: '3px 6px' }} onClick={() => removeAttachment(att.id)}>×</button>
                     </div>
                     {att.mimeType.startsWith('video') && (
-                      <video controls crossOrigin="anonymous" src={att.storageUrl || att.dataUrl} style={{ width: '100%', maxHeight: 200, borderRadius: 6, marginTop: 2 }} />
+                      <video controls src={att.storageUrl || att.dataUrl} style={{ width: '100%', maxHeight: 200, borderRadius: 6, marginTop: 2 }} />
                     )}
                   </div>
                 ))}
