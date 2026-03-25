@@ -4,6 +4,8 @@ export type Attachment = {
   mimeType: string
   size: number
   dataUrl: string
+  storageUrl?: string   // Supabase Storage public URL (set when uploaded via Storage)
+  storagePath?: string  // Supabase Storage path used for deletion
   uploadedAt: number
 }
 

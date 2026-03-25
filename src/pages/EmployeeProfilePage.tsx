@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import type { Attachment, Employee, Invoice, Project } from '../data/types'
 import { loadSnapshot, saveEmployees, saveInvoices, loadSettings } from '../services/storage'
+import { uploadFile, deleteFile } from '../services/fileStorage'
 import { sendEmail } from '../services/gmail'
 import { formatMoney, fmtHoursHM } from '../utils/money'
 
@@ -296,23 +297,29 @@ export default function EmployeeProfilePage() {
   }
 
   function handleFileUpload(file: File) {
-    if (file.size > 5 * 1024 * 1024) { alert('File too large (max 5 MB).'); return }
-    const reader = new FileReader()
-    reader.onload = ev => {
-      const att: Attachment = {
-        id: uid(), name: file.name, mimeType: file.type,
-        size: file.size, dataUrl: ev.target?.result as string, uploadedAt: Date.now(),
+    if (file.size > 200 * 1024 * 1024) { alert('File too large (max 200 MB).'); return }
+    void (async () => {
+      try {
+        const { storageUrl, storagePath } = await uploadFile(file, `employees/${empNN.id}`)
+        const att: Attachment = {
+          id: uid(), name: file.name, mimeType: file.type,
+          size: file.size, dataUrl: storageUrl, storageUrl, storagePath, uploadedAt: Date.now(),
+        }
+        setAttachments(prev => {
+          const next = [...prev, att]
+          persistUpdate({ ...empNN, attachments: next })
+          return next
+        })
+      } catch (e) {
+        console.error('Upload failed', e)
+        alert('Upload failed. Please try again.')
       }
-      setAttachments(prev => {
-        const next = [...prev, att]
-        persistUpdate({ ...empNN, attachments: next })
-        return next
-      })
-    }
-    reader.readAsDataURL(file)
+    })()
   }
 
   function removeAttachment(attId: string) {
+    const att = attachments.find(a => a.id === attId)
+    if (att?.storagePath) void deleteFile(att.storagePath)
     setAttachments(prev => {
       const next = prev.filter(a => a.id !== attId)
       persistUpdate({ ...empNN, attachments: next })
@@ -476,25 +483,30 @@ export default function EmployeeProfilePage() {
               Attachments
               <button className="btn-ghost btn-sm" onClick={() => fileInputRef.current?.click()}>+ Upload</button>
             </div>
-            <input ref={fileInputRef} type="file" accept="image/*,.pdf,audio/*"
+            <input ref={fileInputRef} type="file" accept="image/*,.pdf,audio/*,video/*"
               style={{ display: 'none' }}
               onChange={e => { const f = e.target.files?.[0]; if (f) handleFileUpload(f); e.target.value = '' }} />
             {attachments.length === 0 ? (
-              <div style={{ color: 'var(--muted)', fontSize: 13, padding: '12px 0' }}>No files yet. Upload CVs, audio notes, or documents.</div>
+              <div style={{ color: 'var(--muted)', fontSize: 13, padding: '12px 0' }}>No files yet. Upload CVs, audio notes, videos, or documents.</div>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8 }}>
                 {attachments.map(att => (
-                  <div key={att.id} style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'var(--surf3)', borderRadius: 8, padding: '8px 12px' }}>
-                    <span style={{ fontSize: 18 }}>{att.mimeType.startsWith('image') ? '🖼' : att.mimeType.startsWith('audio') ? '🎵' : '📄'}</span>
-                    <div style={{ flex: 1, overflow: 'hidden' }}>
-                      <div style={{ fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{att.name}</div>
-                      <div style={{ fontSize: 11, color: 'var(--muted)' }}>{(att.size / 1024).toFixed(1)} KB · {new Date(att.uploadedAt).toLocaleDateString()}</div>
+                  <div key={att.id} style={{ display: 'flex', flexDirection: 'column', gap: 6, background: 'var(--surf3)', borderRadius: 8, padding: '8px 12px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                      <span style={{ fontSize: 18 }}>{att.mimeType.startsWith('image') ? '🖼' : att.mimeType.startsWith('audio') ? '🎵' : att.mimeType.startsWith('video') ? '🎬' : '📄'}</span>
+                      <div style={{ flex: 1, overflow: 'hidden' }}>
+                        <div style={{ fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{att.name}</div>
+                        <div style={{ fontSize: 11, color: 'var(--muted)' }}>{att.size >= 1024*1024 ? (att.size/1024/1024).toFixed(1)+' MB' : (att.size/1024).toFixed(1)+' KB'} · {new Date(att.uploadedAt).toLocaleDateString()}</div>
+                      </div>
+                      {att.mimeType.startsWith('audio') && (
+                        <audio controls src={att.storageUrl || att.dataUrl} style={{ height: 28, maxWidth: 140 }} />
+                      )}
+                      <a href={att.storageUrl || att.dataUrl} target="_blank" rel="noreferrer" className="btn-ghost btn-sm" style={{ fontSize: 11, padding: '3px 8px' }}>↓</a>
+                      <button className="btn-icon btn-danger" style={{ fontSize: 11, padding: '3px 6px' }} onClick={() => removeAttachment(att.id)}>×</button>
                     </div>
-                    {att.mimeType.startsWith('audio') && (
-                      <audio controls src={att.dataUrl} style={{ height: 28, maxWidth: 140 }} />
+                    {att.mimeType.startsWith('video') && (
+                      <video controls src={att.storageUrl || att.dataUrl} style={{ width: '100%', maxHeight: 200, borderRadius: 6, marginTop: 2 }} />
                     )}
-                    <a href={att.dataUrl} download={att.name} className="btn-ghost btn-sm" style={{ fontSize: 11, padding: '3px 8px' }}>↓</a>
-                    <button className="btn-icon btn-danger" style={{ fontSize: 11, padding: '3px 6px' }} onClick={() => removeAttachment(att.id)}>×</button>
                   </div>
                 ))}
               </div>
