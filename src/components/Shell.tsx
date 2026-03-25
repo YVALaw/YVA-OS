@@ -216,6 +216,14 @@ function PageTitle({ pathname }: { pathname: string }) {
 export default function Shell({ children }: Props) {
   const location = useLocation()
   const { role, email } = useRole()
+  const [sidebarOpen, setSidebarOpen] = useState(false)
+
+  // Close sidebar on route change
+  const prevPath = useRef(location.pathname)
+  if (prevPath.current !== location.pathname) {
+    prevPath.current = location.pathname
+    if (sidebarOpen) setSidebarOpen(false)
+  }
 
   const visibleNav = nav.filter(item => {
     if (item.to === '/invoice')    return can.viewInvoices(role)
@@ -223,12 +231,17 @@ export default function Shell({ children }: Props) {
     if (item.to === '/employees')  return can.viewEmployees(role)
     if (item.to === '/candidates') return can.viewAllCandidates(role) || can.viewHiredOnly(role)
     if (item.to === '/expenses')   return can.viewExpenses(role)
-    return true // dashboard, projects, settings always visible
+    return true
   })
 
   return (
     <div className="shell">
-      <aside className="sidebar">
+      {/* Mobile overlay */}
+      {sidebarOpen && (
+        <div className="sidebar-overlay" onClick={() => setSidebarOpen(false)} />
+      )}
+
+      <aside className={`sidebar${sidebarOpen ? ' sidebar-open' : ''}`}>
         <div className="sidebar-brand">
           <div className="sidebar-brand-icon">Y</div>
           <div>
@@ -244,6 +257,7 @@ export default function Shell({ children }: Props) {
               to={item.to}
               end={item.to === '/'}
               className={({ isActive }) => `sidebar-nav-item${isActive ? ' active' : ''}`}
+              onClick={() => setSidebarOpen(false)}
             >
               <span className="sidebar-nav-icon">{item.icon}</span>
               <span>{item.label}</span>
@@ -258,6 +272,17 @@ export default function Shell({ children }: Props) {
       </aside>
 
       <header className="topbar">
+        <button
+          className="hamburger btn-icon"
+          onClick={() => setSidebarOpen(o => !o)}
+          aria-label="Toggle menu"
+        >
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+            <line x1="3" y1="6"  x2="21" y2="6"  />
+            <line x1="3" y1="12" x2="21" y2="12" />
+            <line x1="3" y1="18" x2="21" y2="18" />
+          </svg>
+        </button>
         <div className="topbar-title">
           <PageTitle pathname={location.pathname} />
         </div>

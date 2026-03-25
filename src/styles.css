@@ -694,17 +694,119 @@ input, select, textarea { font-family: inherit; }
   margin-top: 4px;
 }
 
+/* ── HAMBURGER (hidden on desktop) ── */
+.hamburger { display: none; }
+
+/* ── SIDEBAR OVERLAY (mobile only) ── */
+.sidebar-overlay {
+  display: none;
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,.55);
+  z-index: 299;
+}
+
 /* ── RESPONSIVE ── */
-@media (max-width: 900px) {
-  .shell { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
-  .sidebar { grid-row: 1; height: auto; flex-direction: row; flex-wrap: wrap; padding: 10px 12px; }
-  .topbar { grid-column: 1; }
-  .main-content { grid-column: 1; padding: 16px; }
-  .kanban-board { grid-template-columns: repeat(3, minmax(160px, 1fr)); }
-  .task-board   { grid-template-columns: 1fr; }
-  .form-grid-2  { grid-template-columns: 1fr; }
-  .kpi-grid     { grid-template-columns: 1fr 1fr; }
-  .card-grid    { grid-template-columns: 1fr; }
+@media (max-width: 768px) {
+  /* Shell: single column, topbar + content stacked */
+  .shell {
+    grid-template-columns: 1fr;
+    grid-template-rows: var(--topbar-h) 1fr;
+  }
+
+  /* Sidebar: fixed drawer, slides in from left */
+  .sidebar {
+    position: fixed;
+    left: 0; top: 0;
+    width: 240px;
+    height: 100vh;
+    z-index: 300;
+    transform: translateX(-100%);
+    transition: transform .25s ease;
+    grid-row: unset;
+    box-shadow: 4px 0 24px rgba(0,0,0,.5);
+  }
+  .sidebar.sidebar-open { transform: translateX(0); }
+  .sidebar-overlay { display: block; }
+
+  /* Topbar: full width, show hamburger */
+  .topbar { grid-column: 1; padding: 0 12px; gap: 10px; }
+  .hamburger { display: flex; }
+
+  /* Search: shrink on mobile */
+  .topbar-actions .form-input { width: 140px; }
+  .topbar-badge { display: none; }
+
+  /* Main content: full width, less padding */
+  .main-content { grid-column: 1; padding: 14px 12px; }
+
+  /* Cards: single column */
+  .card-grid { grid-template-columns: 1fr; }
+
+  /* KPI grids: 2 columns */
+  .kpi-grid { grid-template-columns: 1fr 1fr; }
+
+  /* Forms: single column */
+  .form-grid-2 { grid-template-columns: 1fr; }
+
+  /* Kanban: horizontal scroll */
+  .kanban-board { grid-template-columns: repeat(var(--kanban-cols, 5), minmax(200px, 1fr)); overflow-x: auto; }
+  .task-board { grid-template-columns: repeat(3, minmax(180px, 1fr)); overflow-x: auto; }
+
+  /* Modals: full-width bottom sheet feel */
+  .modal-overlay { align-items: flex-end; padding: 0; }
+  .modal {
+    max-width: 100%;
+    width: 100%;
+    margin: 0;
+    border-radius: 16px 16px 0 0;
+    max-height: 92vh;
+    overflow-y: auto;
+  }
+  .modal-lg { max-width: 100%; }
+  .modal-dialog { max-width: 100%; width: 100%; margin: 0; border-radius: 16px 16px 0 0; }
+
+  /* Builder modal: full screen */
+  .builder-modal {
+    width: 100%;
+    height: 100%;
+    max-width: 100%;
+    border-radius: 0;
+    margin: 0;
+  }
+
+  /* Profile grid: single column */
+  .profile-grid { grid-template-columns: 1fr; }
+
+  /* Profile header: stack vertically */
+  .profile-header { flex-direction: column; align-items: flex-start; }
+  .profile-header-actions { width: 100%; justify-content: flex-start; flex-wrap: wrap; }
+
+  /* Tables: ensure horizontal scroll */
+  .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+
+  /* Invoice group header: wrap */
+  .invoice-group-header { flex-wrap: wrap; gap: 6px; }
+
+  /* Settings stat cards: 2 columns */
+  .settings-stat-card { min-width: 0; }
+
+  /* Page wrap: tighter gap */
+  .page-wrap { gap: 14px; }
+
+  /* Buttons: larger tap targets */
+  .btn-ghost, .btn-primary, .btn-danger { min-height: 36px; }
+
+  /* Topbar title: truncate */
+  .topbar-title { flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 14px; }
+}
+
+/* Extra small screens */
+@media (max-width: 420px) {
+  .main-content { padding: 10px 8px; }
+  .kpi-grid { grid-template-columns: 1fr 1fr; }
+  .card-grid { grid-template-columns: 1fr; }
+  .topbar-actions .form-input { width: 110px; }
+  .profile-header { padding: 14px 16px; }
 }
 
 /* ── ACTIVITY TIMELINE ── */
