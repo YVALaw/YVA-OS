@@ -191,6 +191,12 @@ export default function SettingsPage() {
 
   function doClear() {
     void (async () => {
+      // Server-side verification: only CEO may wipe data
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) return
+      const { data: roleRow } = await supabase.from('user_roles').select('role').eq('user_id', user.id).single()
+      if (roleRow?.role !== 'ceo') return
+
       const tables = ['employees', 'clients', 'projects', 'invoices', 'tasks', 'expenses', 'activity_log', 'candidates', 'invoice_templates']
       await Promise.all(tables.map(t => supabase.from(t).delete().neq('id', '')))
       await supabase.from('counters').update({ value: 1 }).eq('key', 'invoice')

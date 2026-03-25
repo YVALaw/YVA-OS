@@ -1,0 +1,19 @@
+# Dependencies
+node_modules/
+
+# Environment variables — never commit real credentials
+.env
+.env.local
+.env.*.local
+
+# Build output (committed intentionally for Netlify — remove this line if switching to Netlify CI build)
+# dist/
+
+# Editor
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
