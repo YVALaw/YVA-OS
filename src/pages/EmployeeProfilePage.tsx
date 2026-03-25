@@ -92,13 +92,18 @@ async function printPayslip(emp: Employee, empInvoices: Invoice[], dateFrom: str
     const earned = payRate > 0 ? hrs * payRate : 0
     const period2 = inv.billingStart ? inv.billingStart+(inv.billingEnd?' – '+inv.billingEnd:'') : (inv.date||'—')
     const daily = items[0]?.daily
-    const dailyRows = daily
+    const dayAbbr2 = ['Su','Mo','Tu','We','Th','Fr','Sa']
+    const dailyCards = daily
       ? Object.entries(daily).filter(([,v])=>ph(v)>0).sort(([a],[b])=>a.localeCompare(b))
           .map(([date,val])=>{
             const h=ph(val)
-            const lbl=new Date(date+'T12:00:00').toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'})
-            return `<tr style="background:#fafafa"><td></td><td style="padding-left:20px;font-size:11px;color:#999;border-bottom:none">${lbl}</td><td></td><td style="text-align:right;font-size:11px;color:#999;border-bottom:none">${h%1===0?h:h.toFixed(1)}h</td><td></td></tr>`
+            const dt=new Date(date+'T12:00:00')
+            const lbl=dayAbbr2[dt.getDay()]+'<br>'+(dt.getMonth()+1)+'/'+dt.getDate()
+            return `<div style="text-align:center;background:#efefef;border-radius:4px;padding:4px 8px;min-width:38px"><div style="font-size:9px;color:#999;line-height:1.4">${lbl}</div><div style="font-size:12px;font-weight:700;color:#111">${h%1===0?h:h.toFixed(1)}h</div></div>`
           }).join('')
+      : ''
+    const dailyRows = dailyCards
+      ? `<tr style="background:#fafafa"><td colspan="5" style="padding:4px 8px 12px;border-bottom:1px solid #eee"><div style="display:flex;gap:6px;flex-wrap:wrap">${dailyCards}</div></td></tr>`
       : ''
     return `<tr>
       <td style="font-weight:600">${inv.number}</td>
@@ -537,18 +542,25 @@ export default function EmployeeProfilePage() {
                           <td>{fmtHoursHM(hrs)}</td>
                           <td style={{ color: 'var(--gold)', fontWeight: 700 }}>{payRate > 0 ? formatMoney(hrs * payRate) : '—'}</td>
                         </tr>
-                        {dailyEntries.map(([date, val]) => {
-                          const h = parseFloat(val) || 0
-                          const lbl = new Date(date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
-                          return (
-                            <tr key={date} style={{ background: 'rgba(255,255,255,.025)' }}>
-                              <td></td>
-                              <td colSpan={2} style={{ fontSize: 11, color: 'var(--muted)', paddingLeft: 20 }}>{lbl}</td>
-                              <td style={{ fontSize: 11, color: 'var(--muted)' }}>{h % 1 === 0 ? h : h.toFixed(1)}h</td>
-                              <td></td>
-                            </tr>
-                          )
-                        })}
+                        {dailyEntries.length > 0 && (
+                          <tr style={{ background: 'rgba(255,255,255,.03)' }}>
+                            <td colSpan={5} style={{ padding: '4px 8px 10px' }}>
+                              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                                {dailyEntries.map(([date, val]) => {
+                                  const h = parseFloat(val) || 0
+                                  const dt = new Date(date + 'T12:00:00')
+                                  const dayAbbr = ['Su','Mo','Tu','We','Th','Fr','Sa']
+                                  return (
+                                    <div key={date} style={{ textAlign: 'center', background: 'rgba(255,255,255,.07)', borderRadius: 4, padding: '4px 8px', minWidth: 38 }}>
+                                      <div style={{ fontSize: 9, color: 'var(--muted)', lineHeight: 1.4 }}>{dayAbbr[dt.getDay()]}<br />{dt.getMonth()+1}/{dt.getDate()}</div>
+                                      <div style={{ fontSize: 12, fontWeight: 700 }}>{h % 1 === 0 ? h : h.toFixed(1)}h</div>
+                                    </div>
+                                  )
+                                })}
+                              </div>
+                            </td>
+                          </tr>
+                        )}
                       </React.Fragment>
                     )
                   })}
