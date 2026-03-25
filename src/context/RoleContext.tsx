@@ -41,6 +41,16 @@ export function RoleProvider({ children }: { children: ReactNode }) {
       }
       setLoading(false)
     })()
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
+      if (event === 'SIGNED_OUT') {
+        sessionStorage.removeItem(ROLE_CACHE_KEY)
+        setRole('recruiter')
+        setUserId(null)
+        setEmail(null)
+      }
+    })
+    return () => subscription.unsubscribe()
   }, [])
 
   return <Ctx.Provider value={{ role, userId, email, loading }}>{children}</Ctx.Provider>

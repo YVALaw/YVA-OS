@@ -1,0 +1,15 @@
+/*
+  # Prevent clickjacking
+  X-Frame-Options: DENY
+  # Prevent MIME sniffing
+  X-Content-Type-Options: nosniff
+  # Enable XSS filter in older browsers
+  X-XSS-Protection: 1; mode=block
+  # Limit referrer info sent to third parties
+  Referrer-Policy: strict-origin-when-cross-origin
+  # Enforce HTTPS for 1 year
+  Strict-Transport-Security: max-age=31536000; includeSubDomains; preload
+  # Restrict browser features
+  Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=()
+  # Content Security Policy
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://allorigins.win https://www.lafise.com https://www.googleapis.com https://oauth2.googleapis.com https://gmail.googleapis.com; font-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none';
