@@ -327,7 +327,7 @@ export default function CandidateProfilePage() {
               Attachments
               <button className="btn-ghost btn-sm" onClick={() => fileInputRef.current?.click()}>+ Upload</button>
             </div>
-            <input ref={fileInputRef} type="file" accept="image/*,.pdf,audio/*,video/*"
+            <input ref={fileInputRef} type="file" accept="image/*,.pdf,audio/*,video/*,.mp4,.mov,.avi,.webm,.mkv,.m4v,.wmv"
               style={{ display: 'none' }}
               onChange={e => { const f = e.target.files?.[0]; if (f) handleFileUpload(f); e.target.value = '' }} />
             {attachments.length === 0 ? (
