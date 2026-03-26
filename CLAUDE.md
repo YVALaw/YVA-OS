@@ -289,6 +289,16 @@ Also shows: Employee Performance table, Revenue by Client/Project, All-Time Clie
 - [x] **Invoice groups collapsed by default** — all project sections closed on load; unpaid count shown in header
 - [x] **Business Expenses KPI on dashboard** — general expenses card + deducted from Net Earnings
 - [x] **Per-user Gmail OAuth** — each user's Gmail tokens stored in Supabase user metadata (not shared)
+- [x] **Role-based dashboards** — CEO sees full financials; Admin sees team/ops KPIs; Accounting sees invoice/AR KPIs; Recruiter/Lead Gen see their own views
+- [x] **CEO-only financials** — revenue charts, invoice history, payroll CSV, AR aging, forecasting all gated by `can.viewOwnerStats(role)`
+- [x] **Team Access settings tab** — visible and editable by CEO only
+- [x] **Login UX** — persists last email across logout; brute-force lockout (5 fails → 15-min cooldown); password strength meter on signup
+- [x] **Security headers** — `public/_headers` sets X-Frame-Options, CSP, HSTS, etc. for Netlify
+- [x] **Supabase RLS** — row-level security on all tables; settings/user_roles write-restricted to CEO; script at `supabase/rls.sql`
+- [x] **crypto.randomUUID()** — all entity creation uses UUID instead of timestamp-based IDs (required by Supabase UUID columns)
+- [x] **Supabase Storage file uploads** — attachments (images, PDFs, audio, video) upload to `attachments` bucket instead of base64 in DB; max 200 MB
+- [x] **Video support in attachments** — Employee and Candidate profiles accept video files; inline player uses fetch→blob to bypass CORS range-request blocking; extension-based MIME detection for Windows compatibility
+- [x] **Force-download for attachments** — download button fetches as blob with `application/octet-stream` so PDFs and videos save instead of opening in browser
 
 ---
 
@@ -314,6 +324,27 @@ Standalone component used inside the builder modal in InvoicePage. Handles:
 - `created_at` is a DB-managed `timestamptz` — never included in upserts
 - Empty strings converted to `null` before upsert (avoids numeric column errors)
 - After schema changes, run: `notify pgrst, 'reload schema'` in Supabase SQL editor
+- `toCamel` / `toSnake` only convert **top-level row keys** — JSONB values (like `attachments[]`) are stored and returned as-is in camelCase
+
+### Supabase Storage
+- Bucket: `attachments` (public) — stores employee and candidate file attachments
+- Path convention: `employees/{id}/{timestamp}-{random}.{ext}` and `candidates/{id}/...`
+- Service: `src/services/fileStorage.ts` — `uploadFile(file, folder)` returns `{ storageUrl, storagePath }`; `deleteFile(storagePath)` removes from Storage
+- `Attachment` type has `storageUrl?: string` and `storagePath?: string` fields alongside legacy `dataUrl`
+- **Video playback**: uses `VideoPlayer` component (fetch→blob→URL.createObjectURL) to bypass CORS range-request blocking on Supabase Storage URLs
+- **Storage policies** (run in SQL Editor, one at a time):
+  ```sql
+  CREATE POLICY "auth_upload" ON storage.objects FOR INSERT TO authenticated WITH CHECK (bucket_id = 'attachments');
+  CREATE POLICY "auth_read"   ON storage.objects FOR SELECT TO authenticated USING  (bucket_id = 'attachments');
+  CREATE POLICY "auth_delete" ON storage.objects FOR DELETE TO authenticated USING  (bucket_id = 'attachments');
+  CREATE POLICY "public_read" ON storage.objects FOR SELECT TO anon           USING  (bucket_id = 'attachments');
+  ```
+
+### Role system (`src/lib/roles.ts`)
+- Roles: `ceo` | `admin` | `accounting` | `recruiter` | `lead_gen`
+- `can.viewOwnerStats(role)` → CEO only — gates all revenue/financial data
+- `can.manageRoles(role)` → CEO only
+- Role stored in `user_roles` table; cached in `sessionStorage` to prevent flicker; cleared on `SIGNED_OUT` auth event
 
 ---
 
