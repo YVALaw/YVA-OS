@@ -278,5 +278,5 @@ export async function loadUserRoles(): Promise<UserRoleRow[]> {
 }
 
 export async function upsertUserRole(userId: string, email: string, role: string): Promise<void> {
-  await supabase.from('user_roles').upsert({ user_id: userId, email, role })
+  await supabase.from('user_roles').update({ role }).eq('user_id', userId)
 }
