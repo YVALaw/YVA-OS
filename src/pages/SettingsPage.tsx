@@ -482,10 +482,10 @@ export default function SettingsPage() {
               <div className="settings-row">
                 <div className="settings-row-info">
                   <div className="settings-row-label">Connect Gmail</div>
-                  <div className="settings-row-sub">
-                    Uses OAuth with PKCE. All emails (invoices, statements, reminders) will be sent directly via your Gmail.
-                  </div>
-                </div>
+              <div className="settings-row-sub">
+                Uses OAuth with PKCE. All emails (invoices, statements, reminders) will be sent directly via your Gmail.
+              </div>
+            </div>
                 <button
                   className="btn-primary btn-sm"
                   disabled={!settings.gmailClientId?.trim()}
@@ -498,7 +498,7 @@ export default function SettingsPage() {
                 <strong style={{ color: 'var(--gold)' }}>Setup guide:</strong>{' '}
                 Go to <strong>console.cloud.google.com</strong> → New Project → Enable <strong>Gmail API</strong> →
                 Create <strong>OAuth 2.0 Client ID</strong> (Web application) → add the redirect URI above →
-                paste the Client ID here → click Connect. No client secret is required for this PKCE flow.
+                paste the Client ID here → add the matching <strong>client secret</strong> in Netlify env var <code style={{ background: 'rgba(255,255,255,.07)', padding: '1px 5px', borderRadius: 3, fontSize: 11 }}>GMAIL_CLIENT_SECRET</code> → deploy → click Connect.
               </div>
             </>
           )}

@@ -20,9 +20,9 @@ async function saveGmailUserData(data: GmailUserData): Promise<void> {
 }
 
 const AUTH_ENDPOINT  = 'https://accounts.google.com/o/oauth2/v2/auth'
-const TOKEN_ENDPOINT = 'https://oauth2.googleapis.com/token'
 const SEND_ENDPOINT  = 'https://gmail.googleapis.com/gmail/v1/users/me/messages/send'
 const SCOPE = 'https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/userinfo.email'
+const NETLIFY_GMAIL_OAUTH_ENDPOINT = '/.netlify/functions/gmail-oauth'
 
 export type SendEmailResult = {
   mode: 'gmail' | 'mailto'
@@ -77,21 +77,20 @@ export async function exchangeCode(code: string, clientId: string): Promise<stri
   if (!verifier) throw new Error('PKCE verifier missing — please try connecting again.')
 
   const redirect = window.location.origin + '/oauth-callback'
-  const params = {
-    code,
-    client_id:     clientId,
-    code_verifier: verifier,
-    grant_type:    'authorization_code',
-    redirect_uri:  redirect,
-  }
-  const res = await fetch(TOKEN_ENDPOINT, {
-    method:  'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body:    new URLSearchParams(params),
+  const res = await fetch(NETLIFY_GMAIL_OAUTH_ENDPOINT, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      action: 'exchange',
+      code,
+      clientId,
+      codeVerifier: verifier,
+      redirectUri: redirect,
+    }),
   })
   if (!res.ok) {
-    const txt = await res.text()
-    throw new Error(`Token exchange failed: ${txt}`)
+    const error = await res.json().catch(() => ({}))
+    throw new Error(`Token exchange failed: ${error?.error || 'Unknown server error'}`)
   }
   const data = await res.json()
 
@@ -122,17 +121,19 @@ async function refreshToken(settings: AppSettings & GmailUserData): Promise<stri
   if (!settings.gmailRefreshToken || !settings.gmailClientId) {
     throw new Error('Gmail not connected — no refresh token.')
   }
-  const params = {
-    client_id:     settings.gmailClientId,
-    refresh_token: settings.gmailRefreshToken,
-    grant_type:    'refresh_token',
-  }
-  const res = await fetch(TOKEN_ENDPOINT, {
-    method:  'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body:    new URLSearchParams(params),
+  const res = await fetch(NETLIFY_GMAIL_OAUTH_ENDPOINT, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      action: 'refresh',
+      clientId: settings.gmailClientId,
+      refreshToken: settings.gmailRefreshToken,
+    }),
   })
-  if (!res.ok) throw new Error('Token refresh failed — please reconnect Gmail.')
+  if (!res.ok) {
+    const error = await res.json().catch(() => ({}))
+    throw new Error(error?.error || 'Token refresh failed — please reconnect Gmail.')
+  }
   const data = await res.json()
   void saveGmailUserData({
     gmailAccessToken: data.access_token,
