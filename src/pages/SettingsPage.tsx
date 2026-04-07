@@ -12,56 +12,13 @@ import { initiateGmailAuth, disconnectGmail, isGmailConnected } from '../service
 import { useRole } from '../context/RoleContext'
 import { can, ROLE_LABELS, ROLE_OPTIONS } from '../lib/roles'
 
-
-type BancoPopularRateResponse = Record<string, unknown> | Array<Record<string, unknown>>
-
-const DEFAULT_BANCO_POPULAR_URL = 'https://www.apiportal.popularenlinea.com/consultaTasa'
-
-function parseBancoPopularRate(payload: BancoPopularRateResponse): number | null {
-  const entries = Array.isArray(payload) ? payload : [payload]
-
-  for (const entry of entries) {
-    const currency = String(entry.moneda ?? entry.currency ?? entry.codigoMoneda ?? entry.code ?? '').toUpperCase()
-    if (currency && currency !== 'USD') continue
-
-    const candidates = [
-      entry.venta,
-      entry.tasaVenta,
-      entry.tipoCambioVenta,
-      entry.sale,
-      entry.sell,
-      entry.rate,
-    ]
-
-    for (const value of candidates) {
-      const numeric = typeof value === 'number'
-        ? value
-        : typeof value === 'string'
-        ? Number(value.replace(',', '.'))
-        : NaN
-      if (Number.isFinite(numeric) && numeric > 50 && numeric < 100) {
-        return Math.round(numeric * 100) / 100
-      }
-    }
-  }
-
-  return null
-}
-
-async function fetchBancoPopularRate(endpoint: string, subscriptionKey: string): Promise<number | null> {
-  try {
-    const res = await fetch(endpoint, {
-      headers: {
-        Accept: 'application/json',
-        'Ocp-Apim-Subscription-Key': subscriptionKey,
-      },
-    })
-    if (!res.ok) return null
-    const data = await res.json() as BancoPopularRateResponse
-    return parseBancoPopularRate(data)
-  } catch {
-    return null
-  }
+type InfoDolarBhdResponse = {
+  provider: string
+  entity: string
+  buy: number
+  sell: number
+  timestamp?: string
+  sourceUrl: string
 }
 
 type SettingsTab = 'company' | 'email' | 'integrations' | 'currency' | 'notifications' | 'data' | 'access'
@@ -103,8 +60,7 @@ export default function SettingsPage() {
   const [gmailConnected, setGmailConnected] = useState(false)
   const [gmailEmail, setGmailEmail] = useState<string | undefined>()
   const [userRoles, setUserRoles] = useState<UserRoleRow[]>([])
-  const [bancoPopularUrl, setBancoPopularUrl] = useState(() => localStorage.getItem('yva_banco_popular_url') || DEFAULT_BANCO_POPULAR_URL)
-  const [bancoPopularKey, setBancoPopularKey] = useState(() => localStorage.getItem('yva_banco_popular_key') || '')
+  const [rateSourceMeta, setRateSourceMeta] = useState<InfoDolarBhdResponse | null>(null)
 
   useEffect(() => {
     void loadSettings().then(setSettingsState)
@@ -137,14 +93,6 @@ export default function SettingsPage() {
     })()
   }, [activeTab])
 
-  useEffect(() => {
-    localStorage.setItem('yva_banco_popular_url', bancoPopularUrl)
-  }, [bancoPopularUrl])
-
-  useEffect(() => {
-    localStorage.setItem('yva_banco_popular_key', bancoPopularKey)
-  }, [bancoPopularKey])
-
   function updateSettings(partial: Partial<AppSettings>) {
     const next = { ...settings, ...partial }
     setSettingsState(next)
@@ -154,18 +102,28 @@ export default function SettingsPage() {
   async function handleFetchRate() {
     setFetchingRate(true)
     setFetchMsg(null)
-    if (!bancoPopularKey.trim()) {
+    let payload: InfoDolarBhdResponse | null = null
+    try {
+      const res = await fetch('/.netlify/functions/infodolar-bhd')
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        setFetchingRate(false)
+        setFetchMsg(data?.error || 'Could not auto-fetch from InfoDolar BHD.')
+        return
+      }
+      payload = data as InfoDolarBhdResponse
+    } catch {
       setFetchingRate(false)
-      setFetchMsg('Add your Banco Popular subscription key before auto-fetching.')
+      setFetchMsg('Could not auto-fetch from InfoDolar BHD. Try again or enter the rate manually.')
       return
     }
-    const rate = await fetchBancoPopularRate(bancoPopularUrl.trim() || DEFAULT_BANCO_POPULAR_URL, bancoPopularKey.trim())
     setFetchingRate(false)
-    if (rate) {
-      updateSettings({ usdToDop: rate })
-      setFetchMsg(`Rate updated to RD$${rate} / $1 USD`)
+    if (payload?.sell) {
+      updateSettings({ usdToDop: payload.sell })
+      setRateSourceMeta(payload)
+      setFetchMsg(`Rate updated from ${payload.entity} via ${payload.provider}: RD$${payload.sell} / $1 USD`)
     } else {
-      setFetchMsg('Could not auto-fetch from Banco Popular — verify the endpoint, subscription key, and API response, or enter the rate manually.')
+      setFetchMsg('Could not auto-fetch from InfoDolar BHD. Try again or enter the rate manually.')
     }
   }
 
@@ -511,39 +469,9 @@ export default function SettingsPage() {
           <div className="settings-section-title">Currency — USD / DOP</div>
           <div className="settings-row">
             <div className="settings-row-info">
-              <div className="settings-row-label">Banco Popular Endpoint</div>
-              <div className="settings-row-sub">
-                Banco Popular documents this product as <code style={{ background: 'rgba(255,255,255,.07)', padding: '1px 5px', borderRadius: 3, fontSize: 11 }}>GET /consultaTasa</code>. Keep the default unless your subscribed portal gives you a different full URL.
-              </div>
-            </div>
-            <input
-              className="form-input"
-              style={{ width: 320, fontSize: 12 }}
-              value={bancoPopularUrl}
-              onChange={(e) => setBancoPopularUrl(e.target.value)}
-              placeholder={DEFAULT_BANCO_POPULAR_URL}
-            />
-          </div>
-          <div className="settings-row">
-            <div className="settings-row-info">
-              <div className="settings-row-label">Banco Popular Subscription Key</div>
-              <div className="settings-row-sub">
-                Enter the subscription key from your API Portal Popular plan. It is stored only in this browser for the auto-fetch request.
-              </div>
-            </div>
-            <input
-              className="form-input"
-              style={{ width: 320, fontSize: 12 }}
-              value={bancoPopularKey}
-              onChange={(e) => setBancoPopularKey(e.target.value)}
-              placeholder="Ocp-Apim-Subscription-Key"
-            />
-          </div>
-          <div className="settings-row">
-            <div className="settings-row-info">
               <div className="settings-row-label">Exchange Rate (USD → DOP)</div>
               <div className="settings-row-sub">
-                Auto-fetched from Banco Popular. Click Auto-fetch or enter manually.
+                Auto-fetched from InfoDolar Banco BHD sell rate. Click Auto-fetch or enter manually.
               </div>
             </div>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -559,6 +487,18 @@ export default function SettingsPage() {
               </button>
             </div>
           </div>
+          {rateSourceMeta && (
+            <div className="settings-row" style={{ alignItems: 'flex-start' }}>
+              <div className="settings-row-info">
+                <div className="settings-row-label">Latest Source</div>
+                <div className="settings-row-sub">
+                  {rateSourceMeta.entity} · Compra RD${rateSourceMeta.buy} · Venta RD${rateSourceMeta.sell}
+                  {rateSourceMeta.timestamp ? ` · ${rateSourceMeta.timestamp}` : ''}
+                </div>
+              </div>
+              <a className="btn-ghost btn-sm" href={rateSourceMeta.sourceUrl} target="_blank" rel="noreferrer">Open Source</a>
+            </div>
+          )}
           {fetchMsg && (
             <div className={`settings-notice ${fetchMsg.startsWith('Could') ? 'settings-notice-error' : 'settings-notice-success'}`}>
               {fetchMsg}
