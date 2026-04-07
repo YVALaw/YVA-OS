@@ -37,13 +37,14 @@ exports.handler = async function handler(event) {
     }
 
     const html = await res.text()
-    const match = html.match(/Banco BHD\s*\$([\d.,]+).*?\$([\d.,]+).*?República Dominicana/si)
-    if (!match) {
+    const blockMatch = html.match(/Banco BHD[\s\S]{0,400}/i)
+    const amounts = blockMatch ? Array.from(blockMatch[0].matchAll(/\$([\d.,]+)/g)) : []
+    if (amounts.length < 2) {
       return json(500, { error: 'Could not parse Banco BHD rate from InfoDolar response' })
     }
 
-    const buy = Number(match[1].replace(',', '.'))
-    const sell = Number(match[2].replace(',', '.'))
+    const buy = Number(String(amounts[0][1]).replace(',', '.'))
+    const sell = Number(String(amounts[1][1]).replace(',', '.'))
     const timestampMatch = html.match(/lunes.*?República Dominicana|martes.*?República Dominicana|miércoles.*?República Dominicana|jueves.*?República Dominicana|viernes.*?República Dominicana|sábado.*?República Dominicana|domingo.*?República Dominicana/si)
     const timestamp = timestampMatch ? decodeHtml(timestampMatch[0].replace(/\s+/g, ' ').trim()) : undefined
 
