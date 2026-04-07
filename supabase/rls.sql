@@ -9,13 +9,9 @@
 -- always read user_roles regardless of other RLS policies.
 
 CREATE OR REPLACE FUNCTION public.current_user_role()
-RETURNS TEXT
-LANGUAGE SQL
-SECURITY DEFINER
-STABLE
-AS $$
+RETURNS TEXT AS $$
   SELECT role FROM public.user_roles WHERE user_id = auth.uid() LIMIT 1
-$$;
+$$ LANGUAGE SQL SECURITY DEFINER STABLE;
 
 
 -- ── Step 2: Enable RLS on every table ────────────────────────────────────────
@@ -25,7 +21,6 @@ ALTER TABLE clients           ENABLE ROW LEVEL SECURITY;
 ALTER TABLE projects          ENABLE ROW LEVEL SECURITY;
 ALTER TABLE invoices          ENABLE ROW LEVEL SECURITY;
 ALTER TABLE expenses          ENABLE ROW LEVEL SECURITY;
-ALTER TABLE general_expenses  ENABLE ROW LEVEL SECURITY;
 ALTER TABLE tasks              ENABLE ROW LEVEL SECURITY;
 ALTER TABLE activity_log      ENABLE ROW LEVEL SECURITY;
 ALTER TABLE candidates        ENABLE ROW LEVEL SECURITY;
@@ -44,7 +39,6 @@ CREATE POLICY "team_all" ON clients           FOR ALL TO authenticated USING (tr
 CREATE POLICY "team_all" ON projects          FOR ALL TO authenticated USING (true) WITH CHECK (true);
 CREATE POLICY "team_all" ON invoices          FOR ALL TO authenticated USING (true) WITH CHECK (true);
 CREATE POLICY "team_all" ON expenses          FOR ALL TO authenticated USING (true) WITH CHECK (true);
-CREATE POLICY "team_all" ON general_expenses  FOR ALL TO authenticated USING (true) WITH CHECK (true);
 CREATE POLICY "team_all" ON tasks              FOR ALL TO authenticated USING (true) WITH CHECK (true);
 CREATE POLICY "team_all" ON activity_log      FOR ALL TO authenticated USING (true) WITH CHECK (true);
 CREATE POLICY "team_all" ON candidates        FOR ALL TO authenticated USING (true) WITH CHECK (true);
@@ -54,15 +48,15 @@ CREATE POLICY "team_all" ON counters          FOR ALL TO authenticated USING (tr
 
 -- ── Step 4: Settings table ────────────────────────────────────────────────────
 -- Everyone can read settings (exchange rate, company info, etc.)
--- Only CEO or admin can change settings.
+-- Only CEO can change settings.
 
 CREATE POLICY "settings_read"  ON settings
   FOR SELECT TO authenticated USING (true);
 
 CREATE POLICY "settings_write" ON settings
   FOR ALL TO authenticated
-  USING     (public.current_user_role() IN ('ceo', 'admin'))
-  WITH CHECK (public.current_user_role() IN ('ceo', 'admin'));
+  USING     (public.current_user_role() = 'ceo')
+  WITH CHECK (public.current_user_role() = 'ceo');
 
 
 -- ── Step 5: User roles table ──────────────────────────────────────────────────

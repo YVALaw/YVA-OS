@@ -154,6 +154,7 @@ export default function InvoiceBuilder({ onCreated, onCancel, initialProjectId, 
   const [saveTemplateModal, setSaveTemplateModal] = useState(false)
   const [templateName, setTemplateName] = useState('')
   const [loadTemplateModal, setLoadTemplateModal] = useState(false)
+  const [errorMsg, setErrorMsg] = useState<string | null>(null)
 
   const dates = useMemo(() => generateDateRange(billingStart, billingEnd), [billingStart, billingEnd])
 
@@ -225,85 +226,93 @@ export default function InvoiceBuilder({ onCreated, onCancel, initialProjectId, 
   function createInvoice() {
     if (!selectedClient && !rows.some(r => r.employeeName)) return
     setSaving(true)
+    setErrorMsg(null)
     void (async () => {
-      const items: InvoiceItem[] = rows
-        .filter(r => r.employeeName.trim())
-        .map(r => ({
-          employeeName: r.employeeName,
-          position:     r.position || undefined,
-          hoursTotal:   rowHours(r, dates),
-          rate:         parseFloat(r.rate) || 0,
-          daily:        dates.length > 0 ? { ...r.daily } : undefined,
-        }))
+      try {
+        const items: InvoiceItem[] = rows
+          .filter(r => r.employeeName.trim())
+          .map(r => ({
+            employeeName: r.employeeName,
+            position:     r.position || undefined,
+            hoursTotal:   rowHours(r, dates),
+            rate:         parseFloat(r.rate) || 0,
+            daily:        dates.length > 0 ? { ...r.daily } : undefined,
+          }))
 
-      if (editInvoice) {
-        // Update existing invoice
+        if (editInvoice) {
+          const inv: Invoice = {
+            ...editInvoice,
+            date,
+            dueDate:       dueDate || undefined,
+            clientName:    selectedClient?.name    || editInvoice.clientName || '',
+            clientEmail:   selectedClient?.email   || editInvoice.clientEmail || '',
+            clientAddress: selectedClient?.address || editInvoice.clientAddress || '',
+            billingStart:  billingStart || undefined,
+            billingEnd:    billingEnd   || undefined,
+            projectId:     selectedProject?.id   ?? editInvoice.projectId ?? null,
+            projectName:   selectedProject?.name ?? editInvoice.projectName ?? '',
+            subtotal:      grandTotal,
+            notes:         notes || undefined,
+            items,
+            updatedAt:     Date.now(),
+          }
+          const existing = await loadInvoices()
+          await saveInvoices(existing.map(i => i.id === inv.id ? inv : i))
+          const fresh = await loadInvoices()
+          if (!fresh.some(i => i.id === inv.id)) throw new Error('Invoice update did not persist.')
+          onCreated(inv)
+          return
+        }
+
+        let invNumber: string
+        if (selectedProject) {
+          const allProjects = await loadProjects()
+          const projIdx = allProjects.findIndex(p => p.id === selectedProject.id)
+          const proj = projIdx >= 0 ? allProjects[projIdx] : selectedProject
+          const seq = (proj.nextInvoiceSeq ?? 1)
+          const prefix = projectPrefix(selectedProject.name)
+          invNumber = `${prefix}${String(seq).padStart(4, '0')}`
+          if (projIdx >= 0) {
+            allProjects[projIdx] = { ...proj, nextInvoiceSeq: seq + 1 }
+            await saveProjects(allProjects)
+          }
+        } else {
+          const counter = await loadInvoiceCounter()
+          invNumber = `INV-${String(counter).padStart(3, '0')}`
+          await saveInvoiceCounter(counter + 1)
+        }
+
         const inv: Invoice = {
-          ...editInvoice,
+          id:            uid(),
+          number:        invNumber,
           date,
           dueDate:       dueDate || undefined,
-          clientName:    selectedClient?.name    || editInvoice.clientName || '',
-          clientEmail:   selectedClient?.email   || editInvoice.clientEmail || '',
-          clientAddress: selectedClient?.address || editInvoice.clientAddress || '',
+          clientName:    selectedClient?.name    || '',
+          clientEmail:   selectedClient?.email   || '',
+          clientAddress: selectedClient?.address || '',
           billingStart:  billingStart || undefined,
           billingEnd:    billingEnd   || undefined,
-          projectId:     selectedProject?.id   ?? editInvoice.projectId ?? null,
-          projectName:   selectedProject?.name ?? editInvoice.projectName ?? '',
+          projectId:     selectedProject?.id   || null,
+          projectName:   selectedProject?.name || '',
+          status:        'draft',
           subtotal:      grandTotal,
           notes:         notes || undefined,
           items,
+          createdAt:     Date.now(),
           updatedAt:     Date.now(),
         }
+
         const existing = await loadInvoices()
-        await saveInvoices(existing.map(i => i.id === inv.id ? inv : i))
-        setSaving(false)
+        await saveInvoices([inv, ...existing])
+        const fresh = await loadInvoices()
+        if (!fresh.some(i => i.id === inv.id)) throw new Error('Invoice creation did not persist.')
         onCreated(inv)
-        return
+      } catch (error) {
+        console.error('createInvoice failed', error)
+        setErrorMsg(error instanceof Error ? error.message : 'Invoice could not be saved to Supabase.')
+      } finally {
+        setSaving(false)
       }
-
-      // Create new invoice
-      let invNumber: string
-      if (selectedProject) {
-        const allProjects = await loadProjects()
-        const projIdx = allProjects.findIndex(p => p.id === selectedProject.id)
-        const proj = projIdx >= 0 ? allProjects[projIdx] : selectedProject
-        const seq = (proj.nextInvoiceSeq ?? 1)
-        const prefix = projectPrefix(selectedProject.name)
-        invNumber = `${prefix}${String(seq).padStart(4, '0')}`
-        if (projIdx >= 0) {
-          allProjects[projIdx] = { ...proj, nextInvoiceSeq: seq + 1 }
-          void saveProjects(allProjects)
-        }
-      } else {
-        const counter = await loadInvoiceCounter()
-        invNumber = `INV-${String(counter).padStart(3, '0')}`
-        void saveInvoiceCounter(counter + 1)
-      }
-
-      const inv: Invoice = {
-        id:            uid(),
-        number:        invNumber,
-        date,
-        dueDate:       dueDate || undefined,
-        clientName:    selectedClient?.name    || '',
-        clientEmail:   selectedClient?.email   || '',
-        clientAddress: selectedClient?.address || '',
-        billingStart:  billingStart || undefined,
-        billingEnd:    billingEnd   || undefined,
-        projectId:     selectedProject?.id   || null,
-        projectName:   selectedProject?.name || '',
-        status:        'draft',
-        subtotal:      grandTotal,
-        notes:         notes || undefined,
-        items,
-        createdAt:     Date.now(),
-        updatedAt:     Date.now(),
-      }
-
-      const existing = await loadInvoices()
-      await saveInvoices([inv, ...existing])
-      setSaving(false)
-      onCreated(inv)
     })()
   }
 
@@ -570,6 +579,11 @@ export default function InvoiceBuilder({ onCreated, onCancel, initialProjectId, 
           {saving ? 'Saving…' : (editInvoice ? 'Update Invoice' : 'Create Invoice')}
         </button>
       </div>
+      {errorMsg && (
+        <div className="settings-notice settings-notice-error" style={{ marginTop: 12 }}>
+          {errorMsg}
+        </div>
+      )}
 
       {/* ── Save Template Modal ── */}
       {saveTemplateModal && (

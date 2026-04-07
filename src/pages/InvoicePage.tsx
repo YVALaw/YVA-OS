@@ -8,7 +8,8 @@ import {
 } from '../services/storage'
 import { formatMoney } from '../utils/money'
 import InvoiceBuilder from '../components/InvoiceBuilder'
-import { sendEmail } from '../services/gmail'
+import { sendEmail, type SendEmailResult } from '../services/gmail'
+import { htmlToPdfAttachment } from '../utils/pdf'
 
 type InvoiceStatus = 'draft' | 'sent' | 'viewed' | 'paid' | 'overdue' | 'partial'
 
@@ -34,14 +35,8 @@ function statusBadge(s?: string): string {
   }
 }
 
-function dopLabel(usd: number, rate: number): string {
-  if (!rate || rate <= 0) return ''
-  return `RD$${(usd * rate).toLocaleString('en-US', { maximumFractionDigits: 0 })}`
-}
-
 // ── Shared invoice HTML builder ─────────────────────────────
-function buildInvoiceHTML(inv: Invoice, rate: number, settings: AppSettings, autoPrint = false): string {
-  const dop = dopLabel(Number(inv.subtotal) || 0, rate)
+function buildInvoiceHTML(inv: Invoice, settings: AppSettings, autoPrint = false): string {
   const companyName    = settings.companyName    || 'YVA Staffing'
   const companyAddress = settings.companyAddress || 'Santo Domingo, Dominican Republic'
   const companyEmail   = settings.companyEmail   || 'Contact@yvastaffing.net'
@@ -70,7 +65,6 @@ function buildInvoiceHTML(inv: Invoice, rate: number, settings: AppSettings, aut
     <div class="section">
       <div class="label">Amount Due</div>
       <div style="font-size:28px;font-weight:900;color:#f5b533">${formatMoney(Number(inv.subtotal) || 0)}</div>
-      ${dop ? `<div class="dop">${dop}</div>` : ''}
     </div>`
   } else if (allDates.length > 0) {
     const dateHeaders = allDates.map(d => {
@@ -93,8 +87,7 @@ function buildInvoiceHTML(inv: Invoice, rate: number, settings: AppSettings, aut
         <tr class="total-row"><td colspan="${colSpan}">Total Due</td><td style="text-align:right">${formatMoney(Number(inv.subtotal) || 0)}</td></tr>
       </tbody>
     </table>
-    </div>
-    ${dop ? `<div class="dop">${dop}</div>` : ''}`
+    </div>`
   } else {
     const bodyRows = (inv.items || []).map(it =>
       '<tr><td><strong>' + it.employeeName + '</strong>' + (it.position ? '<br><span style="font-size:11px;color:#888">' + it.position + '</span>' : '') + '</td><td style="text-align:right">' + it.hoursTotal + 'h</td><td style="text-align:right">$' + it.rate + '/hr</td><td style="text-align:right"><strong>$' + (it.hoursTotal * it.rate).toFixed(2) + '</strong></td></tr>'
@@ -105,14 +98,15 @@ function buildInvoiceHTML(inv: Invoice, rate: number, settings: AppSettings, aut
       <tbody>${bodyRows}
         <tr class="total-row"><td colspan="3">Total Due</td><td style="text-align:right">${formatMoney(Number(inv.subtotal) || 0)}</td></tr>
       </tbody>
-    </table>
-    ${dop ? `<div class="dop">${dop}</div>` : ''}`
+    </table>`
   }
 
   return `<!DOCTYPE html><html><head>
     <title>${inv.number}</title>
     <style>
-      body { font-family: Arial, sans-serif; max-width: 720px; margin: 40px auto; color: #111; }
+      @page { size: Letter; margin: 0.5in; }
+      * { box-sizing: border-box; }
+      body { font-family: Arial, sans-serif; width: 7.5in; min-height: 10in; margin: 0 auto; padding: 26px 30px 30px; color: #111; }
       .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 32px; }
       .logo { height: 52px; }
       .from-info { font-size: 12px; color: #666; line-height: 1.6; margin-top: 8px; }
@@ -126,10 +120,9 @@ function buildInvoiceHTML(inv: Invoice, rate: number, settings: AppSettings, aut
       td { padding: 10px; border-bottom: 1px solid #eee; font-size: 13px; vertical-align: top; }
       .total-row { font-size: 16px; font-weight: 800; }
       .total-row td { border-top: 2px solid #111; border-bottom: none; padding-top: 14px; }
-      .dop { font-size: 12px; color: #999; margin-top: 4px; }
       .notes-box { background: #f9f9f9; border-left: 3px solid #f5b533; padding: 12px 16px; margin-top: 24px; font-size: 13px; color: #444; white-space: pre-wrap; }
       .footer { margin-top: 40px; font-size: 12px; color: #999; border-top: 1px solid #eee; padding-top: 16px; }
-      @media print { body { margin: 20px; } }
+      @media print { body { margin: 0 auto; padding: 24px 28px 28px; } }
     </style>
     </head><body>
     <div class="header">
@@ -169,8 +162,8 @@ function buildInvoiceHTML(inv: Invoice, rate: number, settings: AppSettings, aut
     </body></html>`
 }
 
-function printInvoice(inv: Invoice, rate: number, settings: AppSettings) {
-  const html = buildInvoiceHTML(inv, rate, settings, true)
+function printInvoice(inv: Invoice, settings: AppSettings) {
+  const html = buildInvoiceHTML(inv, settings, true)
   const win = window.open('', '_blank', 'width=800,height=600')
   if (!win) return
   win.document.write(html)
@@ -178,8 +171,8 @@ function printInvoice(inv: Invoice, rate: number, settings: AppSettings) {
 }
 
 // ── Share portal link ──────────────────────────────────────
-function shareInvoice(inv: Invoice, dopRate: number) {
-  const payload = { inv, dopRate: dopRate > 0 ? dopRate : undefined }
+function shareInvoice(inv: Invoice) {
+  const payload = { inv }
   const b64 = btoa(encodeURIComponent(JSON.stringify(payload)))
   const url = `${window.location.origin}/portal#${b64}`
   navigator.clipboard.writeText(url).then(
@@ -203,19 +196,21 @@ function applyInvoiceTemplate(template: string, inv: Invoice, settings: AppSetti
 }
 
 // ── Email invoice ──────────────────────────────────────────
-function emailInvoice(inv: Invoice, settings: AppSettings) {
+async function emailInvoice(inv: Invoice, settings: AppSettings): Promise<SendEmailResult> {
   const to      = inv.clientEmail || ''
   const subject = `Invoice ${inv.number} — ${settings.companyName || 'YVA Staffing'}`
   const body    = applyInvoiceTemplate(settings.invoiceEmailTemplate || DEFAULT_INVOICE_EMAIL, inv, settings)
-  sendEmail(to, subject, body)
+  const attachment = await htmlToPdfAttachment(`${inv.number || 'invoice'}.pdf`, buildInvoiceHTML(inv, settings, false))
+  return sendEmail(to, subject, body, { attachments: [attachment] })
 }
 
 // ── Payment reminder email ──────────────────────────────────
-function reminderEmail(inv: Invoice, settings: AppSettings) {
+async function reminderEmail(inv: Invoice, settings: AppSettings): Promise<SendEmailResult> {
   const to      = inv.clientEmail || ''
   const subject = `Payment Reminder — Invoice ${inv.number} — ${settings.companyName || 'YVA Staffing'}`
   const body    = applyInvoiceTemplate(settings.reminderEmailTemplate || DEFAULT_REMINDER_EMAIL, inv, settings)
-  sendEmail(to, subject, body)
+  const attachment = await htmlToPdfAttachment(`${inv.number || 'invoice'}.pdf`, buildInvoiceHTML(inv, settings, false))
+  return sendEmail(to, subject, body, { attachments: [attachment] })
 }
 
 type QuickForm = {
@@ -266,11 +261,40 @@ export default function InvoicePage() {
     loadSettings().then(setSettings)
   }, [])
 
-  function persist(next: Invoice[]) { setInvoices(next); void saveInvoices(next) }
+  async function persist(next: Invoice[]): Promise<boolean> {
+    try {
+      await saveInvoices(next)
+      const fresh = await loadInvoices()
+      setInvoices(fresh)
+      return true
+    } catch (error) {
+      console.error('persist invoices failed', error)
+      showToast(error instanceof Error ? error.message : 'Invoice change failed to save to Supabase')
+      return false
+    }
+  }
 
   function showToast(msg: string) {
     setToast(msg)
     setTimeout(() => setToast(null), 3500)
+  }
+
+  function describeEmailResult(result: SendEmailResult, noun: string, recipient: string): string {
+    if (result.mode === 'gmail') return `${noun} sent to ${recipient} with PDF attached`
+    const reason = result.fallbackReason ? ` Gmail fallback: ${result.fallbackReason}.` : ''
+    return `${noun} draft opened for ${recipient}. PDF downloaded to attach manually.${reason}`
+  }
+
+  async function handleInvoiceEmail(inv: Invoice, noun = `Invoice ${inv.number}`) {
+    if (!inv.clientEmail) return
+    const result = await emailInvoice(inv, settings)
+    showToast(describeEmailResult(result, noun, inv.clientEmail))
+  }
+
+  async function handleReminderEmail(inv: Invoice) {
+    if (!inv.clientEmail) return
+    const result = await reminderEmail(inv, settings)
+    showToast(describeEmailResult(result, `Reminder for ${inv.number}`, inv.clientEmail))
   }
 
   function openBuilder(projectId?: string) { setBuilderProjectId(projectId); setBuilderOpen(true) }
@@ -278,6 +302,15 @@ export default function InvoicePage() {
   async function closeBuilder(inv?: Invoice) {
     const fresh = await loadInvoices()
     setInvoices(fresh)
+    if (inv) {
+      const key = inv.projectId || inv.projectName || '__unassigned__'
+      setExpanded(prev => {
+        const next = new Set(prev)
+        next.add(key)
+        return next
+      })
+      showToast(`Invoice ${inv.number} saved`)
+    }
     setBuilderOpen(false)
     setBuilderProjectId(undefined)
     setEditingInvoice(undefined)
@@ -319,11 +352,22 @@ export default function InvoicePage() {
       createdAt: Date.now(),
       updatedAt: Date.now(),
     }
-    persist([inv, ...invoices])
-    void saveInvoiceCounter(counter + 1)
+    const ok = await persist([inv, ...invoices])
+    if (!ok) return
+    await saveInvoiceCounter(counter + 1)
+    const key = inv.projectId || inv.projectName || '__unassigned__'
+    setExpanded(prev => {
+      const next = new Set(prev)
+      next.add(key)
+      return next
+    })
+    showToast(`Invoice ${inv.number} saved`)
     setQuickModal(false)
     setQuickProjectId(undefined)
-    if (inv.clientEmail) emailInvoice(inv, settings)
+    if (inv.clientEmail) {
+      const result = await emailInvoice(inv, settings)
+      showToast(describeEmailResult(result, `Invoice ${inv.number}`, inv.clientEmail))
+    }
   }
 
   function toggleCollapse(key: string) {
@@ -343,7 +387,7 @@ export default function InvoicePage() {
   function saveStatus() {
     if (!editId) return
     const amtPaid = newStatus === 'partial' ? (parseFloat(newAmountPaid) || 0) : undefined
-    persist(invoices.map((inv) => {
+    void persist(invoices.map((inv) => {
       if (inv.id !== editId) return inv
       const histEntry = { status: newStatus, changedAt: Date.now() }
       return {
@@ -366,11 +410,20 @@ export default function InvoicePage() {
         createdAt: Date.now(),
         updatedAt: Date.now(),
       }
-      persist([dup, ...invoices])
-      void saveInvoiceCounter(counter + 1)
+      void persist([dup, ...invoices]).then(async ok => {
+        if (!ok) return
+        await saveInvoiceCounter(counter + 1)
+        const key = dup.projectId || dup.projectName || '__unassigned__'
+        setExpanded(prev => {
+          const next = new Set(prev)
+          next.add(key)
+          return next
+        })
+        showToast(`Invoice ${dup.number} saved`)
+      })
     })
   }
-  function doDelete(id: string) { persist(invoices.filter((inv) => inv.id !== id)); setConfirmDelete(null) }
+  function doDelete(id: string) { void persist(invoices.filter((inv) => inv.id !== id)); setConfirmDelete(null) }
 
   const filtered = invoices.filter((inv) =>
     `${inv.number} ${inv.clientName} ${inv.projectName}`.toLowerCase().includes(search.toLowerCase()),
@@ -403,18 +456,29 @@ export default function InvoicePage() {
       <div className="page-header">
         <div className="page-header-left">
           <h1 className="page-title">Invoices</h1>
-          <p className="page-sub">{invoices.length} total · {formatMoney(totalBilled)}{settings.usdToDop > 0 ? ` · RD$${(totalBilled * settings.usdToDop).toLocaleString('en-US', { maximumFractionDigits: 0 })}` : ''}</p>
+          <p className="page-sub">{invoices.length} total · {formatMoney(totalBilled)}</p>
         </div>
         <div className="page-header-actions">
           <input className="form-input" style={{ width: 190 }} placeholder="Search invoices..." value={search} onChange={(e) => setSearch(e.target.value)} />
           {invoices.some(i => ['overdue','sent','partial'].includes((i.status||'').toLowerCase()) && i.clientEmail) && (
-            <button className="btn-ghost btn-sm" title="Send reminder to all clients with unpaid invoices" onClick={() => {
+            <button className="btn-ghost btn-sm" title="Send reminder to all clients with unpaid invoices" onClick={() => { void (async () => {
               const seen = new Set<string>()
+              let gmailSent = 0
+              let fallbackCount = 0
               for (const inv of invoices.filter(i => ['overdue','sent','partial'].includes((i.status||'').toLowerCase()) && i.clientEmail)) {
-                if (!seen.has(inv.clientEmail!)) { seen.add(inv.clientEmail!); reminderEmail(inv, settings) }
+                if (!seen.has(inv.clientEmail!)) {
+                  seen.add(inv.clientEmail!)
+                  const result = await reminderEmail(inv, settings)
+                  if (result.mode === 'gmail') gmailSent += 1
+                  else fallbackCount += 1
+                }
               }
-              showToast(`Reminders sent to ${seen.size} client${seen.size !== 1 ? 's' : ''}`)
-            }}>✉ Remind All</button>
+              if (fallbackCount > 0) {
+                showToast(`Reminders sent to ${gmailSent} client${gmailSent !== 1 ? 's' : ''}; ${fallbackCount} opened as drafts with PDF download`)
+              } else {
+                showToast(`Reminders sent to ${gmailSent} client${gmailSent !== 1 ? 's' : ''}`)
+              }
+            })() }}>✉ Remind All</button>
           )}
           <button className="btn-ghost btn-sm" onClick={() => openQuickForProject(undefined)}>Quick Invoice</button>
           <button className="btn-primary" onClick={() => openBuilder()}>+ New Invoice</button>
@@ -439,7 +503,6 @@ export default function InvoicePage() {
                   <span className="invoice-group-name">{label}</span>
                   <span className="invoice-group-meta">
                     {groupInvs.length} invoice{groupInvs.length !== 1 ? 's' : ''} · {formatMoney(groupTotal)}
-                    {settings.usdToDop > 0 ? ` · RD$${(groupTotal * settings.usdToDop).toLocaleString('en-US',{maximumFractionDigits:0})}` : ''}
                     {unpaid > 0 && <span style={{ marginLeft: 8, color: '#f87171', fontSize: 11 }}>● {unpaid} unpaid</span>}
                   </span>
                   <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }} onClick={e => e.stopPropagation()}>
@@ -477,17 +540,16 @@ export default function InvoicePage() {
                               </td>
                               <td style={{ textAlign: 'right', fontWeight: 700 }}>
                                 {formatMoney(Number(inv.subtotal)||0)}
-                                {settings.usdToDop > 0 && <div style={{ fontSize: 10, color: 'var(--muted)', fontWeight: 400 }}>{dopLabel(Number(inv.subtotal)||0, settings.usdToDop)}</div>}
                               </td>
                               <td>
                                 <div style={{ display: 'flex', gap: 3, justifyContent: 'flex-end', flexWrap: 'nowrap' }}>
-                                  {inv.clientEmail && <button className="btn-xs btn-ghost" title="Email invoice" onClick={() => { emailInvoice(inv, settings); showToast(`Invoice ${inv.number} emailed to ${inv.clientEmail}`) }}>✉</button>}
+                                  {inv.clientEmail && <button className="btn-xs btn-ghost" title="Email invoice" onClick={() => { void handleInvoiceEmail(inv) }}>✉</button>}
                                   {inv.clientEmail && ['overdue','sent','partial'].includes((inv.status||'').toLowerCase()) && (
-                                    <button className="btn-xs btn-ghost" title="Payment reminder" onClick={() => { reminderEmail(inv, settings); showToast(`Payment reminder sent to ${inv.clientEmail}`) }}>⚠</button>
+                                    <button className="btn-xs btn-ghost" title="Payment reminder" onClick={() => { void handleReminderEmail(inv) }}>⚠</button>
                                   )}
                                   <button className="btn-xs btn-ghost" title="Preview" onClick={() => setPreviewInv(inv)}>👁</button>
-                                  <button className="btn-xs btn-ghost" title="PDF" onClick={() => printInvoice(inv, settings.usdToDop, settings)}>⎙</button>
-                                  <button className="btn-xs btn-ghost" title="Share portal" onClick={() => shareInvoice(inv, settings.usdToDop)}>🔗</button>
+                                  <button className="btn-xs btn-ghost" title="PDF" onClick={() => printInvoice(inv, settings)}>⎙</button>
+                                  <button className="btn-xs btn-ghost" title="Share portal" onClick={() => shareInvoice(inv)}>🔗</button>
                                   <button className="btn-xs btn-ghost" title="Duplicate" onClick={() => duplicateInvoice(inv)}>⧉</button>
                                   <button className="btn-xs btn-ghost" title="Edit invoice" onClick={() => openEditInvoice(inv)}>✏</button>
                                   <button className="btn-xs btn-ghost" title="Update status" onClick={() => openStatusEdit(inv)}>✎</button>
@@ -654,20 +716,20 @@ export default function InvoicePage() {
             </div>
             <div className="modal-footer">
               <button className="btn-ghost" onClick={() => setSendConfirmInv(null)}>Keep as Draft</button>
-              <button className="btn-primary" onClick={() => {
+              <button className="btn-primary" onClick={() => { void (async () => {
                 const updated = invoices.map(i => i.id === sendConfirmInv.id
                   ? { ...i, status: 'sent' as const, statusHistory: [...(i.statusHistory||[]), { status: 'sent', changedAt: Date.now() }] }
                   : i)
-                void saveInvoices(updated)
-                setInvoices(updated)
+                const ok = await persist(updated)
+                if (!ok) return
                 if (sendConfirmInv.clientEmail) {
-                  emailInvoice(sendConfirmInv, settings)
-                  showToast(`Invoice ${sendConfirmInv.number} sent to ${sendConfirmInv.clientEmail}`)
+                  const result = await emailInvoice(sendConfirmInv, settings)
+                  showToast(describeEmailResult(result, `Invoice ${sendConfirmInv.number}`, sendConfirmInv.clientEmail))
                 } else {
                   showToast(`Invoice ${sendConfirmInv.number} marked as sent`)
                 }
                 setSendConfirmInv(null)
-              }}>{sendConfirmInv.clientEmail ? 'Send Now' : 'Mark as Sent'}</button>
+              })() }}>{sendConfirmInv.clientEmail ? 'Send Now' : 'Mark as Sent'}</button>
             </div>
           </div>
         </div>
@@ -698,12 +760,12 @@ export default function InvoicePage() {
                 <div style={{ fontSize: 12, color: 'var(--muted)' }}>{previewInv.clientName}</div>
               </div>
               <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                <button className="btn-primary btn-sm" onClick={() => printInvoice(previewInv, settings.usdToDop, settings)}>⎙ Print / PDF</button>
+                <button className="btn-primary btn-sm" onClick={() => printInvoice(previewInv, settings)}>⎙ Print / PDF</button>
                 <button className="modal-close btn-icon" onClick={() => setPreviewInv(null)}>✕</button>
               </div>
             </div>
             <iframe
-              srcDoc={buildInvoiceHTML(previewInv, settings.usdToDop, settings, false)}
+              srcDoc={buildInvoiceHTML(previewInv, settings, false)}
               style={{ flex: 1, border: 'none', background: '#fff', minHeight: 500 }}
               title="Invoice Preview"
             />

@@ -34,6 +34,7 @@ input, select, textarea { font-family: inherit; }
   grid-template-rows: var(--topbar-h) 1fr;
   min-height: 100vh;
 }
+.shell.shell-collapsed { grid-template-columns: 78px 1fr; }
 
 /* ── SIDEBAR ── */
 .sidebar {
@@ -47,7 +48,24 @@ input, select, textarea { font-family: inherit; }
   top: 0;
   height: 100vh;
   overflow-y: auto;
+  transition: width .2s ease, padding .2s ease;
 }
+.sidebar-brand-copy,
+.sidebar-nav-label,
+.sidebar-footer-email { transition: opacity .15s ease, width .15s ease; }
+.sidebar.sidebar-collapsed { padding-left: 8px; padding-right: 8px; }
+.sidebar.sidebar-collapsed .sidebar-brand { justify-content: center; padding-left: 0; padding-right: 0; }
+.sidebar.sidebar-collapsed .sidebar-brand-copy,
+.sidebar.sidebar-collapsed .sidebar-nav-label,
+.sidebar.sidebar-collapsed .sidebar-footer-email {
+  opacity: 0;
+  width: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+.sidebar.sidebar-collapsed .sidebar-nav-item { justify-content: center; padding-left: 0; padding-right: 0; }
+.sidebar.sidebar-collapsed .sidebar-footer { display: flex; justify-content: center; }
+.sidebar.sidebar-collapsed .sidebar-footer-label { text-align: center; padding: 0; }
 
 .sidebar-brand {
   display: flex; align-items: center; gap: 10px;
@@ -55,11 +73,25 @@ input, select, textarea { font-family: inherit; }
   border-bottom: 1px solid var(--border);
   margin-bottom: 10px;
 }
+.sidebar-brand-toggle {
+  width: 100%;
+  background: transparent;
+  border: none;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background .15s ease;
+}
+.sidebar-brand-toggle:hover { background: rgba(255,255,255,.03); }
+.sidebar-brand-toggle:focus-visible {
+  outline: 2px solid rgba(245,181,51,.5);
+  outline-offset: 2px;
+}
 .sidebar-brand-icon {
-  width: 36px; height: 36px; border-radius: 10px;
+  width: 34px; height: 34px; border-radius: 10px;
   background: var(--gold);
   display: grid; place-items: center;
-  font-weight: 900; font-size: 15px;
+  font-weight: 900; font-size: 14px;
   color: #020617; flex-shrink: 0;
 }
 .sidebar-brand-name    { font-weight: 800; font-size: 13.5px; color: var(--text); }
@@ -731,7 +763,6 @@ input, select, textarea { font-family: inherit; }
   /* Topbar: full width, show hamburger */
   .topbar { grid-column: 1; padding: 0 12px; gap: 10px; }
   .hamburger { display: flex; }
-
   /* Search: shrink on mobile */
   .topbar-actions .form-input { width: 140px; }
   .topbar-badge { display: none; }

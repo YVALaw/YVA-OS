@@ -217,6 +217,19 @@ export default function Shell({ children }: Props) {
   const location = useLocation()
   const { role, email } = useRole()
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem('yva_sidebar_collapsed') === '1')
+
+  function toggleBrandNav() {
+    if (typeof window !== 'undefined' && window.innerWidth <= 768) {
+      setSidebarOpen(false)
+      return
+    }
+    setSidebarCollapsed(v => !v)
+  }
+
+  useEffect(() => {
+    localStorage.setItem('yva_sidebar_collapsed', sidebarCollapsed ? '1' : '0')
+  }, [sidebarCollapsed])
 
   // Close sidebar on route change
   const prevPath = useRef(location.pathname)
@@ -235,20 +248,26 @@ export default function Shell({ children }: Props) {
   })
 
   return (
-    <div className="shell">
+    <div className={`shell${sidebarCollapsed ? ' shell-collapsed' : ''}`}>
       {/* Mobile overlay */}
       {sidebarOpen && (
         <div className="sidebar-overlay" onClick={() => setSidebarOpen(false)} />
       )}
 
-      <aside className={`sidebar${sidebarOpen ? ' sidebar-open' : ''}`}>
-        <div className="sidebar-brand">
+      <aside className={`sidebar${sidebarOpen ? ' sidebar-open' : ''}${sidebarCollapsed ? ' sidebar-collapsed' : ''}`}>
+        <button
+          type="button"
+          className="sidebar-brand sidebar-brand-toggle"
+          onClick={toggleBrandNav}
+          aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+        >
           <div className="sidebar-brand-icon">Y</div>
-          <div>
+          <div className="sidebar-brand-copy">
             <div className="sidebar-brand-name">YVA OS</div>
             <div className="sidebar-brand-sub">Operations Hub</div>
           </div>
-        </div>
+        </button>
 
         <nav className="sidebar-nav">
           {visibleNav.map((item) => (
@@ -260,13 +279,13 @@ export default function Shell({ children }: Props) {
               onClick={() => setSidebarOpen(false)}
             >
               <span className="sidebar-nav-icon">{item.icon}</span>
-              <span>{item.label}</span>
+              <span className="sidebar-nav-label">{item.label}</span>
             </NavLink>
           ))}
         </nav>
 
         <div className="sidebar-footer">
-          {email && <div className="sidebar-footer-label" style={{ marginBottom: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{email}</div>}
+          {email && <div className="sidebar-footer-label sidebar-footer-email" style={{ marginBottom: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{email}</div>}
           <div className="sidebar-footer-label" style={{ color: 'var(--gold)', fontSize: 10, textTransform: 'uppercase', letterSpacing: '.06em' }}>{ROLE_LABELS[role]}</div>
         </div>
       </aside>

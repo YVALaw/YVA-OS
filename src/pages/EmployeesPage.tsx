@@ -5,9 +5,11 @@ import {
   loadSnapshot, saveEmployees, saveInvoices,
   loadEmployeeCounter, saveEmployeeCounter, loadSettings,
 } from '../services/storage'
+import { sendEmail, type SendEmailResult } from '../services/gmail'
 import { formatMoney, fmtHoursHM } from '../utils/money'
 import { useRole } from '../context/RoleContext'
 import { can } from '../lib/roles'
+import { htmlToPdfAttachment } from '../utils/pdf'
 
 function uid() { return crypto.randomUUID() }
 
@@ -69,11 +71,25 @@ function getEmployeeInvoices(empName: string, invoices: Invoice[], from?: string
     if (from && d < from) return false
     if (to   && d > to)   return false
     return true
-  })
+  }).sort(compareInvoicesDesc)
 }
 
-async function printPayslip(emp: Employee, empInvoices: Invoice[], dateFrom: string, dateTo: string) {
-  const settings = await loadSettings()
+function compareInvoicesDesc(a: Invoice, b: Invoice): number {
+  const aNum = parseInvoiceNumber(a.number)
+  const bNum = parseInvoiceNumber(b.number)
+  if (aNum !== bNum) return bNum - aNum
+  const aDate = a.createdAt || (a.date ? Date.parse(a.date) : 0) || 0
+  const bDate = b.createdAt || (b.date ? Date.parse(b.date) : 0) || 0
+  return bDate - aDate
+}
+
+function parseInvoiceNumber(value?: string): number {
+  if (!value) return 0
+  const match = value.match(/(\d+)(?!.*\d)/)
+  return match ? parseInt(match[1], 10) : 0
+}
+
+function buildPayslipHTML(emp: Employee, empInvoices: Invoice[], dateFrom: string, dateTo: string, settings: Awaited<ReturnType<typeof loadSettings>>) {
   const payRate = Number(emp.payRate) || 0
   const dopRate = settings.usdToDop || 0
 
@@ -116,12 +132,11 @@ async function printPayslip(emp: Employee, empInvoices: Invoice[], dateFrom: str
   }).join('<hr style="border:none;border-top:1px solid #eee;margin:0 0 16px">')
 
   const period = dateFrom && dateTo ? `${dateFrom} – ${dateTo}` : dateFrom || dateTo || 'All time'
-  const win = window.open('', '_blank', 'width=800,height=600')
-  if (!win) return
-  win.document.write(`<!DOCTYPE html><html><head>
+  return `<!DOCTYPE html><html><head>
   <title>Statement — ${emp.name}</title>
   <style>
-    body{font-family:Arial,sans-serif;max-width:700px;margin:40px auto;color:#111}
+    @page{size:Letter;margin:.5in}
+    body{font-family:Arial,sans-serif;width:7.5in;min-height:10in;margin:0 auto;color:#111}
     .header{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:28px;border-bottom:2px solid #f5b533;padding-bottom:16px}
     .logo{height:48px}
     h2{margin:0;font-size:22px;color:#f5b533}
@@ -134,7 +149,7 @@ async function printPayslip(emp: Employee, empInvoices: Invoice[], dateFrom: str
     th{text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:#999;padding:8px 8px;border-bottom:2px solid #eee}
     td{padding:8px;border-bottom:1px solid #eee}
     .footer{margin-top:32px;font-size:11px;color:#999;border-top:1px solid #eee;padding-top:12px;text-align:center}
-    @media print{body{margin:16px}}
+    @media print{body{margin:0 auto}}
   </style></head><body>
   <div class="header">
     <img src="${window.location.origin}/yva-logo.png" class="logo" onerror="this.style.display='none'" />
@@ -154,8 +169,14 @@ async function printPayslip(emp: Employee, empInvoices: Invoice[], dateFrom: str
   </div>
   ${sections?sections+'<div style="text-align:right;font-weight:800;font-size:13px;padding:10px 0;border-top:2px solid #111;margin-top:4px">Total &nbsp;&nbsp; '+totalHours.toFixed(1)+'h &nbsp;&nbsp; '+(payRate>0?'$'+totalUSD.toFixed(2):'—')+'</div>':'<p style="color:#999;text-align:center;padding:24px">No invoice data for this period.</p>'}
   <div class="footer">YVA Staffing · Bilingual Virtual Professionals · yvastaffing.net</div>
-  <script>window.onload=function(){window.print()}</script>
-  </body></html>`)
+  </body></html>`
+}
+
+async function printPayslip(emp: Employee, empInvoices: Invoice[], dateFrom: string, dateTo: string) {
+  const settings = await loadSettings()
+  const win = window.open('', '_blank', 'width=800,height=600')
+  if (!win) return
+  win.document.write(buildPayslipHTML(emp, empInvoices, dateFrom, dateTo, settings).replace('</body></html>', '<script>window.onload=function(){window.print()}</script></body></html>'))
   win.document.close()
 }
 
@@ -171,7 +192,7 @@ async function emailStatement(emp: Employee, empInvoices: Invoice[], dateFrom: s
   const period = dateFrom && dateTo ? `${dateFrom} – ${dateTo}` : dateFrom || dateTo || 'All time'
   const companyName = settings.companyName || 'YVA Staffing'
 
-  const subject = encodeURIComponent(`Your Earnings Statement — ${period} — ${companyName}`)
+  const subject = `Your Earnings Statement — ${period} — ${companyName}`
 
   let bodyText: string
   if (settings.statementEmailTemplate) {
@@ -188,7 +209,15 @@ async function emailStatement(emp: Employee, empInvoices: Invoice[], dateFrom: s
       `  Invoices: ${empInvoices.length}\n\n` +
       `Please reach out if you have any questions.\n\n${settings.emailSignature || companyName}`
   }
-  window.location.href = `mailto:${emp.email || ''}?subject=${subject}&body=${encodeURIComponent(bodyText)}`
+  const attachment = await htmlToPdfAttachment(
+    `${(emp.name || 'employee').replace(/\s+/g, '-').toLowerCase()}-statement.pdf`,
+    buildPayslipHTML(emp, empInvoices, dateFrom, dateTo, settings),
+  )
+  return sendEmail(emp.email || '', subject, bodyText, { attachments: [attachment] })
+}
+
+function getEmployeePaymentRecord(inv: Invoice, emp: Employee) {
+  return inv.employeePayments?.[emp.id] || inv.employeePayments?.[emp.name]
 }
 
 function EmployeeStatementsPanel({ emp, invoices, onInvoicesChange }: {
@@ -198,9 +227,7 @@ function EmployeeStatementsPanel({ emp, invoices, onInvoicesChange }: {
 }) {
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo,   setDateTo]   = useState('')
-  const [payModal, setPayModal] = useState<{ inv: Invoice } | null>(null)
-  const [payDate,  setPayDate]  = useState('')
-  const [payNotes, setPayNotes] = useState('')
+  const [toast, setToast] = useState<string | null>(null)
 
   const empInvoices = getEmployeeInvoices(emp.name, invoices, dateFrom || undefined, dateTo || undefined)
   const payRate = Number(emp.payRate) || 0
@@ -211,46 +238,66 @@ function EmployeeStatementsPanel({ emp, invoices, onInvoicesChange }: {
   }, 0)
   const totalEarned = payRate > 0 ? totalHours * payRate : 0
 
-  const paidCount   = empInvoices.filter(inv => inv.employeePayments?.[emp.name]?.status === 'paid').length
+  const paidCount   = empInvoices.filter(inv => getEmployeePaymentRecord(inv, emp)?.status === 'paid').length
   const pendingCount = empInvoices.length - paidCount
   const totalPaid   = empInvoices.reduce((s, inv) => {
-    if (inv.employeePayments?.[emp.name]?.status !== 'paid') return s
+    if (getEmployeePaymentRecord(inv, emp)?.status !== 'paid') return s
     const items = (inv.items || []).filter(it => it.employeeName?.toLowerCase() === emp.name.toLowerCase())
     const hrs = items.reduce((h, it) => h + (Number(it.hoursTotal) || 0), 0)
     return s + hrs * payRate
   }, 0)
 
+  function showToast(msg: string) {
+    setToast(msg)
+    window.setTimeout(() => setToast(null), 3500)
+  }
+
+  function describeEmailResult(result: SendEmailResult, recipient: string) {
+    if (result.mode === 'gmail') return `Statement sent to ${recipient} with PDF attached`
+    const reason = result.fallbackReason ? ` Gmail fallback: ${result.fallbackReason}.` : ''
+    return `Statement draft opened for ${recipient}. PDF downloaded to attach manually.${reason}`
+  }
+
   function getEmpPayment(inv: Invoice) {
-    return inv.employeePayments?.[emp.name]
+    return getEmployeePaymentRecord(inv, emp)
   }
 
   async function markPaid(inv: Invoice) {
     const hrs = (inv.items || []).filter(it => it.employeeName?.toLowerCase() === emp.name.toLowerCase())
       .reduce((h, it) => h + (Number(it.hoursTotal) || 0), 0)
+    const existingPayments = { ...(inv.employeePayments || {}) }
+    if (emp.name in existingPayments && emp.id !== emp.name) delete existingPayments[emp.name]
     const updated = invoices.map(i => i.id === inv.id ? {
       ...i,
       employeePayments: {
-        ...(i.employeePayments || {}),
-        [emp.name]: { status: 'paid' as const, paidDate: payDate || new Date().toISOString().slice(0,10), amount: hrs * payRate, notes: payNotes || undefined }
+        ...(i.id === inv.id ? existingPayments : i.employeePayments || {}),
+        [emp.id]: { status: 'paid' as const, paidDate: new Date().toISOString().slice(0,10), amount: hrs * payRate }
       }
     } : i)
     onInvoicesChange(updated)
     await saveInvoices(updated)
-    setPayModal(null)
-    setPayDate('')
-    setPayNotes('')
+    showToast(`Marked ${inv.number} as paid`)
   }
 
   async function markPending(inv: Invoice) {
+    const existingPayments = { ...(inv.employeePayments || {}) }
+    if (emp.name in existingPayments && emp.id !== emp.name) delete existingPayments[emp.name]
     const updated = invoices.map(i => i.id === inv.id ? {
       ...i,
       employeePayments: {
-        ...(i.employeePayments || {}),
-        [emp.name]: { status: 'pending' as const }
+        ...(i.id === inv.id ? existingPayments : i.employeePayments || {}),
+        [emp.id]: { status: 'pending' as const }
       }
     } : i)
     onInvoicesChange(updated)
     await saveInvoices(updated)
+    showToast(`Marked ${inv.number} as pending`)
+  }
+
+  async function handleStatementEmail(targetInvoices: Invoice[]) {
+    if (!emp.email || targetInvoices.length === 0) return
+    const result = await emailStatement(emp, targetInvoices, dateFrom, dateTo)
+    showToast(describeEmailResult(result, emp.email))
   }
 
   const byProject = new Map<string, { hours: number; earned: number }>()
@@ -285,7 +332,7 @@ function EmployeeStatementsPanel({ emp, invoices, onInvoicesChange }: {
         <div style={{ display: 'flex', gap: 6, marginLeft: 'auto' }}>
           <button
             className="btn-ghost btn-sm"
-            onClick={() => emailStatement(emp, empInvoices, dateFrom, dateTo)}
+            onClick={() => { void handleStatementEmail(empInvoices) }}
             disabled={empInvoices.length === 0 || !emp.email}
             title={!emp.email ? 'No email address on file — add one in the employee profile' : ''}
           >
@@ -366,13 +413,17 @@ function EmployeeStatementsPanel({ emp, invoices, onInvoicesChange }: {
                           <span style={{ fontSize: 11, color: '#22c55e', fontWeight: 600 }}>
                             ✓ Paid {payment?.paidDate ? new Date(payment.paidDate + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : ''}
                           </span>
+                          <button className="btn-ghost btn-sm" style={{ fontSize: 10, padding: '2px 8px' }} onClick={() => { void handleStatementEmail([inv]) }}>Email</button>
                           <button className="btn-ghost btn-sm" style={{ fontSize: 10, padding: '2px 8px' }} onClick={() => markPending(inv)}>Undo</button>
                         </>
                       ) : (
-                        <button className="btn-ghost btn-sm" style={{ fontSize: 11, padding: '3px 10px', borderColor: 'var(--gold)', color: 'var(--gold)' }}
-                          onClick={() => { setPayModal({ inv }); setPayDate(new Date().toISOString().slice(0,10)); setPayNotes('') }}>
-                          Mark as Paid
-                        </button>
+                        <>
+                          <button className="btn-ghost btn-sm" style={{ fontSize: 11, padding: '3px 10px', borderColor: 'var(--gold)', color: 'var(--gold)' }}
+                            onClick={() => { void markPaid(inv) }}>
+                            Mark as Paid
+                          </button>
+                          <button className="btn-ghost btn-sm" style={{ fontSize: 10, padding: '2px 8px' }} onClick={() => { void handleStatementEmail([inv]) }}>Email</button>
+                        </>
                       )}
                     </span>
                   </div>
@@ -441,28 +492,17 @@ function EmployeeStatementsPanel({ emp, invoices, onInvoicesChange }: {
       )}
 
       {/* Mark as Paid modal */}
-      {payModal && (
-        <div className="modal-overlay" onClick={() => setPayModal(null)}>
-          <div className="modal-dialog" style={{ maxWidth: 360 }} onClick={e => e.stopPropagation()}>
-            <div className="modal-header">
-              <div className="modal-title">Mark as Paid — {payModal.inv.number}</div>
-              <button className="modal-close btn-icon" onClick={() => setPayModal(null)}>✕</button>
-            </div>
-            <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-              <div className="form-group">
-                <label className="form-label">Payment Date</label>
-                <input className="form-input" type="date" value={payDate} onChange={e => setPayDate(e.target.value)} />
-              </div>
-              <div className="form-group">
-                <label className="form-label">Notes (optional)</label>
-                <input className="form-input" type="text" placeholder="e.g. Bank transfer, Ref #1234" value={payNotes} onChange={e => setPayNotes(e.target.value)} />
-              </div>
-            </div>
-            <div className="modal-footer">
-              <button className="btn-ghost" onClick={() => setPayModal(null)}>Cancel</button>
-              <button className="btn-primary" onClick={() => markPaid(payModal.inv)}>Confirm Payment</button>
-            </div>
-          </div>
+      {toast && (
+        <div style={{
+          position: 'fixed', bottom: 28, right: 28, zIndex: 9999,
+          background: '#1e293b', border: '1px solid var(--border)',
+          borderLeft: '3px solid #4ade80',
+          color: 'var(--text)', fontSize: 13, fontWeight: 500,
+          padding: '10px 16px', borderRadius: 8,
+          boxShadow: '0 4px 24px rgba(0,0,0,.4)',
+          maxWidth: 360,
+        }}>
+          ✓ {toast}
         </div>
       )}
     </div>
@@ -493,6 +533,7 @@ export default function EmployeesPage() {
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
   const [search, setSearch]     = useState('')
   const [filterStatus, setFilterStatus] = useState('')
+  const [teamLayout, setTeamLayout] = useState<'kanban' | 'cards'>('kanban')
 
   function persist(next: Employee[]) { setEmployees(next); void saveEmployees(next) }
 
@@ -546,6 +587,88 @@ export default function EmployeesPage() {
     return matchSearch && matchStatus
   })
 
+  const projectColumns = [
+    ...projects
+      .filter(project => (project.status || '').toLowerCase() !== 'completed')
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map(project => ({
+        id: project.id,
+        name: project.name,
+        employees: filtered.filter(employee => (project.employeeIds || []).includes(employee.id)),
+      })),
+    {
+      id: 'unassigned',
+      name: 'Unassigned',
+      employees: filtered.filter(employee =>
+        !projects.some(project => (project.employeeIds || []).includes(employee.id))
+      ),
+    },
+  ]
+
+  function renderEmployeeCard(employee: Employee, key?: string) {
+    const color = avatarColor(employee.name)
+    const empInvoiceCount = invoices.filter(inv => (inv.items||[]).some(it => it.employeeName?.toLowerCase() === employee.name.toLowerCase())).length
+    const empNum = employee.employeeNumber
+    return (
+      <div key={key || employee.id} className="entity-card" style={{ borderTop: `2px solid ${statusColor(employee.status)}`, cursor: 'pointer' }} onClick={() => navigate('/employees/' + employee.id)}>
+        <div className="card-top">
+          <div className="card-top-left">
+            <div className="avatar" style={{ background: color }}>{initials(employee.name)}</div>
+            <div>
+              <div className="card-name">{employee.name}</div>
+              <div className="card-sub">{empNum ? `${empNum} · ` : ''}{(employee as {role?:string}).role || employee.email || 'No email'}</div>
+            </div>
+          </div>
+          <span className={`badge ${statusBadge(employee.status)}`}>{employee.status || 'Active'}</span>
+        </div>
+        <div className="card-stats">
+          {showPayRates && employee.payRate && (
+            <div className="stat-item">
+              <div className="stat-label">Pay Rate</div>
+              <div className="stat-value stat-value-gold">${employee.payRate}/hr</div>
+            </div>
+          )}
+          {(employee as {employmentType?:string}).employmentType && (
+            <div className="stat-item">
+              <div className="stat-label">Type</div>
+              <div className="stat-value">{(employee as {employmentType?:string}).employmentType}</div>
+            </div>
+          )}
+          {(employee as {location?:string}).location && (
+            <div className="stat-item">
+              <div className="stat-label">Location</div>
+              <div className="stat-value" style={{ fontSize: 12 }}>{(employee as {location?:string}).location}</div>
+            </div>
+          )}
+          {employee.timezone && (
+            <div className="stat-item">
+              <div className="stat-label">Timezone</div>
+              <div className="stat-value">{employee.timezone}</div>
+            </div>
+          )}
+          {employee.startYear && (
+            <div className="stat-item">
+              <div className="stat-label">Since</div>
+              <div className="stat-value">{employee.startYear}</div>
+            </div>
+          )}
+          <div className="stat-item">
+            <div className="stat-label">Invoices</div>
+            <div className="stat-value">{empInvoiceCount}</div>
+          </div>
+        </div>
+        {(employee as {notes?:string}).notes && (
+          <div className="card-detail" style={{ fontSize: 11, opacity: .75 }}>{(employee as {notes?:string}).notes}</div>
+        )}
+        <div className="card-footer">
+          <button className="btn-xs btn-teal" onClick={ev => { ev.stopPropagation(); navigate('/employees/' + employee.id) }}>View Profile</button>
+          <button className="btn-xs btn-ghost" onClick={ev => { ev.stopPropagation(); openEdit(employee) }}>Edit</button>
+          <button className="btn-xs btn-danger" onClick={ev => { ev.stopPropagation(); setConfirmDelete(employee.id) }}>Remove</button>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="page-wrap">
       <div className="page-header">
@@ -559,6 +682,14 @@ export default function EmployeesPage() {
             <option value="">All statuses</option>
             {STATUS_OPTIONS.map(s => <option key={s} value={s}>{s}</option>)}
           </select>
+          <div style={{ display: 'flex', gap: 6 }}>
+            <button className="btn-ghost btn-sm" style={{ borderColor: teamLayout === 'kanban' ? 'var(--gold)' : undefined, color: teamLayout === 'kanban' ? 'var(--gold)' : undefined }} onClick={() => setTeamLayout('kanban')}>
+              Project Board
+            </button>
+            <button className="btn-ghost btn-sm" style={{ borderColor: teamLayout === 'cards' ? 'var(--gold)' : undefined, color: teamLayout === 'cards' ? 'var(--gold)' : undefined }} onClick={() => setTeamLayout('cards')}>
+              Card Grid
+            </button>
+          </div>
           <button className="btn-primary" onClick={openAdd}>+ Add Member</button>
         </div>
       </div>
@@ -625,76 +756,40 @@ export default function EmployeesPage() {
         )
       })()}
 
-      <div className="card-grid">
-        {filtered.map((e) => {
-          const color = avatarColor(e.name)
-          const empInvoiceCount = invoices.filter(inv => (inv.items||[]).some(it => it.employeeName?.toLowerCase() === e.name.toLowerCase())).length
-          const empNum = e.employeeNumber
-          return (
-            <div key={e.id} className="entity-card" style={{ borderTop: `2px solid ${statusColor(e.status)}`, cursor: 'pointer' }} onClick={() => navigate('/employees/' + e.id)}>
-              <div className="card-top">
-                <div className="card-top-left">
-                  <div className="avatar" style={{ background: color }}>{initials(e.name)}</div>
-                  <div>
-                    <div className="card-name">{e.name}</div>
-                    <div className="card-sub">{empNum ? `${empNum} · ` : ''}{(e as {role?:string}).role || e.email || 'No email'}</div>
+      {teamLayout === 'kanban' ? (
+        <div style={{ display: 'grid', gridAutoFlow: 'column', gridAutoColumns: 'minmax(280px, 320px)', gap: 14, overflowX: 'auto', paddingBottom: 8 }}>
+          {projectColumns.map(column => (
+            <div key={column.id} style={{ background: 'var(--surf)', border: '1px solid var(--border)', borderRadius: 12, minHeight: 320, display: 'flex', flexDirection: 'column' }}>
+              <div style={{ padding: '14px 14px 10px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 800 }}>{column.name}</div>
+                  <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2 }}>
+                    {column.employees.length} member{column.employees.length !== 1 ? 's' : ''}
                   </div>
                 </div>
-                <span className={`badge ${statusBadge(e.status)}`}>{e.status || 'Active'}</span>
               </div>
-              <div className="card-stats">
-                {showPayRates && e.payRate && (
-                  <div className="stat-item">
-                    <div className="stat-label">Pay Rate</div>
-                    <div className="stat-value stat-value-gold">${e.payRate}/hr</div>
+              <div style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 12 }}>
+                {column.employees.length === 0 ? (
+                  <div style={{ border: '1px dashed var(--border)', borderRadius: 10, padding: 18, textAlign: 'center', fontSize: 12, color: 'var(--muted)' }}>
+                    No team members in this lane.
                   </div>
+                ) : (
+                  column.employees.map(employee => renderEmployeeCard(employee, `${column.id}-${employee.id}`))
                 )}
-                {(e as {employmentType?:string}).employmentType && (
-                  <div className="stat-item">
-                    <div className="stat-label">Type</div>
-                    <div className="stat-value">{(e as {employmentType?:string}).employmentType}</div>
-                  </div>
-                )}
-                {(e as {location?:string}).location && (
-                  <div className="stat-item">
-                    <div className="stat-label">Location</div>
-                    <div className="stat-value" style={{ fontSize: 12 }}>{(e as {location?:string}).location}</div>
-                  </div>
-                )}
-                {e.timezone && (
-                  <div className="stat-item">
-                    <div className="stat-label">Timezone</div>
-                    <div className="stat-value">{e.timezone}</div>
-                  </div>
-                )}
-                {e.startYear && (
-                  <div className="stat-item">
-                    <div className="stat-label">Since</div>
-                    <div className="stat-value">{e.startYear}</div>
-                  </div>
-                )}
-                <div className="stat-item">
-                  <div className="stat-label">Invoices</div>
-                  <div className="stat-value">{empInvoiceCount}</div>
-                </div>
-              </div>
-              {(e as {notes?:string}).notes && (
-                <div className="card-detail" style={{ fontSize: 11, opacity: .75 }}>{(e as {notes?:string}).notes}</div>
-              )}
-              <div className="card-footer">
-                <button className="btn-xs btn-teal" onClick={ev => { ev.stopPropagation(); navigate('/employees/' + e.id) }}>View Profile</button>
-                <button className="btn-xs btn-ghost" onClick={ev => { ev.stopPropagation(); openEdit(e) }}>Edit</button>
-                <button className="btn-xs btn-danger" onClick={ev => { ev.stopPropagation(); setConfirmDelete(e.id) }}>Remove</button>
               </div>
             </div>
-          )
-        })}
-        {filtered.length === 0 && (
-          <div style={{ gridColumn: '1/-1', textAlign: 'center', padding: '48px 20px', color: 'var(--muted)', fontSize: 14 }}>
-            {search || filterStatus ? 'No results.' : 'No team members yet. Add your first.'}
-          </div>
-        )}
-      </div>
+          ))}
+        </div>
+      ) : (
+        <div className="card-grid">
+          {filtered.map(employee => renderEmployeeCard(employee))}
+          {filtered.length === 0 && (
+            <div style={{ gridColumn: '1/-1', textAlign: 'center', padding: '48px 20px', color: 'var(--muted)', fontSize: 14 }}>
+              {search || filterStatus ? 'No results.' : 'No team members yet. Add your first.'}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Statements Modal */}
       {modal === 'statements' && selectedEmp && (

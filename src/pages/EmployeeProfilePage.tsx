@@ -3,8 +3,9 @@ import { useNavigate, useParams } from 'react-router-dom'
 import type { Attachment, Employee, Invoice, Project } from '../data/types'
 import { loadSnapshot, saveEmployees, saveInvoices, loadSettings } from '../services/storage'
 import { uploadFile, deleteFile } from '../services/fileStorage'
-import { sendEmail } from '../services/gmail'
+import { sendEmail, type SendEmailResult } from '../services/gmail'
 import { formatMoney, fmtHoursHM } from '../utils/money'
+import { htmlToPdfAttachment } from '../utils/pdf'
 
 function uid() { return crypto.randomUUID() }
 
@@ -71,7 +72,70 @@ function getEmpInvoices(name: string, invoices: Invoice[], from?: string, to?: s
     if (from && d < from) return false
     if (to   && d > to)   return false
     return true
-  })
+  }).sort(compareInvoicesDesc)
+}
+
+function compareInvoicesDesc(a: Invoice, b: Invoice): number {
+  const aNum = parseInvoiceNumber(a.number)
+  const bNum = parseInvoiceNumber(b.number)
+  if (aNum !== bNum) return bNum - aNum
+  const aDate = a.createdAt || (a.date ? Date.parse(a.date) : 0) || 0
+  const bDate = b.createdAt || (b.date ? Date.parse(b.date) : 0) || 0
+  return bDate - aDate
+}
+
+function parseInvoiceNumber(value?: string): number {
+  if (!value) return 0
+  const match = value.match(/(\d+)(?!.*\d)/)
+  return match ? parseInt(match[1], 10) : 0
+}
+
+function getEmployeePaymentRecord(inv: Invoice, emp: Employee) {
+  return inv.employeePayments?.[emp.id] || inv.employeePayments?.[emp.name]
+}
+
+function buildPayslipHTML(emp: Employee, empInvoices: Invoice[], dateFrom: string, dateTo: string, settings: Awaited<ReturnType<typeof loadSettings>>) {
+  const payRate  = Number(emp.payRate) || 0
+  const dopRate  = settings.usdToDop || 0
+  const totalHours = empInvoices.reduce((s, inv) =>
+    s + (inv.items||[]).filter(it=>it.employeeName?.toLowerCase()===emp.name.toLowerCase())
+      .reduce((h,it)=>h+(Number(it.hoursTotal)||0),0), 0)
+  const totalUSD = totalHours * payRate
+  const totalDOP = dopRate > 0 ? totalUSD * dopRate : 0
+  function ph(v: string): number {
+    if (!v) return 0; const s = v.trim().replace(',','.')
+    if (s.includes(':')) { const [h,m]=s.split(':'); return (parseInt(h)||0)+(parseInt(m)||0)/60 }
+    return parseFloat(s)||0
+  }
+  const DA = ['Su','Mo','Tu','We','Th','Fr','Sa']
+  const sections = empInvoices.map(inv => {
+    const items = (inv.items||[]).filter(it=>it.employeeName?.toLowerCase()===emp.name.toLowerCase())
+    const hrs = items.reduce((h,it)=>h+(Number(it.hoursTotal)||0),0)
+    const earned = payRate > 0 ? hrs * payRate : 0
+    const invPeriod = inv.billingStart ? inv.billingStart+(inv.billingEnd?' – '+inv.billingEnd:'') : (inv.date||'—')
+    const daily = items[0]?.daily
+    let allDates: string[] = []
+    if (daily) {
+      if (inv.billingStart && inv.billingEnd) {
+        const cur = new Date(inv.billingStart+'T12:00:00')
+        const end = new Date(inv.billingEnd+'T12:00:00')
+        while (cur <= end) { allDates.push(cur.toISOString().slice(0,10)); cur.setDate(cur.getDate()+1) }
+      } else {
+        allDates = Object.keys(daily).filter(d=>ph(daily[d])>0).sort()
+      }
+    }
+    const label = '<div style="font-size:11px;margin-bottom:6px"><strong style="font-size:13px">'+inv.number+'</strong>&nbsp;&middot;&nbsp;'+(inv.projectName||'—')+'&nbsp;&middot;&nbsp;<span style="color:#999">'+invPeriod+'</span></div>'
+    if (allDates.length > 0 && daily) {
+      const dateHeaders = allDates.map(d=>{const dt=new Date(d+'T12:00:00');return '<th style="text-align:center;font-size:9px;padding:5px 3px;min-width:22px;color:#999;border-bottom:2px solid #eee;white-space:nowrap">'+DA[dt.getDay()]+'<br>'+(dt.getMonth()+1)+'/'+dt.getDate()+'</th>'}).join('')
+      const dayCells = allDates.map(d=>{const h=ph(daily[d]||'');return '<td style="text-align:center;padding:7px 4px;font-size:12px;color:'+(h>0?'#111':'#ccc')+'">'+(h>0?(h%1===0?String(h):h.toFixed(1)):'—')+'</td>'}).join('')
+      return label+'<table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:20px"><thead><tr>'+dateHeaders+'<th style="text-align:right;font-size:9px;padding:5px 6px;color:#999;border-bottom:2px solid #eee">HOURS</th><th style="text-align:right;font-size:9px;padding:5px 6px;color:#999;border-bottom:2px solid #eee">RATE</th><th style="text-align:right;font-size:9px;padding:5px 6px;color:#999;border-bottom:2px solid #eee">EARNED</th></tr></thead><tbody><tr>'+dayCells+'<td style="text-align:right;font-weight:700;padding:8px 6px">'+hrs.toFixed(1)+'h</td><td style="text-align:right;color:#999;padding:8px 6px">'+(payRate>0?'$'+payRate+'/hr':'—')+'</td><td style="text-align:right;font-weight:700;color:#f5b533;padding:8px 6px">'+(earned>0?'$'+earned.toFixed(2):'—')+'</td></tr></tbody></table>'
+    } else {
+      return label+'<table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:20px"><thead><tr><th style="font-size:9px;padding:5px 6px;color:#999;border-bottom:2px solid #eee">HOURS</th><th style="text-align:right;font-size:9px;padding:5px 6px;color:#999;border-bottom:2px solid #eee">RATE</th><th style="text-align:right;font-size:9px;padding:5px 6px;color:#999;border-bottom:2px solid #eee">EARNED</th></tr></thead><tbody><tr><td style="font-weight:700;padding:8px 6px">'+hrs.toFixed(1)+'h</td><td style="text-align:right;color:#999;padding:8px 6px">'+(payRate>0?'$'+payRate+'/hr':'—')+'</td><td style="text-align:right;font-weight:700;color:#f5b533;padding:8px 6px">'+(earned>0?'$'+earned.toFixed(2):'—')+'</td></tr></tbody></table>'
+    }
+  }).join('<hr style="border:none;border-top:1px solid #eee;margin:0 0 16px">')
+
+  const period   = dateFrom && dateTo ? `${dateFrom} – ${dateTo}` : dateFrom || dateTo || 'All time'
+  return `<!DOCTYPE html><html><head><title>Statement — ${emp.name}</title><style>@page{size:Letter;margin:.5in}body{font-family:Arial,sans-serif;width:7.5in;min-height:10in;margin:0 auto;color:#111}.header{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:28px;border-bottom:2px solid #f5b533;padding-bottom:16px}.logo{height:48px}h2{margin:0;font-size:22px;color:#f5b533}.meta{font-size:12px;color:#999;margin-top:4px}.kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:24px}.kpi{background:#f9f9f9;border-radius:8px;padding:14px;text-align:center}.kpi-v{font-size:20px;font-weight:800;color:#111}.kpi-l{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:#999;margin-top:4px}table{width:100%;border-collapse:collapse;font-size:12px}th{text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:#999;padding:8px 8px;border-bottom:2px solid #eee}td{padding:8px;border-bottom:1px solid #eee}.footer{margin-top:32px;font-size:11px;color:#999;border-top:1px solid #eee;padding-top:12px;text-align:center}@media print{body{margin:0 auto}}</style></head><body><div class="header"><img src="${window.location.origin}/yva-logo.png" class="logo" onerror="this.style.display='none'" /><div style="text-align:right"><h2>EARNINGS STATEMENT</h2><div class="meta">${emp.name}${emp.employeeNumber?` · ${emp.employeeNumber}`:''}</div><div class="meta">Period: ${period}</div><div class="meta">Generated: ${new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})}</div></div></div><div class="kpis"><div class="kpi"><div class="kpi-v">${empInvoices.length}</div><div class="kpi-l">Invoices</div></div><div class="kpi"><div class="kpi-v">${totalHours.toFixed(1)}h</div><div class="kpi-l">Total Hours</div></div><div class="kpi"><div class="kpi-v">${payRate>0?'$'+payRate+'/hr':'—'}</div><div class="kpi-l">Pay Rate</div></div><div class="kpi"><div class="kpi-v">${payRate>0?'$'+totalUSD.toFixed(2):'—'}</div><div class="kpi-l">Total Earned (USD)</div></div>${totalDOP>0?`<div class="kpi"><div class="kpi-v">RD$${totalDOP.toLocaleString('en-US',{maximumFractionDigits:0})}</div><div class="kpi-l">Total Earned (DOP @ ${dopRate})</div></div>`:''}</div>${sections?sections+'<div style="text-align:right;font-weight:800;font-size:13px;padding:10px 0;border-top:2px solid #111;margin-top:4px">Total &nbsp;&nbsp; '+totalHours.toFixed(1)+'h &nbsp;&nbsp; '+(payRate>0?'$'+totalUSD.toFixed(2):'—')+'</div>':'<p style="color:#999;text-align:center;padding:24px">No invoice data for this period.</p>'}<div class="footer">YVA Staffing · Bilingual Virtual Professionals · yvastaffing.net</div></body></html>`
 }
 
 async function emailStatement(emp: Employee, empInvoices: Invoice[], dateFrom: string, dateTo: string) {
@@ -101,53 +165,18 @@ async function emailStatement(emp: Employee, empInvoices: Invoice[], dateFrom: s
       `  Invoices: ${empInvoices.length}\n\n` +
       `Please reach out if you have any questions.\n\n${settings.emailSignature || companyName}`
   }
-  sendEmail(emp.email || '', subject, bodyText)
+  const attachment = await htmlToPdfAttachment(
+    `${(emp.name || 'employee').replace(/\s+/g, '-').toLowerCase()}-statement.pdf`,
+    buildPayslipHTML(emp, empInvoices, dateFrom, dateTo, settings),
+  )
+  return sendEmail(emp.email || '', subject, bodyText, { attachments: [attachment] })
 }
 
 async function printPayslip(emp: Employee, empInvoices: Invoice[], dateFrom: string, dateTo: string) {
   const settings = await loadSettings()
-  const payRate  = Number(emp.payRate) || 0
-  const dopRate  = settings.usdToDop || 0
-  const totalHours = empInvoices.reduce((s, inv) =>
-    s + (inv.items||[]).filter(it=>it.employeeName?.toLowerCase()===emp.name.toLowerCase())
-      .reduce((h,it)=>h+(Number(it.hoursTotal)||0),0), 0)
-  const totalUSD = totalHours * payRate
-  const totalDOP = dopRate > 0 ? totalUSD * dopRate : 0
-  const period = dateFrom && dateTo ? `${dateFrom} – ${dateTo}` : dateFrom || dateTo || 'All time'
-  function ph(v: string): number {
-    if (!v) return 0; const s = v.trim().replace(',','.')
-    if (s.includes(':')) { const [h,m]=s.split(':'); return (parseInt(h)||0)+(parseInt(m)||0)/60 }
-    return parseFloat(s)||0
-  }
-  const DA = ['Su','Mo','Tu','We','Th','Fr','Sa']
-  const sections = empInvoices.map(inv => {
-    const items = (inv.items||[]).filter(it=>it.employeeName?.toLowerCase()===emp.name.toLowerCase())
-    const hrs = items.reduce((h,it)=>h+(Number(it.hoursTotal)||0),0)
-    const earned = payRate > 0 ? hrs * payRate : 0
-    const period2 = inv.billingStart ? inv.billingStart+(inv.billingEnd?' – '+inv.billingEnd:'') : (inv.date||'—')
-    const daily = items[0]?.daily
-    let allDates: string[] = []
-    if (daily) {
-      if (inv.billingStart && inv.billingEnd) {
-        const cur = new Date(inv.billingStart+'T12:00:00')
-        const end = new Date(inv.billingEnd+'T12:00:00')
-        while (cur <= end) { allDates.push(cur.toISOString().slice(0,10)); cur.setDate(cur.getDate()+1) }
-      } else {
-        allDates = Object.keys(daily).filter(d=>ph(daily[d])>0).sort()
-      }
-    }
-    const label = '<div style="font-size:11px;margin-bottom:6px"><strong style="font-size:13px">'+inv.number+'</strong>&nbsp;&middot;&nbsp;'+(inv.projectName||'—')+'&nbsp;&middot;&nbsp;<span style="color:#999">'+period2+'</span></div>'
-    if (allDates.length > 0 && daily) {
-      const dateHeaders = allDates.map(d=>{const dt=new Date(d+'T12:00:00');return '<th style="text-align:center;font-size:9px;padding:5px 3px;min-width:22px;color:#999;border-bottom:2px solid #eee;white-space:nowrap">'+DA[dt.getDay()]+'<br>'+(dt.getMonth()+1)+'/'+dt.getDate()+'</th>'}).join('')
-      const dayCells = allDates.map(d=>{const h=ph(daily[d]||'');return '<td style="text-align:center;padding:7px 4px;font-size:12px;color:'+(h>0?'#111':'#ccc')+'">'+(h>0?(h%1===0?String(h):h.toFixed(1)):'—')+'</td>'}).join('')
-      return label+'<table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:20px"><thead><tr>'+dateHeaders+'<th style="text-align:right;font-size:9px;padding:5px 6px;color:#999;border-bottom:2px solid #eee">HOURS</th><th style="text-align:right;font-size:9px;padding:5px 6px;color:#999;border-bottom:2px solid #eee">RATE</th><th style="text-align:right;font-size:9px;padding:5px 6px;color:#999;border-bottom:2px solid #eee">EARNED</th></tr></thead><tbody><tr>'+dayCells+'<td style="text-align:right;font-weight:700;padding:8px 6px">'+hrs.toFixed(1)+'h</td><td style="text-align:right;color:#999;padding:8px 6px">'+(payRate>0?'$'+payRate+'/hr':'—')+'</td><td style="text-align:right;font-weight:700;color:#f5b533;padding:8px 6px">'+(earned>0?'$'+earned.toFixed(2):'—')+'</td></tr></tbody></table>'
-    } else {
-      return label+'<table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:20px"><thead><tr><th style="font-size:9px;padding:5px 6px;color:#999;border-bottom:2px solid #eee">HOURS</th><th style="text-align:right;font-size:9px;padding:5px 6px;color:#999;border-bottom:2px solid #eee">RATE</th><th style="text-align:right;font-size:9px;padding:5px 6px;color:#999;border-bottom:2px solid #eee">EARNED</th></tr></thead><tbody><tr><td style="font-weight:700;padding:8px 6px">'+hrs.toFixed(1)+'h</td><td style="text-align:right;color:#999;padding:8px 6px">'+(payRate>0?'$'+payRate+'/hr':'—')+'</td><td style="text-align:right;font-weight:700;color:#f5b533;padding:8px 6px">'+(earned>0?'$'+earned.toFixed(2):'—')+'</td></tr></tbody></table>'
-    }
-  }).join('<hr style="border:none;border-top:1px solid #eee;margin:0 0 16px">')
   const win = window.open('', '_blank', 'width=800,height=600')
   if (!win) return
-  win.document.write(`<!DOCTYPE html><html><head><title>Statement — ${emp.name}</title><style>body{font-family:Arial,sans-serif;max-width:700px;margin:40px auto;color:#111}.header{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:28px;border-bottom:2px solid #f5b533;padding-bottom:16px}.logo{height:48px}h2{margin:0;font-size:22px;color:#f5b533}.meta{font-size:12px;color:#999;margin-top:4px}.kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:24px}.kpi{background:#f9f9f9;border-radius:8px;padding:14px;text-align:center}.kpi-v{font-size:20px;font-weight:800;color:#111}.kpi-l{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:#999;margin-top:4px}table{width:100%;border-collapse:collapse;font-size:12px}th{text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:#999;padding:8px 8px;border-bottom:2px solid #eee}td{padding:8px;border-bottom:1px solid #eee}.footer{margin-top:32px;font-size:11px;color:#999;border-top:1px solid #eee;padding-top:12px;text-align:center}@media print{body{margin:16px}}</style></head><body><div class="header"><img src="${window.location.origin}/yva-logo.png" class="logo" onerror="this.style.display='none'" /><div style="text-align:right"><h2>EARNINGS STATEMENT</h2><div class="meta">${emp.name}${emp.employeeNumber?` · ${emp.employeeNumber}`:''}</div><div class="meta">Period: ${period}</div><div class="meta">Generated: ${new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})}</div></div></div><div class="kpis"><div class="kpi"><div class="kpi-v">${empInvoices.length}</div><div class="kpi-l">Invoices</div></div><div class="kpi"><div class="kpi-v">${totalHours.toFixed(1)}h</div><div class="kpi-l">Total Hours</div></div><div class="kpi"><div class="kpi-v">${payRate>0?'$'+payRate+'/hr':'—'}</div><div class="kpi-l">Pay Rate</div></div><div class="kpi"><div class="kpi-v">${payRate>0?'$'+totalUSD.toFixed(2):'—'}</div><div class="kpi-l">Total Earned (USD)</div></div>${totalDOP>0?`<div class="kpi"><div class="kpi-v">RD$${totalDOP.toLocaleString('en-US',{maximumFractionDigits:0})}</div><div class="kpi-l">Total Earned (DOP @ ${dopRate})</div></div>`:''}</div>${sections?sections+'<div style="text-align:right;font-weight:800;font-size:13px;padding:10px 0;border-top:2px solid #111;margin-top:4px">Total &nbsp;&nbsp; '+totalHours.toFixed(1)+'h &nbsp;&nbsp; '+(payRate>0?'$'+totalUSD.toFixed(2):'—')+'</div>':'<p style="color:#999;text-align:center;padding:24px">No invoice data for this period.</p>'}<div class="footer">YVA Staffing · Bilingual Virtual Professionals · yvastaffing.net</div><script>window.onload=function(){window.print()}</script></body></html>`)
+  win.document.write(buildPayslipHTML(emp, empInvoices, dateFrom, dateTo, settings).replace('</body></html>', '<script>window.onload=function(){window.print()}</script></body></html>'))
   win.document.close()
 }
 
@@ -204,9 +233,7 @@ export default function EmployeeProfilePage() {
   // Statements state
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo,   setDateTo]   = useState('')
-  const [payModal, setPayModal] = useState<{ inv: Invoice } | null>(null)
-  const [payDate,  setPayDate]  = useState('')
-  const [payNotes, setPayNotes] = useState('')
+  const [toast, setToast] = useState<string | null>(null)
 
   if (!emp) {
     return (
@@ -228,37 +255,59 @@ export default function EmployeeProfilePage() {
     s + (inv.items||[]).filter(it => it.employeeName?.toLowerCase() === empNN.name.toLowerCase())
       .reduce((h, it) => h + (Number(it.hoursTotal)||0), 0), 0)
   const totalEarned  = payRate > 0 ? totalHours * payRate : 0
-  const paidCount    = empInvoices.filter(inv => inv.employeePayments?.[empNN.name]?.status === 'paid').length
+  const paidCount    = empInvoices.filter(inv => getEmployeePaymentRecord(inv, empNN)?.status === 'paid').length
   const pendingCount = empInvoices.length - paidCount
   const totalPaid    = empInvoices.reduce((s, inv) => {
-    if (inv.employeePayments?.[empNN.name]?.status !== 'paid') return s
+    if (getEmployeePaymentRecord(inv, empNN)?.status !== 'paid') return s
     const hrs = (inv.items||[]).filter(it => it.employeeName?.toLowerCase() === empNN.name.toLowerCase())
       .reduce((h, it) => h + (Number(it.hoursTotal)||0), 0)
     return s + hrs * payRate
   }, 0)
 
+  function showToast(msg: string) {
+    setToast(msg)
+    window.setTimeout(() => setToast(null), 3500)
+  }
+
+  function describeEmailResult(result: SendEmailResult, recipient: string) {
+    if (result.mode === 'gmail') return `Statement sent to ${recipient} with PDF attached`
+    const reason = result.fallbackReason ? ` Gmail fallback: ${result.fallbackReason}.` : ''
+    return `Statement draft opened for ${recipient}. PDF downloaded to attach manually.${reason}`
+  }
+
   async function markPaid(inv: Invoice) {
     const hrs = (inv.items||[]).filter(it => it.employeeName?.toLowerCase() === empNN.name.toLowerCase())
       .reduce((h, it) => h + (Number(it.hoursTotal)||0), 0)
+    const existingPayments = { ...(inv.employeePayments || {}) }
+    if (empNN.name in existingPayments && empNN.id !== empNN.name) delete existingPayments[empNN.name]
     const updated = invoices.map(i => i.id === inv.id ? {
       ...i,
       employeePayments: {
-        ...(i.employeePayments || {}),
-        [empNN.name]: { status: 'paid' as const, paidDate: payDate || new Date().toISOString().slice(0,10), amount: hrs * payRate, notes: payNotes || undefined }
+        ...(i.id === inv.id ? existingPayments : i.employeePayments || {}),
+        [empNN.id]: { status: 'paid' as const, paidDate: new Date().toISOString().slice(0,10), amount: hrs * payRate }
       }
     } : i)
     setInvoices(updated)
     await saveInvoices(updated)
-    setPayModal(null); setPayDate(''); setPayNotes('')
+    showToast(`Marked ${inv.number} as paid`)
   }
 
   async function markPending(inv: Invoice) {
+    const existingPayments = { ...(inv.employeePayments || {}) }
+    if (empNN.name in existingPayments && empNN.id !== empNN.name) delete existingPayments[empNN.name]
     const updated = invoices.map(i => i.id === inv.id ? {
       ...i,
-      employeePayments: { ...(i.employeePayments || {}), [empNN.name]: { status: 'pending' as const } }
+      employeePayments: { ...(i.id === inv.id ? existingPayments : i.employeePayments || {}), [empNN.id]: { status: 'pending' as const } }
     } : i)
     setInvoices(updated)
     await saveInvoices(updated)
+    showToast(`Marked ${inv.number} as pending`)
+  }
+
+  async function handleStatementEmail(targetInvoices: Invoice[]) {
+    if (!empNN.email || targetInvoices.length === 0) return
+    const result = await emailStatement(empNN, targetInvoices, dateFrom, dateTo)
+    showToast(describeEmailResult(result, empNN.email))
   }
 
   const assignedProjects = projects.filter(p => (p.employeeIds || []).includes(empNN.id))
@@ -604,7 +653,7 @@ export default function EmployeeProfilePage() {
 
           {/* Action buttons */}
           <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
-            <button className="btn-ghost btn-sm" onClick={() => emailStatement(emp, empInvoices, dateFrom, dateTo)}
+            <button className="btn-ghost btn-sm" onClick={() => { void handleStatementEmail(empInvoices) }}
               disabled={empInvoices.length === 0 || !empNN.email}
               title={!empNN.email ? 'No email on file' : ''}>
               ✉ Email Statement
@@ -638,7 +687,7 @@ export default function EmployeeProfilePage() {
                     allDates = Object.keys(daily).filter(d => parseFloat(daily[d]) > 0).sort()
                   }
                 }
-                const payment = inv.employeePayments?.[empNN.name]
+                const payment = getEmployeePaymentRecord(inv, empNN)
                 const isPaid  = payment?.status === 'paid'
                 return (
                   <div key={inv.id} style={{ marginBottom: 10, border: '1px solid var(--border)', borderRadius: 6, overflow: 'hidden' }}>
@@ -652,15 +701,19 @@ export default function EmployeeProfilePage() {
                         {isPaid ? (
                           <>
                             <span style={{ fontSize: 11, color: '#22c55e', fontWeight: 600 }}>
-                              ✓ Paid {payment?.paidDate ? new Date(payment.paidDate + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : ''}
+                                ✓ Paid {payment?.paidDate ? new Date(payment.paidDate + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : ''}
                             </span>
+                            <button className="btn-ghost btn-sm" style={{ fontSize: 10, padding: '2px 8px' }} onClick={() => { void handleStatementEmail([inv]) }}>Email</button>
                             <button className="btn-ghost btn-sm" style={{ fontSize: 10, padding: '2px 8px' }} onClick={() => markPending(inv)}>Undo</button>
                           </>
                         ) : (
-                          <button className="btn-ghost btn-sm" style={{ fontSize: 11, padding: '3px 10px', borderColor: 'var(--gold)', color: 'var(--gold)' }}
-                            onClick={() => { setPayModal({ inv }); setPayDate(new Date().toISOString().slice(0,10)); setPayNotes('') }}>
-                            Mark as Paid
-                          </button>
+                          <>
+                            <button className="btn-ghost btn-sm" style={{ fontSize: 11, padding: '3px 10px', borderColor: 'var(--gold)', color: 'var(--gold)' }}
+                              onClick={() => { void markPaid(inv) }}>
+                              Mark as Paid
+                            </button>
+                            <button className="btn-ghost btn-sm" style={{ fontSize: 10, padding: '2px 8px' }} onClick={() => { void handleStatementEmail([inv]) }}>Email</button>
+                          </>
                         )}
                       </span>
                     </div>
@@ -710,28 +763,17 @@ export default function EmployeeProfilePage() {
       </div>
 
       {/* Mark as Paid modal */}
-      {payModal && (
-        <div className="modal-overlay" onClick={() => setPayModal(null)}>
-          <div className="modal-dialog" style={{ maxWidth: 360 }} onClick={e => e.stopPropagation()}>
-            <div className="modal-header">
-              <div className="modal-title">Mark as Paid — {payModal.inv.number}</div>
-              <button className="modal-close btn-icon" onClick={() => setPayModal(null)}>✕</button>
-            </div>
-            <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-              <div className="form-group">
-                <label className="form-label">Payment Date</label>
-                <input className="form-input" type="date" value={payDate} onChange={e => setPayDate(e.target.value)} />
-              </div>
-              <div className="form-group">
-                <label className="form-label">Notes (optional)</label>
-                <input className="form-input" type="text" placeholder="e.g. Bank transfer, Ref #1234" value={payNotes} onChange={e => setPayNotes(e.target.value)} />
-              </div>
-            </div>
-            <div className="modal-footer">
-              <button className="btn-ghost" onClick={() => setPayModal(null)}>Cancel</button>
-              <button className="btn-primary" onClick={() => markPaid(payModal.inv)}>Confirm Payment</button>
-            </div>
-          </div>
+      {toast && (
+        <div style={{
+          position: 'fixed', bottom: 28, right: 28, zIndex: 9999,
+          background: '#1e293b', border: '1px solid var(--border)',
+          borderLeft: '3px solid #4ade80',
+          color: 'var(--text)', fontSize: 13, fontWeight: 500,
+          padding: '10px 16px', borderRadius: 8,
+          boxShadow: '0 4px 24px rgba(0,0,0,.4)',
+          maxWidth: 360,
+        }}>
+          ✓ {toast}
         </div>
       )}
 

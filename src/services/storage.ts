@@ -4,6 +4,12 @@ import type {
   Employee, Client, Expense, Invoice, InvoiceTemplate, Project, Task,
 } from '../data/types'
 
+function formatSupabaseError(action: string, table: string, error: { message?: string; details?: string; hint?: string; code?: string }): Error {
+  const parts = [error.message, error.details, error.hint].filter(Boolean)
+  const suffix = error.code ? ` (code ${error.code})` : ''
+  return new Error(`${action} ${table} failed${suffix}: ${parts.join(' | ') || 'Unknown Supabase error'}`)
+}
+
 // ─── Generic helpers ──────────────────────────────────────────────────────────
 
 /** snake_case DB row → camelCase TS object (top-level keys only; JSONB values untouched) */
@@ -28,7 +34,7 @@ function toSnake(obj: Record<string, unknown>): Record<string, unknown> {
 
 async function fetchAll<T>(table: string): Promise<T[]> {
   const { data, error } = await supabase.from(table).select('*').order('created_at')
-  if (error) { console.error(`fetchAll(${table})`, error); return [] }
+  if (error) throw formatSupabaseError('Load from', table, error)
   return (data || []).map(row => toCamel<T>(row as Record<string, unknown>))
 }
 
@@ -38,14 +44,16 @@ async function syncAll<T extends { id: string }>(
   items: T[]
 ): Promise<void> {
   // Fetch existing IDs
-  const { data: existing } = await supabase.from(table).select('id')
+  const { data: existing, error: existingError } = await supabase.from(table).select('id')
+  if (existingError) throw formatSupabaseError('Load existing rows from', table, existingError)
   const existingIds: string[] = (existing || []).map((r: { id: string }) => r.id)
   const newIds = new Set(items.map(i => i.id))
 
   // Delete removed rows
   const toDelete = existingIds.filter(id => !newIds.has(id))
   if (toDelete.length > 0) {
-    await supabase.from(table).delete().in('id', toDelete)
+    const { error } = await supabase.from(table).delete().in('id', toDelete)
+    if (error) throw formatSupabaseError('Delete from', table, error)
   }
 
   // Upsert current rows
@@ -60,7 +68,7 @@ async function syncAll<T extends { id: string }>(
       return row
     })
     const { error } = await supabase.from(table).upsert(rows)
-    if (error) console.error(`syncAll(${table})`, error)
+    if (error) throw formatSupabaseError('Save to', table, error)
   }
 }
 
@@ -98,11 +106,16 @@ export async function loadInvoices(): Promise<Invoice[]> {
     .from('invoices')
     .select('*')
     .order('created_at', { ascending: false })
-  if (error) { console.error('loadInvoices', error); return [] }
+  if (error) throw formatSupabaseError('Load from', 'invoices', error)
   return (data || []).map(row => toCamel<Invoice>(row as Record<string, unknown>))
 }
 export async function saveInvoices(invoices: Invoice[]): Promise<void> {
-  invalidateSnapshotCache(); return syncAll('invoices', invoices)
+  invalidateSnapshotCache()
+  const normalized = invoices.map(invoice => ({
+    ...invoice,
+    employeePayments: invoice.employeePayments ?? {},
+  }))
+  return syncAll('invoices', normalized)
 }
 
 // ─── Candidates ───────────────────────────────────────────────────────────────
@@ -138,11 +151,45 @@ export async function loadGeneralExpenses(): Promise<Expense[]> {
     .select('*')
     .is('project_id', null)
     .order('created_at')
-  if (error) { console.error('loadGeneralExpenses', error); return [] }
+  if (error) throw formatSupabaseError('Load from', 'expenses', error)
   return (data || []).map(row => toCamel<Expense>(row as Record<string, unknown>))
 }
 export async function saveGeneralExpenses(expenses: Expense[]): Promise<void> {
-  return syncAll('expenses', expenses)
+  const normalized = expenses.map(expense => ({
+    ...expense,
+    projectId: '',
+  }))
+
+  const { data: existing, error: existingError } = await supabase
+    .from('expenses')
+    .select('id')
+    .is('project_id', null)
+
+  if (existingError) throw formatSupabaseError('Load existing rows from', 'expenses', existingError)
+
+  const existingIds: string[] = (existing || []).map((r: { id: string }) => r.id)
+  const nextIds = new Set(normalized.map(expense => expense.id))
+  const toDelete = existingIds.filter(id => !nextIds.has(id))
+
+  if (toDelete.length > 0) {
+    const { error } = await supabase.from('expenses').delete().in('id', toDelete)
+    if (error) throw formatSupabaseError('Delete from', 'expenses', error)
+  }
+
+  if (normalized.length === 0) return
+
+  const rows = normalized.map(expense => {
+    const row = toSnake(expense as unknown as Record<string, unknown>)
+    delete row['created_at']
+    row['project_id'] = null
+    for (const key of Object.keys(row)) {
+      if (row[key] === '') row[key] = null
+    }
+    return row
+  })
+
+  const { error } = await supabase.from('expenses').upsert(rows)
+  if (error) throw formatSupabaseError('Save to', 'expenses', error)
 }
 
 // ─── Activity Log ─────────────────────────────────────────────────────────────
@@ -166,19 +213,23 @@ export async function saveInvoiceTemplates(templates: InvoiceTemplate[]): Promis
 // ─── Counters ─────────────────────────────────────────────────────────────────
 
 export async function loadInvoiceCounter(): Promise<number> {
-  const { data } = await supabase.from('counters').select('value').eq('key', 'invoice').single()
+  const { data, error } = await supabase.from('counters').select('value').eq('key', 'invoice').single()
+  if (error) throw formatSupabaseError('Load from', 'counters', error)
   return (data as { value: number } | null)?.value ?? 1
 }
 export async function saveInvoiceCounter(n: number): Promise<void> {
-  await supabase.from('counters').update({ value: n }).eq('key', 'invoice')
+  const { error } = await supabase.from('counters').update({ value: n }).eq('key', 'invoice')
+  if (error) throw formatSupabaseError('Save to', 'counters', error)
 }
 
 export async function loadEmployeeCounter(): Promise<number> {
-  const { data } = await supabase.from('counters').select('value').eq('key', 'employee').single()
+  const { data, error } = await supabase.from('counters').select('value').eq('key', 'employee').single()
+  if (error) throw formatSupabaseError('Load from', 'counters', error)
   return (data as { value: number } | null)?.value ?? 1
 }
 export async function saveEmployeeCounter(n: number): Promise<void> {
-  await supabase.from('counters').update({ value: n }).eq('key', 'employee')
+  const { error } = await supabase.from('counters').update({ value: n }).eq('key', 'employee')
+  if (error) throw formatSupabaseError('Save to', 'counters', error)
 }
 
 // ─── Settings ─────────────────────────────────────────────────────────────────
@@ -192,7 +243,8 @@ const DEFAULT_SETTINGS: AppSettings = {
 
 export async function loadSettings(): Promise<AppSettings> {
   const { data, error } = await supabase.from('settings').select('*').eq('id', 1).single()
-  if (error || !data) return DEFAULT_SETTINGS
+  if (error) throw formatSupabaseError('Load from', 'settings', error)
+  if (!data) return DEFAULT_SETTINGS
   const row = data as Record<string, unknown>
   return {
     usdToDop:               (row.usd_to_dop as number) ?? 0,
@@ -208,11 +260,6 @@ export async function loadSettings(): Promise<AppSettings> {
     statementEmailTemplate: (row.statement_email_template as string | undefined),
     reminderEmailTemplate:  (row.reminder_email_template as string | undefined),
     gmailClientId:          (row.gmail_client_id as string | undefined),
-    gmailClientSecret:      (row.gmail_client_secret as string | undefined),
-    gmailAccessToken:       (row.gmail_access_token as string | undefined),
-    gmailRefreshToken:      (row.gmail_refresh_token as string | undefined),
-    gmailTokenExpiry:       row.gmail_token_expiry != null ? (row.gmail_token_expiry as number) : undefined,
-    gmailEmail:             (row.gmail_email as string | undefined),
   }
 }
 
@@ -231,13 +278,8 @@ export async function saveSettings(s: AppSettings): Promise<void> {
     statement_email_template: s.statementEmailTemplate ?? null,
     reminder_email_template:  s.reminderEmailTemplate ?? null,
     gmail_client_id:          s.gmailClientId ?? null,
-    gmail_client_secret:      s.gmailClientSecret ?? null,
-    gmail_access_token:       s.gmailAccessToken ?? null,
-    gmail_refresh_token:      s.gmailRefreshToken ?? null,
-    gmail_token_expiry:       s.gmailTokenExpiry ?? null,
-    gmail_email:              s.gmailEmail ?? null,
   }).eq('id', 1)
-  if (error) console.error('saveSettings', error)
+  if (error) throw formatSupabaseError('Save to', 'settings', error)
 }
 
 // ─── Snapshot cache ───────────────────────────────────────────────────────────
@@ -273,10 +315,12 @@ export function loadSnapshotFromLocalStorage(): DataSnapshot {
 export type UserRoleRow = { user_id: string; email: string; role: string }
 
 export async function loadUserRoles(): Promise<UserRoleRow[]> {
-  const { data } = await supabase.from('user_roles').select('*').order('email')
+  const { data, error } = await supabase.from('user_roles').select('*').order('email')
+  if (error) throw formatSupabaseError('Load from', 'user_roles', error)
   return (data || []) as UserRoleRow[]
 }
 
 export async function upsertUserRole(userId: string, email: string, role: string): Promise<void> {
-  await supabase.from('user_roles').update({ role }).eq('user_id', userId)
+  const { error } = await supabase.from('user_roles').update({ role }).eq('user_id', userId)
+  if (error) throw formatSupabaseError('Save to', 'user_roles', error)
 }

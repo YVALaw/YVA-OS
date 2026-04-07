@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { Invoice } from '../data/types'
 
-type Payload = { inv: Invoice; dopRate?: number }
+type Payload = { inv: Invoice }
 
 function decodePayload(hash: string): Payload | null {
   try {
@@ -36,13 +36,12 @@ export default function PortalPage() {
     )
   }
 
-  const { inv, dopRate } = payload
+  const { inv } = payload
   const total = Number(inv.subtotal) || 0
-  const dop = dopRate && dopRate > 0 ? (total * dopRate).toLocaleString('en-US', { maximumFractionDigits: 0 }) : null
 
   return (
     <div style={{ minHeight: '100vh', background: '#f8fafc', fontFamily: 'Arial, Helvetica, sans-serif', color: '#111', padding: '40px 20px' }}>
-      <div style={{ maxWidth: 760, margin: '0 auto', background: '#fff', borderRadius: 12, boxShadow: '0 4px 32px rgba(0,0,0,.10)', padding: '48px 52px' }}>
+      <div style={{ width: '8.5in', minHeight: '11in', maxWidth: '100%', margin: '0 auto', background: '#fff', borderRadius: 12, boxShadow: '0 4px 32px rgba(0,0,0,.10)', padding: '0.65in 0.72in' }}>
 
         {/* Header */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 40 }}>
@@ -92,40 +91,34 @@ export default function PortalPage() {
             <thead>
               <tr style={{ borderBottom: '2px solid #e5e7eb' }}>
                 {['Description', 'Hours', 'Rate', 'Amount'].map((h, i) => (
-                  <th key={h} style={{ padding: '8px 10px', fontSize: 11, textTransform: 'uppercase', letterSpacing: '.06em', color: '#888', fontWeight: 700, textAlign: i === 0 ? 'left' : 'right' }}>{h}</th>
+                  <th key={h} style={{ padding: '10px 12px', fontSize: 11, textTransform: 'uppercase', letterSpacing: '.06em', color: '#888', fontWeight: 700, textAlign: i === 0 ? 'left' : 'right' }}>{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
               {(inv.items ?? []).map((it, i) => (
                 <tr key={i} style={{ borderBottom: '1px solid #f1f5f9' }}>
-                  <td style={{ padding: '12px 10px', fontSize: 14 }}>
+                  <td style={{ padding: '12px', fontSize: 14 }}>
                     <strong>{it.employeeName}</strong>
                     {it.position && <span style={{ color: '#888', fontWeight: 400 }}> — {it.position}</span>}
                   </td>
-                  <td style={{ padding: '12px 10px', textAlign: 'right', fontSize: 14, color: '#555' }}>{it.hoursTotal}h</td>
-                  <td style={{ padding: '12px 10px', textAlign: 'right', fontSize: 14, color: '#555' }}>${it.rate}/hr</td>
-                  <td style={{ padding: '12px 10px', textAlign: 'right', fontSize: 14, fontWeight: 700 }}>{fmtMoney(it.hoursTotal * it.rate)}</td>
+                  <td style={{ padding: '12px', textAlign: 'right', fontSize: 14, color: '#555' }}>{it.hoursTotal}h</td>
+                  <td style={{ padding: '12px', textAlign: 'right', fontSize: 14, color: '#555' }}>${it.rate}/hr</td>
+                  <td style={{ padding: '12px', textAlign: 'right', fontSize: 14, fontWeight: 700 }}>{fmtMoney(it.hoursTotal * it.rate)}</td>
                 </tr>
               ))}
             </tbody>
             <tfoot>
               <tr style={{ borderTop: '2px solid #111' }}>
-                <td colSpan={3} style={{ padding: '14px 10px', fontWeight: 800, fontSize: 15 }}>Total Due</td>
-                <td style={{ padding: '14px 10px', textAlign: 'right', fontWeight: 900, fontSize: 20, color: '#f5b533' }}>{fmtMoney(total)}</td>
+                <td colSpan={3} style={{ padding: '14px 12px', fontWeight: 800, fontSize: 15 }}>Total Due</td>
+                <td style={{ padding: '14px 12px', textAlign: 'right', fontWeight: 900, fontSize: 20, color: '#f5b533' }}>{fmtMoney(total)}</td>
               </tr>
-              {dop && (
-                <tr>
-                  <td colSpan={4} style={{ textAlign: 'right', fontSize: 12, color: '#aaa', paddingRight: 10, paddingBottom: 6 }}>RD${dop}</td>
-                </tr>
-              )}
             </tfoot>
           </table>
         ) : (
           <div style={{ textAlign: 'center', padding: '32px 0', borderTop: '2px solid #111', borderBottom: '1px solid #e5e7eb', marginBottom: 24 }}>
             <div style={{ fontSize: 13, color: '#888', marginBottom: 8 }}>Amount Due</div>
             <div style={{ fontSize: 40, fontWeight: 900, color: '#f5b533' }}>{fmtMoney(total)}</div>
-            {dop && <div style={{ fontSize: 13, color: '#aaa', marginTop: 4 }}>RD${dop}</div>}
           </div>
         )}
 
@@ -142,6 +135,10 @@ export default function PortalPage() {
       </div>
 
       <style>{`
+        @page {
+          size: Letter;
+          margin: 0.5in;
+        }
         @media print {
           button { display: none !important; }
           body { background: #fff !important; padding: 0; }

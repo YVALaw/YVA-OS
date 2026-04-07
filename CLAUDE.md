@@ -3,6 +3,19 @@
 ## Project Location
 `C:\Users\cronu\Desktop\Invoice - Copy\yva-os-refactor\`
 
+## Repo Sync Status
+Compared against: `C:\Users\cronu\Desktop\YVA projects in git\YVA-OS\`
+Checked on: `2026-04-06`
+
+Current status:
+- [x] `src/` and `supabase/` are aligned with `YVA-OS`
+- [x] PDF/email attachment flow, employee statement payment flow, sidebar collapse behavior, Banco Popular settings flow, and invoice persistence messaging are now mirrored in both repos
+- [x] This repo remains the deployment/worktree path documented at the top of this file
+
+Remaining repo-local differences:
+- [ ] `CLAUDE.md` still needs to stay path-specific to this repo
+- [ ] Generated files such as `tsconfig.tsbuildinfo` may differ by local build state
+
 ## Tech Stack
 - React 18 + TypeScript + Vite
 - React Router v6
@@ -19,8 +32,7 @@
 | `clients` | Client[] |
 | `invoices` | Invoice[] |
 | `candidates` | Candidate[] |
-| `expenses` | Expense[] (per-project expenses) |
-| `general_expenses` | Expense[] (business-wide expenses) |
+| `expenses` | Expense[] (both per-project and general expenses; general expenses have no project id) |
 | `tasks` | Task[] (per-project kanban tasks) |
 | `activity_log` | ActivityLogEntry[] (per-client timeline notes) |
 | `invoice_templates` | InvoiceTemplate[] (saved builder templates) |
@@ -55,7 +67,7 @@ All data is scoped to the authenticated user via Supabase RLS.
 | `/candidates/:id` | CandidateProfilePage | Full profile: inline edit, attachments, onboarding checklist (when hired) |
 | `/projects` | ProjectsPage | Kanban + cards + employee assignment |
 | `/projects/:id` | ProjectProfilePage | Full profile: inline edit, task board, expenses, invoice history, team |
-| `/settings` | SettingsPage | Tabbed: Company, Email (templates), Integrations (Gmail), Currency, Notifications, Data (backup/restore/danger) |
+| `/settings` | SettingsPage | Tabbed: Company, Email (templates), Integrations (Gmail), Currency, Notifications, Data (backup/restore/danger), Team Access |
 | `/portal` | PortalPage | Read-only client-facing invoice view (outside Shell, no nav) |
 | `/oauth-callback` | OAuthCallbackPage | Handles Google OAuth2 redirect after Gmail authorization (outside Shell) |
 | `/login` | LoginPage | Email/password login + sign-up toggle + Remember Me |
@@ -113,6 +125,11 @@ All data is scoped to the authenticated user via Supabase RLS.
 - Date range filter (From/To) with quick Clear
 - Summary: total hours (h mm), total billed, total payroll cost
 - Per-invoice table with Project column
+- Statement invoice rows sort by invoice number descending (latest first)
+- Each invoice row has direct actions for Email and Mark as Paid / Undo
+- Mark as Paid saves immediately with today's date (no modal)
+- Paid state persists in `invoices.employee_payments` JSONB, keyed by employee id
+- Email actions show visual confirmation on successful send
 - "Totals by Project" breakdown section
 - Print PDF button in modal footer
 
@@ -159,7 +176,9 @@ Also shows: Employee Performance table, Revenue by Client/Project, All-Time Clie
 
 ## Currency Conversion
 - Settings page has USD→DOP exchange rate field
-- "Auto-fetch" button tries `allorigins.win` proxy → `lafise.com/blrd/` to extract Compra rate
+- "Auto-fetch" now targets Banco Popular's `BPDConsultaTasa` API product (`GET /consultaTasa`)
+- Currency tab includes configurable Banco Popular endpoint + subscription key fields for the fetch request
+- Subscription key is stored locally in the browser for the auto-fetch flow; the fetched rate itself is still stored in `settings`
 - Rate stored in `settings` table
 - Shown on invoice cards, PDFs, and portal as `RD$XXXXX`
 
@@ -180,6 +199,8 @@ Also shows: Employee Performance table, Revenue by Client/Project, All-Time Clie
 ## Gmail Integration
 - Service: `src/services/gmail.ts` — OAuth2 PKCE flow, token refresh, `sendGmailMessage()`, `sendEmail()` (universal)
 - `sendEmail(to, subject, body)` — uses Gmail API if connected, falls back to `mailto:` if not
+- Invoice emails, reminder emails, and employee statement emails attach a generated PDF when Gmail is connected
+- If Gmail is not connected, the app falls back to `mailto:` and downloads the matching PDF so it can be attached manually
 - **Per-user OAuth**: each logged-in user connects their own Gmail account independently
   - `gmailClientId` stored in shared `settings` table (one per org)
   - `gmailAccessToken`, `gmailRefreshToken`, `gmailTokenExpiry`, `gmailEmail` stored in **Supabase user metadata** (`supabase.auth.updateUser({ data: {...} })`)
@@ -187,12 +208,24 @@ Also shows: Employee Performance table, Revenue by Client/Project, All-Time Clie
 - **OAuth flow**: User enters Google OAuth Client ID in Settings → clicks "Connect Gmail" → PKCE redirect to Google → callback at `/oauth-callback` → tokens saved to user metadata
 - Token auto-refreshes on expiry using stored refresh token
 - Disconnect option in Settings clears all Gmail tokens from user metadata
-- **Setup**: Google Cloud Console → enable Gmail API → OAuth 2.0 Client ID (Web application) → add `{origin}/oauth-callback` as Authorized Redirect URI
+- **Setup**: Google Cloud Console → enable Gmail API → OAuth 2.0 Client ID (Web application) → add `{origin}/oauth-callback` as Authorized Redirect URI. The app uses PKCE and only requires the Client ID in Settings.
 - All email-sending functions (invoice email, payment reminder, statement email, client reminder) use `sendEmail()` and therefore support Gmail automatically
+
+## PDF / Print Output
+- Invoice PDFs and employee statement PDFs use letter page size
+- Client-facing invoices do **not** show DOP amounts
+- DOP remains visible on employee statements / payslips
+- Attached PDFs are generated to match the styled invoice/statement output rather than plain-text exports
+
+## Shell / Navigation
+- Desktop sidebar supports collapsed and expanded states
+- Collapse state is stored in `localStorage` (`yva_sidebar_collapsed`)
+- Sidebar collapse/expand is triggered from the logo/brand block instead of a separate topbar button
+- Mobile still uses a drawer with hamburger toggle and overlay
 
 ## Expense Tracking
 - Projects have an "Expenses" button → modal to log expenses per project (stored in `expenses` table)
-- **General/Business Expenses** stored in `general_expenses` table — org-wide costs not tied to a project
+- **General/Business Expenses** stored in the `expenses` table with no `projectId` — org-wide costs not tied to a project
 - Expense fields: description, amount, date, category
 - Project cards show: budget, billed, expenses totals with % used; red warning at 90%+
 - General expenses shown as "Business Expenses" KPI on dashboard, deducted from Net Earnings
@@ -270,7 +303,7 @@ Also shows: Employee Performance table, Revenue by Client/Project, All-Time Clie
 - [x] Expense tracking per project (log expenses, budget vs actual, category)
 - [x] Employee capacity view (toggle in EmployeesPage — projects + hours this month)
 - [x] Employee payslip PDF (print-formatted window from Statements modal)
-- [x] Employee statement email (mailto: from Statements modal)
+- [x] Employee statement email with Gmail attachment support + send confirmation
 - [x] Onboarding checklist (auto-opens when candidate moved to Hired stage)
 - [x] Weekly invoice reminder scheduler (day-of-week trigger, fires on app open)
 - [x] Full-page profile routes for Employees, Clients, Projects, Candidates (no more modals)
@@ -284,6 +317,7 @@ Also shows: Employee Performance table, Revenue by Client/Project, All-Time Clie
 - [x] Invoice page: project-grouped collapsible list view (replaced kanban — sections per project, table rows per invoice)
 - [x] Invoice auto-send on creation (status → `sent` + email via `sendEmail()`)
 - [x] Gmail OAuth2 PKCE integration (`src/services/gmail.ts`) — actual Gmail API send, mailto: fallback if not connected
+- [x] Email attachments for invoices and employee statements (styled PDF attached via Gmail; download fallback for mailto:)
 - [x] **Supabase migration** — all data moved from localStorage to Supabase PostgreSQL + Auth
 - [x] **Login page** — email/password auth with sign-up toggle and Remember Me checkbox
 - [x] **Invoice groups collapsed by default** — all project sections closed on load; unpaid count shown in header
@@ -294,11 +328,13 @@ Also shows: Employee Performance table, Revenue by Client/Project, All-Time Clie
 - [x] **Team Access settings tab** — visible and editable by CEO only
 - [x] **Login UX** — persists last email across logout; brute-force lockout (5 fails → 15-min cooldown); password strength meter on signup
 - [x] **Security headers** — `public/_headers` sets X-Frame-Options, CSP, HSTS, etc. for Netlify
-- [x] **Supabase RLS** — row-level security on all tables; settings/user_roles write-restricted to CEO; script at `supabase/rls.sql`
+- [x] **Supabase RLS** — row-level security on all active tables; settings/user_roles write-restricted to CEO; script at `supabase/rls.sql`
+- [x] **Employee statement paid persistence** — `invoices.employee_payments` JSONB stores per-employee paid state and paid date
 - [x] **crypto.randomUUID()** — all entity creation uses UUID instead of timestamp-based IDs (required by Supabase UUID columns)
 - [x] **Supabase Storage file uploads** — attachments (images, PDFs, audio, video) upload to `attachments` bucket instead of base64 in DB; max 200 MB
 - [x] **Video support in attachments** — Employee and Candidate profiles accept video files; inline player uses fetch→blob to bypass CORS range-request blocking; extension-based MIME detection for Windows compatibility
 - [x] **Force-download for attachments** — download button fetches as blob with `application/octet-stream` so PDFs and videos save instead of opening in browser
+- [x] **Banco Popular exchange-rate integration** — Settings auto-fetch now targets Banco Popular `BPDConsultaTasa` instead of the prior public rate source
 
 ---
 
@@ -325,6 +361,11 @@ Standalone component used inside the builder modal in InvoicePage. Handles:
 - Empty strings converted to `null` before upsert (avoids numeric column errors)
 - After schema changes, run: `notify pgrst, 'reload schema'` in Supabase SQL editor
 - `toCamel` / `toSnake` only convert **top-level row keys** — JSONB values (like `attachments[]`) are stored and returned as-is in camelCase
+- `invoices.employee_payments` is a JSONB column used for employee statement paid tracking; safe migration:
+  ```sql
+  alter table public.invoices
+  add column if not exists employee_payments jsonb not null default '{}'::jsonb;
+  ```
 
 ### Supabase Storage
 - Bucket: `attachments` (public) — stores employee and candidate file attachments
@@ -351,7 +392,7 @@ Standalone component used inside the builder modal in InvoicePage. Handles:
 ## Business Context
 - **Company:** YVA Staffing — bilingual virtual staffing (DR/Latin America) for U.S. businesses
 - **Billing:** USD (invoiced to clients), paid to employees in DOP
-- **Exchange rate source:** Banco Lafise RD → https://www.lafise.com/blrd/ → "Compra" under USD/DOP
+- **Exchange rate source:** Banco Popular API Portal → `BPDConsultaTasa` (`GET /consultaTasa`) for USD/DOP rates
 - **Invoice model:** Hourly (hours per employee × rate per hour = invoice total)
 - **Clients:** Professional services, law firms, startups
 - **Team size:** ~27 members
@@ -361,3 +402,7 @@ Standalone component used inside the builder modal in InvoicePage. Handles:
 - Logo at `/public/yva-logo.png`
 - Legacy builder at `/public/legacy/` — kept for reference but no longer used in app
 - Netlify SPA routing: `public/_redirects` contains `/* /index.html 200`
+
+## Recent Progress
+- Candidates: dragging a card to `Hired` now opens an employee-profile completion modal prefilled from the candidate, then creates the employee record while keeping the candidate in the pipeline as `hired`
+- Team: default view now supports a project-board layout that groups employees under assigned projects; employees assigned to multiple projects repeat visually across those project lanes while still using a single employee profile record

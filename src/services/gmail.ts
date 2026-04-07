@@ -1,6 +1,7 @@
 import type { AppSettings } from '../data/types'
 import { loadSettings, saveSettings } from './storage'
 import { supabase } from '../lib/supabase'
+import { attachmentBase64ForMime, attachmentBase64ToBlob, type EmailAttachment } from '../utils/pdf'
 
 type GmailUserData = {
   gmailAccessToken?: string
@@ -22,6 +23,12 @@ const AUTH_ENDPOINT  = 'https://accounts.google.com/o/oauth2/v2/auth'
 const TOKEN_ENDPOINT = 'https://oauth2.googleapis.com/token'
 const SEND_ENDPOINT  = 'https://gmail.googleapis.com/gmail/v1/users/me/messages/send'
 const SCOPE = 'https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/userinfo.email'
+
+export type SendEmailResult = {
+  mode: 'gmail' | 'mailto'
+  attached: boolean
+  fallbackReason?: string
+}
 
 // ── PKCE helpers ──────────────────────────────────────────────
 function b64url(buf: ArrayBuffer): string {
@@ -65,19 +72,18 @@ export async function initiateGmailAuth(clientId: string): Promise<void> {
   window.location.href = `${AUTH_ENDPOINT}?${params}`
 }
 
-export async function exchangeCode(code: string, clientId: string, clientSecret?: string): Promise<string> {
+export async function exchangeCode(code: string, clientId: string): Promise<string> {
   const verifier = localStorage.getItem('gmail_pkce_verifier')
   if (!verifier) throw new Error('PKCE verifier missing — please try connecting again.')
 
   const redirect = window.location.origin + '/oauth-callback'
-  const params: Record<string, string> = {
+  const params = {
     code,
     client_id:     clientId,
     code_verifier: verifier,
     grant_type:    'authorization_code',
     redirect_uri:  redirect,
   }
-  if (clientSecret) params['client_secret'] = clientSecret
   const res = await fetch(TOKEN_ENDPOINT, {
     method:  'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -102,9 +108,9 @@ export async function exchangeCode(code: string, clientId: string, clientSecret?
     gmailTokenExpiry:  Date.now() + (data.expires_in - 60) * 1000,
     gmailEmail:        ui.email as string,
   })
-  // Also save clientId + clientSecret to shared settings
+  // Persist the org-level OAuth client ID for future reconnects/refreshes.
   const settings = await loadSettings()
-  void saveSettings({ ...settings, gmailClientId: clientId, gmailClientSecret: clientSecret })
+  void saveSettings({ ...settings, gmailClientId: clientId })
 
   localStorage.removeItem('gmail_pkce_verifier')
   localStorage.removeItem('gmail_pkce_state')
@@ -116,12 +122,11 @@ async function refreshToken(settings: AppSettings & GmailUserData): Promise<stri
   if (!settings.gmailRefreshToken || !settings.gmailClientId) {
     throw new Error('Gmail not connected — no refresh token.')
   }
-  const params: Record<string, string> = {
+  const params = {
     client_id:     settings.gmailClientId,
     refresh_token: settings.gmailRefreshToken,
     grant_type:    'refresh_token',
   }
-  if (settings.gmailClientSecret) params['client_secret'] = settings.gmailClientSecret
   const res = await fetch(TOKEN_ENDPOINT, {
     method:  'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -173,21 +178,89 @@ function buildRaw(to: string, subject: string, body: string, from: string): stri
     '',
     body,
   ].join('\r\n')
-  // base64url encode
-  return btoa(unescape(encodeURIComponent(msg)))
-    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '')
+  return utf8ToBase64Url(msg)
 }
 
-export async function sendGmailMessage(to: string, subject: string, body: string): Promise<void> {
+function utf8ToBase64(value: string): string {
+  return btoa(unescape(encodeURIComponent(value)))
+}
+
+function utf8ToBase64Url(value: string): string {
+  return utf8ToBase64(value)
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=/g, '')
+}
+
+function buildRawWithAttachments(
+  to: string,
+  subject: string,
+  body: string,
+  from: string,
+  attachments: EmailAttachment[],
+): string {
+  const boundary = `yva-os-${crypto.randomUUID()}`
+  const parts = [
+    `From: ${from}`,
+    `To: ${to}`,
+    `Subject: ${subject}`,
+    'MIME-Version: 1.0',
+    `Content-Type: multipart/mixed; boundary="${boundary}"`,
+    '',
+    `--${boundary}`,
+    'Content-Type: text/plain; charset="UTF-8"',
+    'Content-Transfer-Encoding: 7bit',
+    '',
+    body.replace(/\r?\n/g, '\r\n'),
+  ]
+
+  for (const attachment of attachments) {
+    parts.push(
+      '',
+      `--${boundary}`,
+      `Content-Type: ${attachment.mimeType}; name="${attachment.filename}"`,
+      'Content-Transfer-Encoding: base64',
+      `Content-Disposition: attachment; filename="${attachment.filename}"`,
+      '',
+      attachmentBase64ForMime(attachment),
+    )
+  }
+
+  parts.push('', `--${boundary}--`)
+
+  return utf8ToBase64Url(parts.join('\r\n'))
+}
+
+function downloadAttachment(attachment: EmailAttachment) {
+  const url = URL.createObjectURL(attachmentBase64ToBlob(attachment))
+  const link = document.createElement('a')
+  link.href = url
+  link.download = attachment.filename
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+
+export async function sendGmailMessage(
+  to: string,
+  subject: string,
+  body: string,
+  attachments: EmailAttachment[] = [],
+): Promise<void> {
   const userData = await getGmailUserData()
   if (!userData.gmailEmail) throw new Error('Gmail not connected.')
   const token = await getValidToken()
   if (!token) throw new Error('Gmail session expired — please reconnect in Settings.')
 
+  const raw = attachments.length > 0
+    ? buildRawWithAttachments(to, subject, body, userData.gmailEmail, attachments)
+    : buildRaw(to, subject, body, userData.gmailEmail)
+
   const res = await fetch(SEND_ENDPOINT, {
     method:  'POST',
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body:    JSON.stringify({ raw: buildRaw(to, subject, body, userData.gmailEmail) }),
+    body:    JSON.stringify({ raw }),
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({}))
@@ -196,17 +269,29 @@ export async function sendGmailMessage(to: string, subject: string, body: string
 }
 
 // ── Universal send (Gmail if connected, mailto: fallback) ─────
-export async function sendEmail(to: string, subject: string, body: string): Promise<void> {
-  if (!to) return
+export async function sendEmail(
+  to: string,
+  subject: string,
+  body: string,
+  options?: { attachments?: EmailAttachment[] },
+): Promise<SendEmailResult> {
+  if (!to) return { mode: 'mailto', attached: false }
+  const attachments = options?.attachments || []
+  let fallbackReason: string | undefined
   if (await isGmailConnected()) {
     try {
-      await sendGmailMessage(to, subject, body)
-      return
+      await sendGmailMessage(to, subject, body, attachments)
+      return { mode: 'gmail', attached: attachments.length > 0 }
     } catch (err) {
       console.error('Gmail send failed, falling back to mailto:', err)
+      fallbackReason = err instanceof Error ? err.message : 'Gmail send failed'
     }
+  }
+  if (attachments.length > 0) {
+    for (const attachment of attachments) downloadAttachment(attachment)
   }
   // Mailto fallback
   window.location.href =
     `mailto:${to}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`
+  return { mode: 'mailto', attached: false, fallbackReason }
 }
