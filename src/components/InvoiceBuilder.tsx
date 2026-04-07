@@ -11,6 +11,12 @@ function projectPrefix(name: string): string {
   return name.split(/\s+/).map(w => w[0] || '').join('').toUpperCase().slice(0, 5)
 }
 
+function parseInvoiceSequence(value?: string): number {
+  if (!value) return 0
+  const match = value.match(/(\d+)(?!.*\d)/)
+  return match ? parseInt(match[1], 10) : 0
+}
+
 function uid() { return crypto.randomUUID() }
 
 function generateDateRange(start: string, end: string): string[] {
@@ -167,16 +173,13 @@ export default function InvoiceBuilder({ onCreated, onCancel, initialProjectId, 
     : employees
 
   function nextProjectInvoiceSeq(project: Project, allInvoices: Invoice[]): number {
-    const prefix = projectPrefix(project.name)
     const maxExisting = allInvoices.reduce((max, invoice) => {
       const belongsToProject = invoice.projectId === project.id || invoice.projectName === project.name
       if (!belongsToProject) return max
-      const match = invoice.number?.match(new RegExp(`^${prefix}(\\d+)$`, 'i'))
-      if (!match) return max
-      const seq = parseInt(match[1], 10)
+      const seq = parseInvoiceSequence(invoice.number)
       return Number.isFinite(seq) ? Math.max(max, seq) : max
     }, 0)
-    return Math.max(maxExisting + 1, 1)
+    return Math.max(maxExisting + 1, project.nextInvoiceSeq ?? 1, 1)
   }
 
   const projectNextSeq = selectedProject ? nextProjectInvoiceSeq(selectedProject, invoices) : null
