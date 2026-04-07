@@ -265,6 +265,8 @@ export default function InvoiceBuilder({ onCreated, onCancel, initialProjectId, 
         }
 
         let invNumber: string
+        let pendingProjectsUpdate: Project[] | null = null
+        let pendingInvoiceCounter: number | null = null
         if (selectedProject) {
           const allProjects = await loadProjects()
           const projIdx = allProjects.findIndex(p => p.id === selectedProject.id)
@@ -274,12 +276,12 @@ export default function InvoiceBuilder({ onCreated, onCancel, initialProjectId, 
           invNumber = `${prefix}${String(seq).padStart(4, '0')}`
           if (projIdx >= 0) {
             allProjects[projIdx] = { ...proj, nextInvoiceSeq: seq + 1 }
-            await saveProjects(allProjects)
+            pendingProjectsUpdate = allProjects
           }
         } else {
           const counter = await loadInvoiceCounter()
           invNumber = `INV-${String(counter).padStart(3, '0')}`
-          await saveInvoiceCounter(counter + 1)
+          pendingInvoiceCounter = counter + 1
         }
 
         const inv: Invoice = {
@@ -306,6 +308,12 @@ export default function InvoiceBuilder({ onCreated, onCancel, initialProjectId, 
         await saveInvoices([inv, ...existing])
         const fresh = await loadInvoices()
         if (!fresh.some(i => i.id === inv.id)) throw new Error('Invoice creation did not persist.')
+        if (pendingProjectsUpdate) {
+          await saveProjects(pendingProjectsUpdate)
+        }
+        if (pendingInvoiceCounter != null) {
+          await saveInvoiceCounter(pendingInvoiceCounter)
+        }
         onCreated(inv)
       } catch (error) {
         console.error('createInvoice failed', error)
