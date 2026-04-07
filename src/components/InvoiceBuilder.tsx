@@ -6,6 +6,7 @@ import {
   loadProjects, saveProjects,
   loadInvoiceTemplates, saveInvoiceTemplates,
 } from '../services/storage'
+import { computePayrollBreakdown, computePremiumAdjustedAmount, employeePremiumConfig, normalizeClockInput } from '../utils/payroll'
 
 function projectPrefix(name: string): string {
   return name.split(/\s+/).map(w => w[0] || '').join('').toUpperCase().slice(0, 5)
@@ -58,10 +59,13 @@ function parseHours(val: string): number {
 
 type BuilderRow = {
   _id: string
+  employeeId?: string
   employeeName: string
   position: string
   rate: string
   hoursManual: string       // used when no date range
+  shiftStart: string
+  shiftEnd: string
   daily: Record<string, string>
 }
 
@@ -77,7 +81,7 @@ function rowAmount(row: BuilderRow, dates: string[]): number {
 }
 
 function emptyRow(): BuilderRow {
-  return { _id: uid(), employeeName: '', position: '', rate: '', hoursManual: '', daily: {} }
+  return { _id: uid(), employeeId: undefined, employeeName: '', position: '', rate: '', hoursManual: '', shiftStart: '', shiftEnd: '', daily: {} }
 }
 
 type Props = {
@@ -133,10 +137,13 @@ export default function InvoiceBuilder({ onCreated, onCancel, initialProjectId, 
     if (editInvoice.items && editInvoice.items.length > 0) {
       setRows(editInvoice.items.map(it => ({
         _id: uid(),
+        employeeId: it.employeeId,
         employeeName: it.employeeName,
         position: it.position || '',
         rate: String(it.rate),
         hoursManual: String(it.hoursTotal),
+        shiftStart: it.shiftStart || '',
+        shiftEnd: it.shiftEnd || '',
         daily: it.daily ? { ...it.daily } : {},
       })))
     }
@@ -185,12 +192,103 @@ export default function InvoiceBuilder({ onCreated, onCancel, initialProjectId, 
       const seq = parseInvoiceSequence(invoice.number)
       return Number.isFinite(seq) ? Math.max(max, seq) : max
     }, 0)
-    return Math.max(maxExisting + 1, project.nextInvoiceSeq ?? 1, 1)
+    if (maxExisting > 0) return maxExisting + 1
+    return Math.max(project.nextInvoiceSeq ?? 1, 1)
   }
 
   const projectNextSeq = selectedProject ? nextProjectInvoiceSeq(selectedProject, invoices) : null
 
-  const grandTotal = rows.reduce((s, r) => s + rowAmount(r, dates), 0)
+  function rowBillAmount(row: BuilderRow): number {
+    return rowComp(row, dates).billAmount
+  }
+
+  const grandTotal = rows.reduce((s, r) => s + rowBillAmount(r), 0)
+
+  function rowEmployee(row: BuilderRow) {
+    return employees.find(e => e.id === row.employeeId) || employees.find(e => e.name === row.employeeName)
+  }
+
+  function effectiveShift(row: BuilderRow) {
+    const employee = rowEmployee(row)
+    if (employee?.defaultShiftStart && employee?.defaultShiftEnd) {
+      return {
+        shiftStart: employee.defaultShiftStart,
+        shiftEnd: employee.defaultShiftEnd,
+        linked: true,
+      }
+    }
+    return {
+      shiftStart: '',
+      shiftEnd: '',
+      linked: false,
+    }
+  }
+
+  function rowComp(row: BuilderRow, currentDates: string[]) {
+    const employee = rowEmployee(row)
+    const premiumConfig = employeePremiumConfig(employee)
+    const shift = effectiveShift(row)
+    const rate = parseFloat(row.rate) || 0
+
+    if (currentDates.length > 0) {
+      return currentDates.reduce((acc, day) => {
+        const hours = parseHours(row.daily[day] || '')
+        const payroll = computePayrollBreakdown(hours, employee, shift.shiftStart, shift.shiftEnd)
+        const billing = computePremiumAdjustedAmount(
+          hours,
+          rate,
+          premiumConfig.percent,
+          premiumConfig.enabled && shift.linked,
+          shift.shiftStart,
+          shift.shiftEnd,
+          premiumConfig.startTime,
+        )
+        acc.hours += hours
+        acc.regularHours += payroll.regularHours
+        acc.premiumHours += payroll.premiumHours
+        acc.billAmount += billing.totalAmount
+        acc.payrollAmount += payroll.totalPay
+        return acc
+      }, {
+        hours: 0,
+        regularHours: 0,
+        premiumHours: 0,
+        billAmount: 0,
+        payrollAmount: 0,
+        basePayRate: payrollFromEmployee(employee),
+        premiumPercent: premiumConfig.percent,
+        shift,
+        premiumEnabled: premiumConfig.enabled && shift.linked,
+      })
+    }
+
+    const hours = rowHours(row, currentDates)
+    const payroll = computePayrollBreakdown(hours, employee, shift.shiftStart, shift.shiftEnd)
+    const billing = computePremiumAdjustedAmount(
+      hours,
+      rate,
+      premiumConfig.percent,
+      premiumConfig.enabled && shift.linked,
+      shift.shiftStart,
+      shift.shiftEnd,
+      premiumConfig.startTime,
+    )
+    return {
+      hours,
+      regularHours: payroll.regularHours,
+      premiumHours: payroll.premiumHours,
+      billAmount: billing.totalAmount,
+      payrollAmount: payroll.totalPay,
+      basePayRate: payroll.basePayRate,
+      premiumPercent: payroll.premiumPercent,
+      shift,
+      premiumEnabled: premiumConfig.enabled && shift.linked,
+    }
+  }
+
+  function payrollFromEmployee(employee?: Employee | null) {
+    return Number(employee?.payRate || 0) || 0
+  }
 
   function updateRow(id: string, patch: Partial<BuilderRow>) {
     setRows(prev => prev.map(r => r._id === id ? { ...r, ...patch } : r))
@@ -206,7 +304,13 @@ export default function InvoiceBuilder({ onCreated, onCancel, initialProjectId, 
     const billingRate = selectedProject?.rate != null && selectedProject.rate !== ''
       ? String(selectedProject.rate)
       : emp?.payRate != null ? String(emp.payRate) : ''
-    updateRow(rowId, { employeeName: name, rate: billingRate })
+    updateRow(rowId, {
+      employeeId: emp?.id,
+      employeeName: name,
+      rate: billingRate,
+      shiftStart: emp?.defaultShiftStart || '',
+      shiftEnd: emp?.defaultShiftEnd || '',
+    })
   }
 
   function addRow() { setRows(prev => [...prev, emptyRow()]) }
@@ -218,7 +322,7 @@ export default function InvoiceBuilder({ onCreated, onCancel, initialProjectId, 
     setBillingStart(t.billingStart ?? '')
     setBillingEnd(t.billingEnd ?? '')
     setNotes(t.notes ?? '')
-    setRows(t.rows.map(r => ({ ...r, _id: uid() })))
+    setRows(t.rows.map(r => ({ ...emptyRow(), ...r, _id: uid() })))
     setLoadTemplateModal(false)
   }
 
@@ -257,13 +361,26 @@ export default function InvoiceBuilder({ onCreated, onCancel, initialProjectId, 
       try {
         const items: InvoiceItem[] = rows
           .filter(r => r.employeeName.trim())
-          .map(r => ({
-            employeeName: r.employeeName,
-            position:     r.position || undefined,
-            hoursTotal:   rowHours(r, dates),
-            rate:         parseFloat(r.rate) || 0,
-            daily:        dates.length > 0 ? { ...r.daily } : undefined,
-          }))
+          .map(r => {
+            const employee = employees.find(e => e.id === r.employeeId) || employees.find(e => e.name === r.employeeName)
+            const totals = rowComp(r, dates)
+            const shift = totals.shift
+            return {
+              employeeId: employee?.id,
+              employeeName: r.employeeName,
+              position:     r.position || undefined,
+              hoursTotal:   totals.hours,
+              rate:         parseFloat(r.rate) || 0,
+              shiftStart:   shift.shiftStart || undefined,
+              shiftEnd:     shift.shiftEnd || undefined,
+              regularHours: totals.regularHours,
+              premiumHours: totals.premiumHours,
+              basePayRate:  totals.basePayRate,
+              premiumPercent: totals.premiumPercent,
+              totalPay:     totals.payrollAmount,
+              daily:        dates.length > 0 ? { ...r.daily } : undefined,
+            }
+          })
 
         if (editInvoice) {
           const inv: Invoice = {
@@ -459,6 +576,11 @@ export default function InvoiceBuilder({ onCreated, onCancel, initialProjectId, 
         {/* Daily grid mode */}
         {dates.length > 0 ? (
           <div className="builder-daily-wrap">
+            {rows.some(row => employeePremiumConfig(rowEmployee(row)).enabled) && (
+              <div className="settings-notice settings-notice-warning" style={{ marginBottom: 10 }}>
+                Daily-grid entries now use the employee's saved profile shift when available. If an employee has no saved shift schedule, that row stays at the regular rate.
+              </div>
+            )}
             <table className="builder-daily-table">
               <thead>
                 <tr>
@@ -477,8 +599,9 @@ export default function InvoiceBuilder({ onCreated, onCancel, initialProjectId, 
               </thead>
               <tbody>
                 {rows.map(row => {
-                  const hrs = rowHours(row, dates)
-                  const amt = rowAmount(row, dates)
+                  const comp = rowComp(row, dates)
+                  const hrs = comp.hours
+                  const amt = comp.billAmount
                   return (
                     <tr key={row._id}>
                       <td>
@@ -546,6 +669,19 @@ export default function InvoiceBuilder({ onCreated, onCancel, initialProjectId, 
             {rows.map(row => {
               const hrs = rowHours(row, dates)
               const amt = rowAmount(row, dates)
+              const employee = rowEmployee(row)
+              const premiumConfig = employeePremiumConfig(employee)
+              const shift = effectiveShift(row)
+              const payroll = computePayrollBreakdown(hrs, employee, shift.shiftStart, shift.shiftEnd)
+              const billBreakdown = computePremiumAdjustedAmount(
+                hrs,
+                parseFloat(row.rate) || 0,
+                premiumConfig.percent,
+                premiumConfig.enabled,
+                shift.shiftStart,
+                shift.shiftEnd,
+                premiumConfig.startTime,
+              )
               return (
                 <div key={row._id} className="builder-simple-row">
                   <div className="form-group" style={{ flex: 2 }}>
@@ -568,14 +704,54 @@ export default function InvoiceBuilder({ onCreated, onCancel, initialProjectId, 
                     <input className="form-input" type="text" inputMode="decimal" value={row.hoursManual} onChange={e => updateRow(row._id, { hoursManual: e.target.value })} placeholder="0" />
                   </div>
                   <div className="form-group" style={{ flex: 1 }}>
-                    {rows.indexOf(row) === 0 && <label className="form-label">Amount</label>}
-                    <div className="builder-amount-display">{amt > 0 ? `$${amt.toFixed(2)}` : '—'}</div>
+                    {rows.indexOf(row) === 0 && <label className="form-label">Shift Start</label>}
+                    <input
+                      className="form-input"
+                      type="text"
+                      value={shift.shiftStart}
+                      onChange={e => updateRow(row._id, { shiftStart: e.target.value })}
+                      onBlur={e => updateRow(row._id, { shiftStart: normalizeClockInput(e.target.value) })}
+                      placeholder="Saved in profile"
+                      disabled={shift.linked || !employee}
+                    />
+                  </div>
+                  <div className="form-group" style={{ flex: 1 }}>
+                    {rows.indexOf(row) === 0 && <label className="form-label">Shift End</label>}
+                    <input
+                      className="form-input"
+                      type="text"
+                      value={shift.shiftEnd}
+                      onChange={e => updateRow(row._id, { shiftEnd: e.target.value })}
+                      onBlur={e => updateRow(row._id, { shiftEnd: normalizeClockInput(e.target.value) })}
+                      placeholder="Saved in profile"
+                      disabled={shift.linked || !employee}
+                    />
+                  </div>
+                  <div className="form-group" style={{ flex: 1 }}>
+                    {rows.indexOf(row) === 0 && <label className="form-label">Bill Amount</label>}
+                    <div className="builder-amount-display">{billBreakdown.totalAmount > 0 ? `$${billBreakdown.totalAmount.toFixed(2)}` : '—'}</div>
+                  </div>
+                  <div className="form-group" style={{ flex: 1 }}>
+                    {rows.indexOf(row) === 0 && <label className="form-label">Payroll Est.</label>}
+                    <div className="builder-amount-display" style={{ color: payroll.totalPay > 0 ? 'var(--soft)' : 'var(--muted)' }}>
+                      {payroll.totalPay > 0 ? `$${payroll.totalPay.toFixed(2)}` : '—'}
+                    </div>
                   </div>
                   <div style={{ alignSelf: 'flex-end', paddingBottom: 2 }}>
                     {rows.length > 1 && (
                       <button className="btn-icon btn-danger btn-xs" onClick={() => removeRow(row._id)}>×</button>
                     )}
                   </div>
+                  {employee && premiumConfig.enabled && (
+                    <div className="form-group" style={{ flexBasis: '100%', marginTop: -2 }}>
+                      <div className="settings-notice settings-notice-info" style={{ margin: 0 }}>
+                        {shift.linked
+                          ? `Using saved employee shift ${shift.shiftStart} to ${shift.shiftEnd}. `
+                          : 'No saved shift on the employee profile, so this row is using the regular rate only. '}
+                        Premium split: {payroll.regularHours.toFixed(2)}h regular + {payroll.premiumHours.toFixed(2)}h at +{premiumConfig.percent}% after {premiumConfig.startTime}. Bill: ${billBreakdown.totalAmount.toFixed(2)}. Payroll: ${payroll.totalPay.toFixed(2)}.
+                      </div>
+                    </div>
+                  )}
                 </div>
               )
             })}

@@ -16,6 +16,11 @@ export type Employee = {
   email?: string
   phone?: string
   payRate?: string | number
+  defaultShiftStart?: string
+  defaultShiftEnd?: string
+  premiumEnabled?: boolean
+  premiumStartTime?: string
+  premiumPercent?: string | number
   role?: string
   employmentType?: string
   location?: string
@@ -75,10 +80,18 @@ export type Expense = {
 }
 
 export type InvoiceItem = {
+  employeeId?: string
   employeeName: string
   position?: string
   hoursTotal: number
   rate: number
+  shiftStart?: string
+  shiftEnd?: string
+  regularHours?: number
+  premiumHours?: number
+  basePayRate?: number
+  premiumPercent?: number
+  totalPay?: number
   daily?: Record<string, string>
 }
 
@@ -128,10 +141,13 @@ export type InvoiceTemplate = {
   billingEnd?: string
   notes?: string
   rows: {
+    employeeId?: string
     employeeName: string
     position: string
     rate: string
     hoursManual: string
+    shiftStart?: string
+    shiftEnd?: string
     daily: Record<string, string>
   }[]
   createdAt: number

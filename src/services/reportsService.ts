@@ -1,4 +1,5 @@
 import type { DataSnapshot, Invoice, InvoiceItem } from '../data/types'
+import { payrollFromInvoiceItem } from '../utils/payroll'
 
 export type DateRange = {
   from: string // YYYY-MM-DD
@@ -196,10 +197,11 @@ export function computeReports(store: DataSnapshot, range: DateRange): ReportsRe
       if (!byEmp.has(empName)) byEmp.set(empName, { hours: 0, billed: 0, payroll: 0, invIds: new Set() })
       const ep = byEmp.get(empName)!
       const h  = Number(item.hoursTotal) || 0
-      const emp = store.employees.find(e => e.name.toLowerCase() === empName.toLowerCase())
+      const emp = store.employees.find(e => (item.employeeId && e.id === item.employeeId) || e.name.toLowerCase() === empName.toLowerCase())
+      const payroll = payrollFromInvoiceItem(item, emp)
       ep.hours   += h
       ep.billed  += h * (Number(item.rate) || 0)
-      ep.payroll += h * (Number(emp?.payRate) || 0)
+      ep.payroll += payroll.totalPay
       ep.invIds.add(inv.id)
     }
   }

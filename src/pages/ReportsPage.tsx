@@ -269,8 +269,8 @@ export default function ReportsPage() {
           ))}
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 340px', gap: 16, alignItems: 'start' }}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+        <div className="layout-two-col">
+          <div className="stack-md">
             <div className="data-card">
               <div className="data-card-title">Invoice Status — Open</div>
               <div className="table-wrap">
@@ -425,8 +425,8 @@ export default function ReportsPage() {
           ))}
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 340px', gap: 16, alignItems: 'start' }}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+        <div className="layout-two-col">
+          <div className="stack-md">
             <div className="data-card">
               <div className="data-card-title">Outstanding Invoices</div>
               <div className="table-wrap">
@@ -592,7 +592,7 @@ export default function ReportsPage() {
             </div>
           ))}
         </div>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginTop: 16 }}>
+        <div className="layout-halves" style={{ marginTop: 16 }}>
           <div className="data-card">
             <div className="data-card-title">Pipeline by Stage</div>
             {['applied','screening','interview','offer','hired','rejected'].map(stage => (
@@ -668,7 +668,7 @@ export default function ReportsPage() {
             </div>
           ))}
         </div>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginTop: 16 }}>
+        <div className="layout-halves" style={{ marginTop: 16 }}>
           <div className="data-card">
             <div className="data-card-title">Contracts Expiring (60 days)</div>
             {contractsExpiring.length === 0 ? (
@@ -801,6 +801,7 @@ export default function ReportsPage() {
               <div className="kpi-label">Unpaid</div>
               <div className="kpi-value kpi-value-warn">{allUnpaidInvoices.length}</div>
               <div className="kpi-sub">all unpaid invoices</div>
+              <div className="kpi-note">Not limited by the current date filter.</div>
             </div>
             <div className="kpi-card" style={cardStyle} onClick={() => setKpiDrill('topClient')}>
               <div className="kpi-label">Top Client</div>
@@ -822,10 +823,15 @@ export default function ReportsPage() {
       })()}
 
       {/* Revenue chart + attention */}
-      <div style={{ display: 'grid', gridTemplateColumns: can.viewOwnerStats(role) ? '1fr 340px' : '340px', gap: 16, alignItems: 'start' }}>
+      <div className="layout-two-col" style={!can.viewOwnerStats(role) ? { gridTemplateColumns: '1fr' } : undefined}>
         {can.viewOwnerStats(role) && (
           <div className="data-card">
-            <div className="data-card-title">Revenue — Last 6 Months</div>
+            <div className="data-card-header">
+              <div>
+                <div className="data-card-title">Revenue — Last 6 Months</div>
+                <div className="data-card-subtitle">Recent monthly billing trend, compressed so the values stay readable at a glance.</div>
+              </div>
+            </div>
             <BarChart data={chartData} />
           </div>
         )}
@@ -855,7 +861,7 @@ export default function ReportsPage() {
               <div className="attention-item">
                 <div className="attention-item-dot attention-item-dot-warn" />
                 <div className="attention-item-body">
-                  <div className="attention-item-title">{computed.unpaidCount} Unpaid in Range</div>
+                  <div className="attention-item-title">{computed.unpaidCount} Unpaid in Selected Range</div>
                   <div className="attention-item-sub">{formatMoney(computed.totalBilled - (computed.paidCount > 0 ? computed.totalBilled * (computed.paidCount / computed.invoiceCount) : 0))} outstanding</div>
                 </div>
               </div>
@@ -891,7 +897,7 @@ export default function ReportsPage() {
       </div>
 
       {/* By client + by project */}
-      {can.viewOwnerStats(role) && <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+      {can.viewOwnerStats(role) && <div className="layout-halves">
         <div className="data-card">
           <div className="data-card-title">Revenue by Client</div>
           <div className="table-wrap">
@@ -1060,7 +1066,7 @@ export default function ReportsPage() {
         return (
           <div className="data-card">
             <div className="data-card-title">Accounts Receivable Aging</div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 12, marginBottom: 16 }}>
+          <div className="metric-grid-4" style={{ marginBottom: 16 }}>
               {buckets.map(b => (
                 <div key={b.label} style={{ background: 'var(--surf2)', borderRadius: 12, padding: '14px 16px', borderTop: `2px solid ${b.color}` }}>
                   <div style={{ fontSize: 11, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '.06em', marginBottom: 6 }}>{b.label}</div>
@@ -1128,7 +1134,7 @@ export default function ReportsPage() {
         })
 
         return (
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+          <div className="layout-halves">
             <div className="data-card">
               <div className="data-card-title">Revenue Forecast</div>
               <div style={{ marginBottom: 16 }}>
@@ -1235,9 +1241,12 @@ export default function ReportsPage() {
 
         return (
           <div className="data-card">
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 8 }}>
-              <div className="data-card-title" style={{ margin: 0 }}>Invoice History</div>
-              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            <div className="data-card-header">
+              <div>
+                <div className="data-card-title">Invoice History</div>
+                <div className="data-card-subtitle">Filter the historical list, export it, and audit invoice volume without leaving the dashboard.</div>
+              </div>
+              <div className="toolbar-row">
                 <button className="btn-ghost btn-sm" onClick={() => { setHFrom(isoThisMonth().from); setHTo(isoThisMonth().to) }}>This Month</button>
                 <button className="btn-ghost btn-sm" onClick={() => { setHFrom(isoThisYear().from); setHTo(isoThisYear().to) }}>This Year</button>
                 <button className="btn-ghost btn-sm" onClick={() => { setHFrom(''); setHTo(''); setHClient(''); setHProject(''); setHStatus('') }}>Clear</button>
@@ -1247,7 +1256,7 @@ export default function ReportsPage() {
             </div>
 
             {/* Filters */}
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12, alignItems: 'center' }}>
+            <div className="toolbar-row" style={{ marginBottom: 12 }}>
               <input
                 className="form-input" style={{ width: 160, fontSize: 12 }}
                 placeholder="Search client..."
@@ -1274,7 +1283,7 @@ export default function ReportsPage() {
               <input className="form-input" type="date" style={{ width: 140, fontSize: 12 }} value={hFrom} onChange={e => setHFrom(e.target.value)} />
               <span style={{ color: 'var(--muted)', fontSize: 12 }}>–</span>
               <input className="form-input" type="date" style={{ width: 140, fontSize: 12 }} value={hTo} onChange={e => setHTo(e.target.value)} />
-              <span style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--muted)' }}>
+              <span className="toolbar-spacer" style={{ fontSize: 12, color: 'var(--muted)' }}>
                 {histFiltered.length} invoice{histFiltered.length !== 1 ? 's' : ''} · <strong style={{ color: 'var(--gold)' }}>{formatMoney(histTotal)}</strong>
               </span>
             </div>
@@ -1417,24 +1426,22 @@ export default function ReportsPage() {
               {summary && (
                 <div style={{ padding: '8px 20px', fontSize: 13, color: 'var(--muted)', borderBottom: '1px solid var(--border)' }}>{summary}</div>
               )}
-              <div style={{ maxHeight: '65vh', overflowY: 'auto' }}>
+              <div className="modal-list">
                 {items.length === 0 ? (
                   <div style={{ padding: '32px 20px', textAlign: 'center', color: 'var(--muted)', fontSize: 13 }}>No data for this period.</div>
                 ) : items.map((item, i) => (
                   <div
                     key={i}
-                    style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 20px', borderBottom: '1px solid var(--border)', cursor: item.nav ? 'pointer' : undefined, transition: 'background .15s' }}
+                    className={`modal-list-item${item.nav ? ' nav' : ''}`}
                     onClick={() => { if (item.nav) { navigate(item.nav); setKpiDrill(null) } }}
-                    onMouseEnter={e => { if (item.nav) (e.currentTarget as HTMLElement).style.background = 'var(--surf2)' }}
-                    onMouseLeave={e => { if (item.nav) (e.currentTarget as HTMLElement).style.background = '' }}
                   >
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.label}</div>
-                      {item.sub && <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 1 }}>{item.sub}</div>}
+                    <div className="modal-list-main">
+                      <div className="modal-list-label">{item.label}</div>
+                      {item.sub && <div className="modal-list-sub">{item.sub}</div>}
                     </div>
                     {item.badge && <span className={`badge ${item.badge}`} style={{ fontSize: 10, flexShrink: 0 }}>{item.badgeLabel}</span>}
-                    {item.right && <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--gold)', flexShrink: 0 }}>{item.right}</div>}
-                    {item.nav && <span style={{ fontSize: 11, color: 'var(--muted)', flexShrink: 0 }}>→</span>}
+                    {item.right && <div className="modal-list-right">{item.right}</div>}
+                    {item.nav && <span className="modal-list-arrow">→</span>}
                   </div>
                 ))}
               </div>

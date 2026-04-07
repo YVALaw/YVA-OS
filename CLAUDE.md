@@ -351,9 +351,13 @@ Single module exports all load/save functions. No direct Supabase calls in pages
 ### Invoice builder (`src/components/InvoiceBuilder.tsx`)
 Standalone component used inside the builder modal in InvoicePage. Handles:
 - Employee row management, daily hours grid, simple totals mode
-- `parseHours(val)` supports: `"8"`, `"8.5"`, `"8,5"`, `"8:30"` → decimal
+- `parseHours(val)` supports: `"8"`, `"8.5"`, `"8,5"`, `"8:30"`, and legacy minute-style `"3.08"` / `"4.47"` where the two digits after `.` are treated as minutes
 - Template save/load via `invoice_templates` table
-- Per-project invoice number generation with `nextInvoiceSeq` mutation
+- Per-project invoice number generation; next sequence is recovered from saved project invoices so stale `nextInvoiceSeq` values do not skip/reset numbering
+
+### Netlify functions
+- `netlify/functions/gmail-oauth.cjs` handles Google OAuth token exchange/refresh server-side using Netlify env var `GMAIL_CLIENT_SECRET`
+- `netlify/functions/infodolar-bhd.cjs` scrapes InfoDolar Banco BHD buy/sell rates for the currency settings auto-fetch
 
 ### Supabase schema notes
 - `name`, `role`, `location`, `timestamp` are PostgreSQL reserved words — wrapped in double quotes in SQL
@@ -392,7 +396,7 @@ Standalone component used inside the builder modal in InvoicePage. Handles:
 ## Business Context
 - **Company:** YVA Staffing — bilingual virtual staffing (DR/Latin America) for U.S. businesses
 - **Billing:** USD (invoiced to clients), paid to employees in DOP
-- **Exchange rate source:** Banco Popular API Portal → `BPDConsultaTasa` (`GET /consultaTasa`) for USD/DOP rates
+- **Exchange rate source:** InfoDolar Banco BHD page scrape via Netlify function; manual override remains available in Settings
 - **Invoice model:** Hourly (hours per employee × rate per hour = invoice total)
 - **Clients:** Professional services, law firms, startups
 - **Team size:** ~27 members
@@ -404,5 +408,65 @@ Standalone component used inside the builder modal in InvoicePage. Handles:
 - Netlify SPA routing: `public/_redirects` contains `/* /index.html 200`
 
 ## Recent Progress
-- Candidates: dragging a card to `Hired` now opens an employee-profile completion modal prefilled from the candidate, then creates the employee record while keeping the candidate in the pipeline as `hired`
+- Candidates: dragging a card to `Hired` now opens an employee-profile completion modal prefilled from the candidate, creates the employee profile, then removes the candidate card from the pipeline
 - Team: default view now supports a project-board layout that groups employees under assigned projects; employees assigned to multiple projects repeat visually across those project lanes while still using a single employee profile record
+- Gmail: OAuth token exchange/refresh now runs through a Netlify function using `GMAIL_CLIENT_SECRET`; subject lines are MIME-encoded correctly and fallback toasts report real Gmail failure reasons
+- Invoices: invoice groups sort newest-first, invoice HTML spacing was tightened, and project counters now advance only after a successful save
+- Invoices: project next numbers are derived from actual saved invoices to recover stale counters; one-off SQL repair may still be needed for already drifted `projects.next_invoice_seq`
+- Dashboard: `Net Earnings` KPI modal now shows invoice-by-invoice billed/payroll/net breakdown; `Unpaid` KPI uses all unpaid invoices system-wide instead of only the current filtered range
+- Currency: Settings auto-fetch now uses InfoDolar Banco BHD sell rate via Netlify function instead of the earlier bank API path
+- Dashboard: Revenue chart labels are rounded for display, avoiding long floating-point decimals
+
+## Current Overrides
+- Any older mentions of `Lafise` or `Banco Popular` as the active exchange-rate auto-fetch source are stale; the current source is InfoDolar Banco BHD via `netlify/functions/infodolar-bhd.cjs`
+- Any older Gmail notes that imply browser-only PKCE token exchange are stale; current Gmail OAuth exchange/refresh is server-side through `netlify/functions/gmail-oauth.cjs` and requires Netlify env var `GMAIL_CLIENT_SECRET`
+- Any older candidate-flow note implying the hired candidate remains visible in the Candidates board is stale; current behavior removes the candidate card after employee creation
+## Session Update: 2026-04-07
+
+Current local-only work not yet pushed:
+
+- UI refinement pass across dashboard, invoices, team board, search, and modal layouts remains local-only and has been build-verified.
+- Employee premium/night-shift support is implemented locally.
+- Employee profiles and the add/edit employee modal now support:
+  - `defaultShiftStart`
+  - `defaultShiftEnd`
+  - `premiumEnabled`
+  - `premiumStartTime`
+  - `premiumPercent`
+- Invoice builder now links invoice math to the employee's saved profile schedule.
+  - If a saved default shift exists, premium logic uses that schedule automatically.
+  - If no saved default shift exists, invoice math falls back to the regular rate.
+  - This applies in both simple total-hours mode and daily-grid mode.
+- Premium uplift now affects both:
+  - employee payroll estimate
+  - client invoice bill amount
+- Invoice builder now stores premium-aware invoice item fields:
+  - `employeeId`
+  - `shiftStart`
+  - `shiftEnd`
+  - `regularHours`
+  - `premiumHours`
+  - `basePayRate`
+  - `premiumPercent`
+  - `totalPay`
+- Employee statements and reports now use premium-aware stored invoice item math instead of only `hours * payRate`.
+- Employee profile save now surfaces real save failures instead of silently doing nothing.
+
+Supabase alignment required for employee premium/profile schedule support:
+
+```sql
+alter table public.employees
+add column if not exists default_shift_start text,
+add column if not exists default_shift_end text,
+add column if not exists premium_enabled boolean default false,
+add column if not exists premium_start_time text,
+add column if not exists premium_percent numeric;
+
+notify pgrst, 'reload schema';
+```
+
+Behavior clarification:
+
+- Project invoice numbering should derive from the highest real saved invoice for that project rather than trusting a stale `next_invoice_seq`.
+- Client billing and employee payroll are both premium-adjusted when the employee has a saved schedule and premium rule.
+- If the employee has no saved default shift, premium math should not be inferred from ad hoc invoice data; the row stays on the regular rate.

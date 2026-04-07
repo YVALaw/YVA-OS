@@ -19,6 +19,7 @@ function GlobalSearch() {
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<SearchResult[]>([])
   const [open, setOpen] = useState(false)
+  const [activeIndex, setActiveIndex] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
   const navigate = useNavigate()
 
@@ -57,6 +58,7 @@ function GlobalSearch() {
     }
     setResults(found.slice(0, 8))
     setOpen(found.length > 0)
+    setActiveIndex(0)
     })()
   }, [query])
 
@@ -72,39 +74,45 @@ function GlobalSearch() {
   }
 
   return (
-    <div style={{ position: 'relative' }}>
+    <div className="search-shell">
       <input
         ref={inputRef}
-        className="form-input"
-        style={{ width: 220, fontSize: 13, height: 32, padding: '0 10px' }}
+        className="form-input topbar-search"
         placeholder="Search..."
         value={query}
         onChange={e => setQuery(e.target.value)}
         onFocus={() => results.length > 0 && setOpen(true)}
         onBlur={() => setTimeout(() => setOpen(false), 150)}
-        onKeyDown={e => { if (e.key === 'Escape') { setQuery(''); setOpen(false) } }}
+        onKeyDown={e => {
+          if (e.key === 'Escape') { setQuery(''); setOpen(false); return }
+          if (!results.length) return
+          if (e.key === 'ArrowDown') {
+            e.preventDefault()
+            setOpen(true)
+            setActiveIndex(i => (i + 1) % results.length)
+          } else if (e.key === 'ArrowUp') {
+            e.preventDefault()
+            setOpen(true)
+            setActiveIndex(i => (i - 1 + results.length) % results.length)
+          } else if (e.key === 'Enter' && open) {
+            e.preventDefault()
+            pick(results[activeIndex] || results[0])
+          }
+        }}
       />
       {open && (
-        <div style={{
-          position: 'absolute', top: '100%', left: 0, right: 0, marginTop: 4,
-          background: 'var(--surf2)', border: '1px solid rgba(255,255,255,.08)',
-          borderRadius: 8, boxShadow: '0 8px 24px rgba(0,0,0,.4)', zIndex: 1000, overflow: 'hidden',
-        }}>
+        <div className="search-results">
           {results.map((r, i) => (
             <div
               key={i}
               onMouseDown={() => pick(r)}
-              style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', cursor: 'pointer' }}
-              onMouseEnter={e => (e.currentTarget.style.background = 'rgba(255,255,255,.05)')}
-              onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+              className={`search-result-item${activeIndex === i ? ' active' : ''}`}
+              onMouseEnter={() => setActiveIndex(i)}
             >
-              <span style={{
-                fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.06em',
-                color: TYPE_COLORS[r.type] || '#999', minWidth: 60, opacity: .9,
-              }}>{r.type}</span>
-              <div style={{ flex: 1, overflow: 'hidden' }}>
-                <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.label}</div>
-                {r.sub && <div style={{ fontSize: 11, color: 'var(--muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.sub}</div>}
+              <span className="search-result-type" style={{ color: TYPE_COLORS[r.type] || '#999' }}>{r.type}</span>
+              <div className="search-result-body">
+                <div className="search-result-label">{r.label}</div>
+                {r.sub && <div className="search-result-sub">{r.sub}</div>}
               </div>
             </div>
           ))}

@@ -474,6 +474,8 @@ export default function InvoicePage() {
   }, [filtered.map(i=>i.id+i.status).join(), allProjects.map(p=>p.id).join()])
 
   const totalBilled = invoices.reduce((s, i) => s + (Number(i.subtotal) || 0), 0)
+  const unpaidCount = invoices.filter(i => ['sent', 'overdue', 'partial'].includes((i.status || '').toLowerCase())).length
+  const draftCount = invoices.filter(i => (i.status || '').toLowerCase() === 'draft').length
 
   return (
     <div className="page-wrap">
@@ -483,7 +485,6 @@ export default function InvoicePage() {
           <p className="page-sub">{invoices.length} total · {formatMoney(totalBilled)}</p>
         </div>
         <div className="page-header-actions">
-          <input className="form-input" style={{ width: 190 }} placeholder="Search invoices..." value={search} onChange={(e) => setSearch(e.target.value)} />
           {invoices.some(i => ['overdue','sent','partial'].includes((i.status||'').toLowerCase()) && i.clientEmail) && (
             <button className="btn-ghost btn-sm" title="Send reminder to all clients with unpaid invoices" onClick={() => { void (async () => {
               const seen = new Set<string>()
@@ -509,13 +510,21 @@ export default function InvoicePage() {
         </div>
       </div>
 
+      <div className="filter-bar">
+        <input className="form-input filter-input-sm" placeholder="Search invoices..." value={search} onChange={(e) => setSearch(e.target.value)} />
+        <span className="pill-meta">{draftCount} draft</span>
+        <span className="pill-meta">{unpaidCount} unpaid</span>
+        <span className="toolbar-spacer pill-meta">{groups.length} project group{groups.length !== 1 ? 's' : ''}</span>
+      </div>
+
       {/* PROJECT-GROUPED INVOICE LIST */}
       {groups.length === 0 ? (
-        <div style={{ textAlign: 'center', padding: '60px 20px', color: 'var(--muted)', fontSize: 14 }}>
-          {search ? 'No invoices match your search.' : 'No invoices yet. Click "+ New Invoice" to get started.'}
+        <div className="empty-state">
+          <div className="empty-state-title">{search ? 'No invoices match your search.' : 'No invoices yet.'}</div>
+          <div className="empty-state-copy">{search ? 'Try a different client, project, or invoice number.' : 'Create your first invoice to start tracking billing, reminders, and project totals here.'}</div>
         </div>
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <div className="invoice-groups">
           {groups.map(({ key, label, projectId: pId, invoices: groupInvs }) => {
             const groupTotal = groupInvs.reduce((s, i) => s + (Number(i.subtotal)||0), 0)
             const unpaid = groupInvs.filter(i => ['sent','overdue','partial'].includes((i.status||'').toLowerCase())).length
@@ -523,68 +532,58 @@ export default function InvoicePage() {
             return (
               <div key={key} className="invoice-group">
                 <div className="invoice-group-header" onClick={() => toggleCollapse(key)}>
-                  <span style={{ fontSize: 12, color: 'var(--muted)', width: 12 }}>{isOpen ? '▼' : '▶'}</span>
-                  <span className="invoice-group-name">{label}</span>
-                  <span className="invoice-group-meta">
-                    {groupInvs.length} invoice{groupInvs.length !== 1 ? 's' : ''} · {formatMoney(groupTotal)}
-                    {unpaid > 0 && <span style={{ marginLeft: 8, color: '#f87171', fontSize: 11 }}>● {unpaid} unpaid</span>}
-                  </span>
-                  <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }} onClick={e => e.stopPropagation()}>
+                  <div className="invoice-group-summary">
+                    <span style={{ fontSize: 12, color: 'var(--muted)', width: 12 }}>{isOpen ? '▼' : '▶'}</span>
+                    <span className="invoice-group-name">{label}</span>
+                    <span className="invoice-group-meta">
+                      {groupInvs.length} invoice{groupInvs.length !== 1 ? 's' : ''} · {formatMoney(groupTotal)}
+                    </span>
+                    {unpaid > 0 && <span className="pill-meta" style={{ color: '#f87171' }}>{unpaid} unpaid</span>}
+                  </div>
+                  <div className="invoice-group-actions" onClick={e => e.stopPropagation()}>
                     <button className="btn-xs btn-ghost" onClick={() => openQuickForProject(pId || undefined)}>+ Quick</button>
                     <button className="btn-xs btn-ghost" onClick={() => openBuilder(pId || undefined)}>+ Invoice</button>
                   </div>
                 </div>
                 {isOpen && (
-                  <div className="table-wrap" style={{ margin: '0 0 2px' }}>
-                    <table className="data-table" style={{ fontSize: 13 }}>
-                      <thead>
-                        <tr>
-                          <th>Number</th>
-                          <th>Client</th>
-                          <th>Date</th>
-                          <th>Due</th>
-                          <th>Status</th>
-                          <th style={{ textAlign: 'right' }}>Amount</th>
-                          <th></th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {groupInvs.map(inv => {
-                          const overdue = inv.dueDate && new Date(inv.dueDate) < new Date() && !['paid'].includes((inv.status||'').toLowerCase())
-                          return (
-                            <tr key={inv.id}>
-                              <td className="td-name" style={{ fontWeight: 700, fontSize: 13 }}>{inv.number}</td>
-                              <td className="td-muted">{inv.clientName || '—'}</td>
-                              <td className="td-muted">{inv.date || '—'}</td>
-                              <td className="td-muted" style={{ color: overdue ? '#f87171' : undefined }}>{inv.dueDate || '—'}</td>
-                              <td><span className={`badge ${statusBadge(inv.status)}`} style={{ fontSize: 10 }}>{inv.status || 'draft'}</span>
-                                {inv.status === 'partial' && inv.amountPaid != null && (
-                                  <span style={{ fontSize: 10, color: '#f97316', marginLeft: 4 }}>({formatMoney(inv.amountPaid)} paid)</span>
-                                )}
-                              </td>
-                              <td style={{ textAlign: 'right', fontWeight: 700 }}>
-                                {formatMoney(Number(inv.subtotal)||0)}
-                              </td>
-                              <td>
-                                <div style={{ display: 'flex', gap: 3, justifyContent: 'flex-end', flexWrap: 'nowrap' }}>
-                                  {inv.clientEmail && <button className="btn-xs btn-ghost" title="Email invoice" onClick={() => { void handleInvoiceEmail(inv) }}>✉</button>}
-                                  {inv.clientEmail && ['overdue','sent','partial'].includes((inv.status||'').toLowerCase()) && (
-                                    <button className="btn-xs btn-ghost" title="Payment reminder" onClick={() => { void handleReminderEmail(inv) }}>⚠</button>
-                                  )}
-                                  <button className="btn-xs btn-ghost" title="Preview" onClick={() => setPreviewInv(inv)}>👁</button>
-                                  <button className="btn-xs btn-ghost" title="PDF" onClick={() => printInvoice(inv, settings)}>⎙</button>
-                                  <button className="btn-xs btn-ghost" title="Share portal" onClick={() => shareInvoice(inv)}>🔗</button>
-                                  <button className="btn-xs btn-ghost" title="Duplicate" onClick={() => duplicateInvoice(inv)}>⧉</button>
-                                  <button className="btn-xs btn-ghost" title="Edit invoice" onClick={() => openEditInvoice(inv)}>✏</button>
-                                  <button className="btn-xs btn-ghost" title="Update status" onClick={() => openStatusEdit(inv)}>✎</button>
-                                  <button className="btn-xs btn-danger" onClick={() => setConfirmDelete(inv.id)}>×</button>
-                                </div>
-                              </td>
-                            </tr>
-                          )
-                        })}
-                      </tbody>
-                    </table>
+                  <div className="invoice-rows">
+                    {groupInvs.map(inv => {
+                      const overdue = inv.dueDate && new Date(inv.dueDate) < new Date() && !['paid'].includes((inv.status||'').toLowerCase())
+                      const hours = (inv.items || []).reduce((sum, item) => sum + (Number(item.hoursTotal) || 0), 0)
+                      return (
+                        <div key={inv.id} className="invoice-row">
+                          <div className="invoice-row-main">
+                            <div className="invoice-row-number">{inv.number}</div>
+                            <div className="invoice-row-client">{inv.clientName || '—'}</div>
+                            <div className="invoice-row-sub">{inv.projectName || 'Unassigned project'}{hours > 0 ? ` · ${hours.toFixed(1)}h` : ''}</div>
+                          </div>
+                          <div className="invoice-row-meta">
+                            <div className="invoice-row-date"><strong>Issued</strong> {inv.date || '—'}</div>
+                            <div className={`invoice-row-due${overdue ? ' overdue' : ''}`}><strong>Due</strong> {inv.dueDate || '—'}</div>
+                          </div>
+                          <div className="invoice-row-amount">
+                            <span className={`badge ${statusBadge(inv.status)}`} style={{ fontSize: 10 }}>{inv.status || 'draft'}</span>
+                            <div className="invoice-row-total">{formatMoney(Number(inv.subtotal)||0)}</div>
+                            {inv.status === 'partial' && inv.amountPaid != null && (
+                              <div className="invoice-row-paid-note">{formatMoney(inv.amountPaid)} paid so far</div>
+                            )}
+                          </div>
+                          <div className="invoice-row-actions">
+                            {inv.clientEmail && <button className="btn-xs btn-ghost" title="Email invoice" onClick={() => { void handleInvoiceEmail(inv) }}>✉</button>}
+                            {inv.clientEmail && ['overdue','sent','partial'].includes((inv.status||'').toLowerCase()) && (
+                              <button className="btn-xs btn-ghost" title="Payment reminder" onClick={() => { void handleReminderEmail(inv) }}>⚠</button>
+                            )}
+                            <button className="btn-xs btn-ghost" title="Preview" onClick={() => setPreviewInv(inv)}>👁</button>
+                            <button className="btn-xs btn-ghost" title="PDF" onClick={() => printInvoice(inv, settings)}>⎙</button>
+                            <button className="btn-xs btn-ghost" title="Share portal" onClick={() => shareInvoice(inv)}>🔗</button>
+                            <button className="btn-xs btn-ghost" title="Duplicate" onClick={() => duplicateInvoice(inv)}>⧉</button>
+                            <button className="btn-xs btn-ghost" title="Edit invoice" onClick={() => openEditInvoice(inv)}>✏</button>
+                            <button className="btn-xs btn-ghost" title="Update status" onClick={() => openStatusEdit(inv)}>✎</button>
+                            <button className="btn-xs btn-danger" onClick={() => setConfirmDelete(inv.id)}>×</button>
+                          </div>
+                        </div>
+                      )
+                    })}
                   </div>
                 )}
               </div>

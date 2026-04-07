@@ -10,6 +10,7 @@ import { formatMoney, fmtHoursHM } from '../utils/money'
 import { useRole } from '../context/RoleContext'
 import { can } from '../lib/roles'
 import { htmlToPdfAttachment } from '../utils/pdf'
+import { computePayrollBreakdown, employeePremiumConfig, normalizeClockInput, payrollFromInvoiceItem } from '../utils/payroll'
 
 function uid() { return crypto.randomUUID() }
 
@@ -53,11 +54,13 @@ const TYPE_OPTIONS   = ['', 'Full-time', 'Part-time', 'Project-based']
 
 type FormData = {
   name: string; email: string; phone: string; payRate: string
+  defaultShiftStart: string; defaultShiftEnd: string
+  premiumEnabled: boolean; premiumStartTime: string; premiumPercent: string
   role: string; employmentType: string; location: string
   timezone: string; startYear: string; status: string; notes: string
 }
 const EMPTY: FormData = {
-  name: '', email: '', phone: '', payRate: '', role: '', employmentType: '',
+  name: '', email: '', phone: '', payRate: '', defaultShiftStart: '', defaultShiftEnd: '', premiumEnabled: false, premiumStartTime: '21:00', premiumPercent: '15', role: '', employmentType: '',
   location: '', timezone: '', startYear: '', status: 'Active', notes: '',
 }
 
@@ -89,14 +92,34 @@ function parseInvoiceNumber(value?: string): number {
   return match ? parseInt(match[1], 10) : 0
 }
 
+function getEmployeeInvoiceItems(emp: Employee, inv: Invoice) {
+  return (inv.items || []).filter(it =>
+    (it.employeeId && it.employeeId === emp.id) ||
+    it.employeeName?.toLowerCase() === emp.name.toLowerCase()
+  )
+}
+
+function summarizeEmployeeInvoices(emp: Employee, invoices: Invoice[]) {
+  return invoices.reduce((summary, inv) => {
+    for (const item of getEmployeeInvoiceItems(emp, inv)) {
+      const payroll = payrollFromInvoiceItem(item, emp)
+      summary.hours += payroll.totalHours
+      summary.regularHours += payroll.regularHours
+      summary.premiumHours += payroll.premiumHours
+      summary.totalPay += payroll.totalPay
+    }
+    return summary
+  }, { hours: 0, regularHours: 0, premiumHours: 0, totalPay: 0 })
+}
+
 function buildPayslipHTML(emp: Employee, empInvoices: Invoice[], dateFrom: string, dateTo: string, settings: Awaited<ReturnType<typeof loadSettings>>) {
   const payRate = Number(emp.payRate) || 0
+  const premiumConfig = employeePremiumConfig(emp)
   const dopRate = settings.usdToDop || 0
 
-  const totalHours = empInvoices.reduce((s, inv) =>
-    s + (inv.items||[]).filter(it=>it.employeeName?.toLowerCase()===emp.name.toLowerCase())
-      .reduce((h,it)=>h+(Number(it.hoursTotal)||0),0), 0)
-  const totalUSD = totalHours * payRate
+  const summary = summarizeEmployeeInvoices(emp, empInvoices)
+  const totalHours = summary.hours
+  const totalUSD = summary.totalPay
   const totalDOP = dopRate > 0 ? totalUSD * dopRate : 0
 
   function ph(v: string): number {
@@ -106,9 +129,17 @@ function buildPayslipHTML(emp: Employee, empInvoices: Invoice[], dateFrom: strin
   }
   const DA = ['Su','Mo','Tu','We','Th','Fr','Sa']
   const sections = empInvoices.map(inv => {
-    const items = (inv.items||[]).filter(it=>it.employeeName?.toLowerCase()===emp.name.toLowerCase())
-    const hrs = items.reduce((h,it)=>h+(Number(it.hoursTotal)||0),0)
-    const earned = payRate > 0 ? hrs * payRate : 0
+    const items = getEmployeeInvoiceItems(emp, inv)
+    const invoiceSummary = items.reduce((acc, item) => {
+      const payroll = payrollFromInvoiceItem(item, emp)
+      acc.hrs += payroll.totalHours
+      acc.regular += payroll.regularHours
+      acc.premium += payroll.premiumHours
+      acc.earned += payroll.totalPay
+      return acc
+    }, { hrs: 0, regular: 0, premium: 0, earned: 0 })
+    const hrs = invoiceSummary.hrs
+    const earned = invoiceSummary.earned
     const invPeriod = inv.billingStart ? inv.billingStart+(inv.billingEnd?' – '+inv.billingEnd:'') : (inv.date||'—')
     const daily = items[0]?.daily
     let allDates: string[] = []
@@ -125,9 +156,9 @@ function buildPayslipHTML(emp: Employee, empInvoices: Invoice[], dateFrom: strin
     if (allDates.length > 0 && daily) {
       const dateHeaders = allDates.map(d=>{const dt=new Date(d+'T12:00:00');return '<th style="text-align:center;font-size:9px;padding:5px 3px;min-width:22px;color:#999;border-bottom:2px solid #eee;white-space:nowrap">'+DA[dt.getDay()]+'<br>'+(dt.getMonth()+1)+'/'+dt.getDate()+'</th>'}).join('')
       const dayCells = allDates.map(d=>{const h=ph(daily[d]||'');return '<td style="text-align:center;padding:7px 4px;font-size:12px;color:'+(h>0?'#111':'#ccc')+'">'+(h>0?(h%1===0?String(h):h.toFixed(1)):'—')+'</td>'}).join('')
-      return label+'<table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:20px"><thead><tr>'+dateHeaders+'<th style="text-align:right;font-size:9px;padding:5px 6px;color:#999;border-bottom:2px solid #eee">HOURS</th><th style="text-align:right;font-size:9px;padding:5px 6px;color:#999;border-bottom:2px solid #eee">RATE</th><th style="text-align:right;font-size:9px;padding:5px 6px;color:#999;border-bottom:2px solid #eee">EARNED</th></tr></thead><tbody><tr>'+dayCells+'<td style="text-align:right;font-weight:700;padding:8px 6px">'+hrs.toFixed(1)+'h</td><td style="text-align:right;color:#999;padding:8px 6px">'+(payRate>0?'$'+payRate+'/hr':'—')+'</td><td style="text-align:right;font-weight:700;color:#f5b533;padding:8px 6px">'+(earned>0?'$'+earned.toFixed(2):'—')+'</td></tr></tbody></table>'
+      return label+'<table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:20px"><thead><tr>'+dateHeaders+'<th style="text-align:right;font-size:9px;padding:5px 6px;color:#999;border-bottom:2px solid #eee">HOURS</th><th style="text-align:right;font-size:9px;padding:5px 6px;color:#999;border-bottom:2px solid #eee">RATE</th><th style="text-align:right;font-size:9px;padding:5px 6px;color:#999;border-bottom:2px solid #eee">EARNED</th></tr></thead><tbody><tr>'+dayCells+'<td style="text-align:right;font-weight:700;padding:8px 6px">'+hrs.toFixed(1)+'h</td><td style="text-align:right;color:#999;padding:8px 6px">'+(payRate>0?'$'+payRate+'/hr':'—')+'</td><td style="text-align:right;font-weight:700;color:#f5b533;padding:8px 6px">'+(earned>0?'$'+earned.toFixed(2):'—')+'</td></tr></tbody></table>' + (invoiceSummary.premium > 0 ? '<div style="font-size:11px;color:#666;margin-top:-10px;margin-bottom:14px">Premium split: '+invoiceSummary.regular.toFixed(2)+'h regular + '+invoiceSummary.premium.toFixed(2)+'h at +'+premiumConfig.percent+'%</div>' : '')
     } else {
-      return label+'<table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:20px"><thead><tr><th style="font-size:9px;padding:5px 6px;color:#999;border-bottom:2px solid #eee">HOURS</th><th style="text-align:right;font-size:9px;padding:5px 6px;color:#999;border-bottom:2px solid #eee">RATE</th><th style="text-align:right;font-size:9px;padding:5px 6px;color:#999;border-bottom:2px solid #eee">EARNED</th></tr></thead><tbody><tr><td style="font-weight:700;padding:8px 6px">'+hrs.toFixed(1)+'h</td><td style="text-align:right;color:#999;padding:8px 6px">'+(payRate>0?'$'+payRate+'/hr':'—')+'</td><td style="text-align:right;font-weight:700;color:#f5b533;padding:8px 6px">'+(earned>0?'$'+earned.toFixed(2):'—')+'</td></tr></tbody></table>'
+      return label+'<table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:20px"><thead><tr><th style="font-size:9px;padding:5px 6px;color:#999;border-bottom:2px solid #eee">HOURS</th><th style="text-align:right;font-size:9px;padding:5px 6px;color:#999;border-bottom:2px solid #eee">RATE</th><th style="text-align:right;font-size:9px;padding:5px 6px;color:#999;border-bottom:2px solid #eee">EARNED</th></tr></thead><tbody><tr><td style="font-weight:700;padding:8px 6px">'+hrs.toFixed(1)+'h</td><td style="text-align:right;color:#999;padding:8px 6px">'+(payRate>0?'$'+payRate+'/hr':'—')+'</td><td style="text-align:right;font-weight:700;color:#f5b533;padding:8px 6px">'+(earned>0?'$'+earned.toFixed(2):'—')+'</td></tr></tbody></table>' + (invoiceSummary.premium > 0 ? '<div style="font-size:11px;color:#666;margin-top:-10px;margin-bottom:14px">Premium split: '+invoiceSummary.regular.toFixed(2)+'h regular + '+invoiceSummary.premium.toFixed(2)+'h at +'+premiumConfig.percent+'%</div>' : '')
     }
   }).join('<hr style="border:none;border-top:1px solid #eee;margin:0 0 16px">')
 
@@ -163,11 +194,12 @@ function buildPayslipHTML(emp: Employee, empInvoices: Invoice[], dateFrom: strin
   <div class="kpis">
     <div class="kpi"><div class="kpi-v">${empInvoices.length}</div><div class="kpi-l">Invoices</div></div>
     <div class="kpi"><div class="kpi-v">${totalHours.toFixed(1)}h</div><div class="kpi-l">Total Hours</div></div>
-    <div class="kpi"><div class="kpi-v">${payRate>0?'$'+payRate+'/hr':'—'}</div><div class="kpi-l">Pay Rate</div></div>
+    <div class="kpi"><div class="kpi-v">${payRate>0?'$'+payRate+'/hr':'—'}</div><div class="kpi-l">Base Pay Rate</div></div>
+    ${summary.premiumHours > 0 ? `<div class="kpi"><div class="kpi-v">${summary.premiumHours.toFixed(1)}h</div><div class="kpi-l">Premium Hours (+${premiumConfig.percent}%)</div></div>` : ''}
     <div class="kpi"><div class="kpi-v">${payRate>0?'$'+totalUSD.toFixed(2):'—'}</div><div class="kpi-l">Total Earned (USD)</div></div>
     ${totalDOP>0?`<div class="kpi"><div class="kpi-v">RD$${totalDOP.toLocaleString('en-US',{maximumFractionDigits:0})}</div><div class="kpi-l">Total Earned (DOP @ ${dopRate})</div></div>`:''}
   </div>
-  ${sections?sections+'<div style="text-align:right;font-weight:800;font-size:13px;padding:10px 0;border-top:2px solid #111;margin-top:4px">Total &nbsp;&nbsp; '+totalHours.toFixed(1)+'h &nbsp;&nbsp; '+(payRate>0?'$'+totalUSD.toFixed(2):'—')+'</div>':'<p style="color:#999;text-align:center;padding:24px">No invoice data for this period.</p>'}
+  ${sections?sections+'<div style="text-align:right;font-weight:800;font-size:13px;padding:10px 0;border-top:2px solid #111;margin-top:4px">Total &nbsp;&nbsp; '+totalHours.toFixed(1)+'h &nbsp;&nbsp; '+(payRate>0?'$'+totalUSD.toFixed(2):'—')+'</div>' + (summary.premiumHours > 0 ? '<div style="text-align:right;font-size:11px;color:#666">Regular: '+summary.regularHours.toFixed(2)+'h · Premium: '+summary.premiumHours.toFixed(2)+'h at +'+premiumConfig.percent+'%</div>' : ''):'<p style="color:#999;text-align:center;padding:24px">No invoice data for this period.</p>'}
   <div class="footer">YVA Staffing · Bilingual Virtual Professionals · yvastaffing.net</div>
   </body></html>`
 }
@@ -182,12 +214,10 @@ async function printPayslip(emp: Employee, empInvoices: Invoice[], dateFrom: str
 
 async function emailStatement(emp: Employee, empInvoices: Invoice[], dateFrom: string, dateTo: string) {
   const settings = await loadSettings()
-  const payRate = Number(emp.payRate) || 0
   const dopRate = settings.usdToDop || 0
-  const totalHours = empInvoices.reduce((s, inv) =>
-    s + (inv.items||[]).filter(it=>it.employeeName?.toLowerCase()===emp.name.toLowerCase())
-      .reduce((h,it)=>h+(Number(it.hoursTotal)||0),0), 0)
-  const totalUSD = totalHours * payRate
+  const summary = summarizeEmployeeInvoices(emp, empInvoices)
+  const totalHours = summary.hours
+  const totalUSD = summary.totalPay
   const totalDOP = dopRate > 0 ? totalUSD * dopRate : 0
   const period = dateFrom && dateTo ? `${dateFrom} – ${dateTo}` : dateFrom || dateTo || 'All time'
   const companyName = settings.companyName || 'YVA Staffing'
@@ -231,20 +261,16 @@ function EmployeeStatementsPanel({ emp, invoices, onInvoicesChange }: {
 
   const empInvoices = getEmployeeInvoices(emp.name, invoices, dateFrom || undefined, dateTo || undefined)
   const payRate = Number(emp.payRate) || 0
-
-  const totalHours = empInvoices.reduce((s, inv) => {
-    return s + (inv.items || []).filter(it => it.employeeName?.toLowerCase() === emp.name.toLowerCase())
-      .reduce((h, it) => h + (Number(it.hoursTotal) || 0), 0)
-  }, 0)
-  const totalEarned = payRate > 0 ? totalHours * payRate : 0
+  const premiumConfig = employeePremiumConfig(emp)
+  const summary = summarizeEmployeeInvoices(emp, empInvoices)
+  const totalHours = summary.hours
+  const totalEarned = summary.totalPay
 
   const paidCount   = empInvoices.filter(inv => getEmployeePaymentRecord(inv, emp)?.status === 'paid').length
   const pendingCount = empInvoices.length - paidCount
   const totalPaid   = empInvoices.reduce((s, inv) => {
     if (getEmployeePaymentRecord(inv, emp)?.status !== 'paid') return s
-    const items = (inv.items || []).filter(it => it.employeeName?.toLowerCase() === emp.name.toLowerCase())
-    const hrs = items.reduce((h, it) => h + (Number(it.hoursTotal) || 0), 0)
-    return s + hrs * payRate
+    return s + getEmployeeInvoiceItems(emp, inv).reduce((itemTotal, item) => itemTotal + payrollFromInvoiceItem(item, emp).totalPay, 0)
   }, 0)
 
   function showToast(msg: string) {
@@ -263,15 +289,14 @@ function EmployeeStatementsPanel({ emp, invoices, onInvoicesChange }: {
   }
 
   async function markPaid(inv: Invoice) {
-    const hrs = (inv.items || []).filter(it => it.employeeName?.toLowerCase() === emp.name.toLowerCase())
-      .reduce((h, it) => h + (Number(it.hoursTotal) || 0), 0)
+    const payAmount = getEmployeeInvoiceItems(emp, inv).reduce((sum, item) => sum + payrollFromInvoiceItem(item, emp).totalPay, 0)
     const existingPayments = { ...(inv.employeePayments || {}) }
     if (emp.name in existingPayments && emp.id !== emp.name) delete existingPayments[emp.name]
     const updated = invoices.map(i => i.id === inv.id ? {
       ...i,
       employeePayments: {
         ...(i.id === inv.id ? existingPayments : i.employeePayments || {}),
-        [emp.id]: { status: 'paid' as const, paidDate: new Date().toISOString().slice(0,10), amount: hrs * payRate }
+        [emp.id]: { status: 'paid' as const, paidDate: new Date().toISOString().slice(0,10), amount: payAmount }
       }
     } : i)
     onInvoicesChange(updated)
@@ -302,13 +327,13 @@ function EmployeeStatementsPanel({ emp, invoices, onInvoicesChange }: {
 
   const byProject = new Map<string, { hours: number; earned: number }>()
   for (const inv of empInvoices) {
-    const items = (inv.items || []).filter(it => it.employeeName?.toLowerCase() === emp.name.toLowerCase())
+    const items = getEmployeeInvoiceItems(emp, inv)
     const projName = inv.projectName || 'No project'
     const pp = byProject.get(projName) || { hours: 0, earned: 0 }
     for (const it of items) {
-      const h = Number(it.hoursTotal) || 0
-      pp.hours  += h
-      pp.earned += h * (payRate || 0)
+      const payroll = payrollFromInvoiceItem(it, emp)
+      pp.hours  += payroll.totalHours
+      pp.earned += payroll.totalPay
     }
     byProject.set(projName, pp)
   }
@@ -345,7 +370,7 @@ function EmployeeStatementsPanel({ emp, invoices, onInvoicesChange }: {
       </div>
 
       {/* Summary KPIs */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 10 }}>
+      <div className="kpi-grid">
         <div className="settings-stat-card">
           <div className="settings-stat-count">{empInvoices.length}</div>
           <div className="settings-stat-label">Invoices</div>
@@ -356,7 +381,11 @@ function EmployeeStatementsPanel({ emp, invoices, onInvoicesChange }: {
         </div>
         <div className="settings-stat-card">
           <div className="settings-stat-count" style={{ fontSize: 15 }}>{payRate > 0 ? `$${payRate}/hr` : '—'}</div>
-          <div className="settings-stat-label">Pay Rate</div>
+          <div className="settings-stat-label">Base Rate</div>
+        </div>
+        <div className="settings-stat-card">
+          <div className="settings-stat-count" style={{ fontSize: 15 }}>{summary.premiumHours > 0 ? fmtHoursHM(summary.premiumHours) : '—'}</div>
+          <div className="settings-stat-label">{summary.premiumHours > 0 ? `Premium Hrs (+${premiumConfig.percent}%)` : 'Premium Hrs'}</div>
         </div>
         <div className="settings-stat-card">
           <div className="settings-stat-count" style={{ fontSize: 15 }}>{payRate > 0 ? formatMoney(totalEarned) : '—'}</div>
@@ -380,8 +409,16 @@ function EmployeeStatementsPanel({ emp, invoices, onInvoicesChange }: {
         <>
           <div>
             {empInvoices.map(inv => {
-              const items = (inv.items || []).filter(it => it.employeeName?.toLowerCase() === emp.name.toLowerCase())
-              const hrs = items.reduce((h, it) => h + (Number(it.hoursTotal) || 0), 0)
+              const items = getEmployeeInvoiceItems(emp, inv)
+              const invoiceSummary = items.reduce((acc, item) => {
+                const payroll = payrollFromInvoiceItem(item, emp)
+                acc.hrs += payroll.totalHours
+                acc.regular += payroll.regularHours
+                acc.premium += payroll.premiumHours
+                acc.earned += payroll.totalPay
+                return acc
+              }, { hrs: 0, regular: 0, premium: 0, earned: 0 })
+              const hrs = invoiceSummary.hrs
               const invPeriod = inv.billingStart
                 ? `${inv.billingStart}${inv.billingEnd ? ' – ' + inv.billingEnd : ''}`
                 : (inv.date || '—')
@@ -408,6 +445,7 @@ function EmployeeStatementsPanel({ emp, invoices, onInvoicesChange }: {
                     <span style={{ color: 'var(--muted)' }}>·</span>
                     <span style={{ color: 'var(--muted)', fontSize: 11 }}>{invPeriod}</span>
                     <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span style={{ color: 'var(--gold)', fontWeight: 700 }}>{formatMoney(invoiceSummary.earned)}</span>
                       {isPaid ? (
                         <>
                           <span style={{ fontSize: 11, color: '#22c55e', fontWeight: 600 }}>
@@ -427,6 +465,11 @@ function EmployeeStatementsPanel({ emp, invoices, onInvoicesChange }: {
                       )}
                     </span>
                   </div>
+                  {invoiceSummary.premium > 0 && (
+                    <div style={{ padding: '6px 12px', fontSize: 11, color: 'var(--muted)', borderBottom: '1px solid var(--border)' }}>
+                      Premium split: {fmtHoursHM(invoiceSummary.regular)} regular + {fmtHoursHM(invoiceSummary.premium)} at +{premiumConfig.percent}% after {premiumConfig.startTime}
+                    </div>
+                  )}
                   <div className="table-wrap">
                     <table className="data-table">
                       <thead>
@@ -534,6 +577,7 @@ export default function EmployeesPage() {
   const [search, setSearch]     = useState('')
   const [filterStatus, setFilterStatus] = useState('')
   const [teamLayout, setTeamLayout] = useState<'kanban' | 'cards'>('kanban')
+  const [collapsedLanes, setCollapsedLanes] = useState<Set<string>>(new Set())
 
   function persist(next: Employee[]) { setEmployees(next); void saveEmployees(next) }
 
@@ -542,6 +586,11 @@ export default function EmployeesPage() {
     setForm({
       name: e.name, email: e.email ?? '', phone: e.phone ?? '',
       payRate: e.payRate != null ? String(e.payRate) : '',
+      defaultShiftStart: e.defaultShiftStart || '',
+      defaultShiftEnd: e.defaultShiftEnd || '',
+      premiumEnabled: Boolean(e.premiumEnabled),
+      premiumStartTime: e.premiumStartTime || '21:00',
+      premiumPercent: e.premiumPercent != null ? String(e.premiumPercent) : '15',
       role: (e as { role?: string }).role ?? '',
       employmentType: (e as { employmentType?: string }).employmentType ?? '',
       location: (e as { location?: string }).location ?? '',
@@ -580,6 +629,13 @@ export default function EmployeesPage() {
     setModal(null)
   }
   function doDelete(id: string) { persist(employees.filter((e) => e.id !== id)); setConfirmDelete(null) }
+  function toggleLane(id: string) {
+    setCollapsedLanes(prev => {
+      const next = new Set(prev)
+      next.has(id) ? next.delete(id) : next.add(id)
+      return next
+    })
+  }
 
   const filtered = employees.filter((e) => {
     const matchSearch = `${e.name} ${e.email ?? ''} ${(e as {role?:string}).role ?? ''}`.toLowerCase().includes(search.toLowerCase())
@@ -610,7 +666,7 @@ export default function EmployeesPage() {
     const empInvoiceCount = invoices.filter(inv => (inv.items||[]).some(it => it.employeeName?.toLowerCase() === employee.name.toLowerCase())).length
     const empNum = employee.employeeNumber
     return (
-      <div key={key || employee.id} className="entity-card" style={{ borderTop: `2px solid ${statusColor(employee.status)}`, cursor: 'pointer' }} onClick={() => navigate('/employees/' + employee.id)}>
+      <div key={key || employee.id} className="entity-card compact" style={{ borderTop: `2px solid ${statusColor(employee.status)}`, cursor: 'pointer' }} onClick={() => navigate('/employees/' + employee.id)}>
         <div className="card-top">
           <div className="card-top-left">
             <div className="avatar" style={{ background: color }}>{initials(employee.name)}</div>
@@ -626,6 +682,18 @@ export default function EmployeesPage() {
             <div className="stat-item">
               <div className="stat-label">Pay Rate</div>
               <div className="stat-value stat-value-gold">${employee.payRate}/hr</div>
+            </div>
+          )}
+          {showPayRates && employee.premiumEnabled && (
+            <div className="stat-item">
+              <div className="stat-label">Premium</div>
+              <div className="stat-value">{`+${employee.premiumPercent || 0}% after ${employee.premiumStartTime || '21:00'}`}</div>
+            </div>
+          )}
+          {showPayRates && (employee.defaultShiftStart || employee.defaultShiftEnd) && (
+            <div className="stat-item">
+              <div className="stat-label">Default Shift</div>
+              <div className="stat-value">{`${employee.defaultShiftStart || '—'} to ${employee.defaultShiftEnd || '—'}`}</div>
             </div>
           )}
           {(employee as {employmentType?:string}).employmentType && (
@@ -677,11 +745,6 @@ export default function EmployeesPage() {
           <p className="page-sub">{employees.length} member{employees.length !== 1 ? 's' : ''}</p>
         </div>
         <div className="page-header-actions">
-          <input className="form-input" style={{ width: 190 }} placeholder="Search team..." value={search} onChange={(e) => setSearch(e.target.value)} />
-          <select className="form-select" style={{ width: 130 }} value={filterStatus} onChange={e => setFilterStatus(e.target.value)}>
-            <option value="">All statuses</option>
-            {STATUS_OPTIONS.map(s => <option key={s} value={s}>{s}</option>)}
-          </select>
           <div style={{ display: 'flex', gap: 6 }}>
             <button className="btn-ghost btn-sm" style={{ borderColor: teamLayout === 'kanban' ? 'var(--gold)' : undefined, color: teamLayout === 'kanban' ? 'var(--gold)' : undefined }} onClick={() => setTeamLayout('kanban')}>
               Project Board
@@ -692,6 +755,17 @@ export default function EmployeesPage() {
           </div>
           <button className="btn-primary" onClick={openAdd}>+ Add Member</button>
         </div>
+      </div>
+
+      <div className="filter-bar">
+        <input className="form-input filter-input-sm" placeholder="Search team..." value={search} onChange={(e) => setSearch(e.target.value)} />
+        <select className="form-select filter-select-sm" value={filterStatus} onChange={e => setFilterStatus(e.target.value)}>
+          <option value="">All statuses</option>
+          {STATUS_OPTIONS.map(s => <option key={s} value={s}>{s}</option>)}
+        </select>
+        <span className="toolbar-spacer pill-meta">
+          {filtered.length} showing
+        </span>
       </div>
 
       {/* Capacity toggle */}
@@ -729,10 +803,8 @@ export default function EmployeesPage() {
                       const d = inv.date || inv.billingEnd || ''
                       return d >= monthStart && d <= monthEnd && (inv.items||[]).some(it => it.employeeName?.toLowerCase() === e.name.toLowerCase())
                     })
-                    const monthHours  = monthInvs.reduce((s, inv) =>
-                      s + (inv.items||[]).filter(it=>it.employeeName?.toLowerCase()===e.name.toLowerCase())
-                        .reduce((h,it)=>h+(Number(it.hoursTotal)||0),0), 0)
-                    const payRate = Number(e.payRate) || 0
+                    const monthSummary = summarizeEmployeeInvoices(e, monthInvs)
+                    const monthHours  = monthSummary.hours
                     return (
                       <tr key={e.id}>
                         <td className="td-name">{e.name}</td>
@@ -745,7 +817,7 @@ export default function EmployeesPage() {
                             ))}
                         </td>
                         <td style={{textAlign:'right',fontWeight:600}}>{monthHours > 0 ? `${monthHours.toFixed(1)}h` : '—'}</td>
-                        {showPayRates && <td style={{textAlign:'right',color:'var(--gold)',fontWeight:700}}>{monthHours > 0 && payRate > 0 ? formatMoney(monthHours*payRate) : '—'}</td>}
+                        {showPayRates && <td style={{textAlign:'right',color:'var(--gold)',fontWeight:700}}>{monthHours > 0 ? formatMoney(monthSummary.totalPay) : '—'}</td>}
                       </tr>
                     )
                   })}
@@ -757,26 +829,40 @@ export default function EmployeesPage() {
       })()}
 
       {teamLayout === 'kanban' ? (
-        <div style={{ display: 'grid', gridAutoFlow: 'column', gridAutoColumns: 'minmax(280px, 320px)', gap: 14, overflowX: 'auto', paddingBottom: 8 }}>
+        <div className="kanban-lanes">
           {projectColumns.map(column => (
-            <div key={column.id} style={{ background: 'var(--surf)', border: '1px solid var(--border)', borderRadius: 12, minHeight: 320, display: 'flex', flexDirection: 'column' }}>
-              <div style={{ padding: '14px 14px 10px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+            <div key={column.id} className="team-lane">
+              <div className="team-lane-header">
                 <div>
-                  <div style={{ fontSize: 13, fontWeight: 800 }}>{column.name}</div>
-                  <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2 }}>
+                  <div className="team-lane-title">{column.name}</div>
+                  <div className="team-lane-sub">
                     {column.employees.length} member{column.employees.length !== 1 ? 's' : ''}
                   </div>
                 </div>
+                <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                  <span className="pill-meta">{column.employees.length}</span>
+                  <button
+                    type="button"
+                    className="lane-toggle"
+                    onClick={() => toggleLane(column.id)}
+                    aria-label={collapsedLanes.has(column.id) ? `Expand ${column.name}` : `Collapse ${column.name}`}
+                    title={collapsedLanes.has(column.id) ? 'Expand lane' : 'Collapse lane'}
+                  >
+                    {collapsedLanes.has(column.id) ? '+' : '−'}
+                  </button>
+                </div>
               </div>
-              <div style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 12 }}>
+              {!collapsedLanes.has(column.id) && (
+              <div className="team-lane-body">
                 {column.employees.length === 0 ? (
-                  <div style={{ border: '1px dashed var(--border)', borderRadius: 10, padding: 18, textAlign: 'center', fontSize: 12, color: 'var(--muted)' }}>
+                  <div className="team-lane-empty">
                     No team members in this lane.
                   </div>
                 ) : (
                   column.employees.map(employee => renderEmployeeCard(employee, `${column.id}-${employee.id}`))
                 )}
               </div>
+              )}
             </div>
           ))}
         </div>
@@ -784,8 +870,9 @@ export default function EmployeesPage() {
         <div className="card-grid">
           {filtered.map(employee => renderEmployeeCard(employee))}
           {filtered.length === 0 && (
-            <div style={{ gridColumn: '1/-1', textAlign: 'center', padding: '48px 20px', color: 'var(--muted)', fontSize: 14 }}>
-              {search || filterStatus ? 'No results.' : 'No team members yet. Add your first.'}
+            <div className="empty-state" style={{ gridColumn: '1/-1' }}>
+              <div className="empty-state-title">{search || filterStatus ? 'No team members match these filters.' : 'No team members yet.'}</div>
+              <div className="empty-state-copy">{search || filterStatus ? 'Try clearing the search or status filter.' : 'Add your first employee to start tracking staffing, projects, and statements.'}</div>
             </div>
           )}
         </div>
@@ -848,6 +935,60 @@ export default function EmployeesPage() {
                     <input className="form-input" type="number" value={form.payRate} onChange={(e) => setForm({ ...form, payRate: e.target.value })} placeholder="4.50" />
                   </div>
                 )}
+                {showPayRates && (
+                  <>
+                    <div className="form-group">
+                      <label className="form-label">Default Shift Start</label>
+                      <input
+                        className="form-input"
+                        type="text"
+                        value={form.defaultShiftStart}
+                        onChange={(e) => setForm({ ...form, defaultShiftStart: e.target.value })}
+                        onBlur={(e) => setForm({ ...form, defaultShiftStart: normalizeClockInput(e.target.value) })}
+                        placeholder="4:00 pm"
+                      />
+                    </div>
+                    <div className="form-group">
+                      <label className="form-label">Default Shift End</label>
+                      <input
+                        className="form-input"
+                        type="text"
+                        value={form.defaultShiftEnd}
+                        onChange={(e) => setForm({ ...form, defaultShiftEnd: e.target.value })}
+                        onBlur={(e) => setForm({ ...form, defaultShiftEnd: normalizeClockInput(e.target.value) })}
+                        placeholder="12:00 am"
+                      />
+                    </div>
+                  </>
+                )}
+                {showPayRates && (
+                  <div className="form-group">
+                    <label className="form-label">Premium Rule</label>
+                    <select className="form-select" value={form.premiumEnabled ? 'night' : ''} onChange={(e) => setForm({ ...form, premiumEnabled: e.target.value === 'night' })}>
+                      <option value="">No premium pay</option>
+                      <option value="night">Night shift premium</option>
+                    </select>
+                  </div>
+                )}
+                {showPayRates && form.premiumEnabled && (
+                  <>
+                    <div className="form-group">
+                      <label className="form-label">Premium Starts At</label>
+                      <input
+                        className="form-input"
+                        type="text"
+                        value={form.premiumStartTime}
+                        onChange={(e) => setForm({ ...form, premiumStartTime: e.target.value })}
+                        onBlur={(e) => setForm({ ...form, premiumStartTime: normalizeClockInput(e.target.value) || '21:00' })}
+                        placeholder="9:00 pm"
+                      />
+                    </div>
+                    <div className="form-group">
+                      <label className="form-label">Premium Increase %</label>
+                      <input className="form-input" type="number" value={form.premiumPercent} onChange={(e) => setForm({ ...form, premiumPercent: e.target.value })} placeholder="15" />
+                    </div>
+                  </>
+                )}
                 <div className="form-group">
                   <label className="form-label">Status</label>
                   <select className="form-select" value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}>
@@ -882,6 +1023,16 @@ export default function EmployeesPage() {
               {modal === 'add' && (
                 <div style={{ marginTop: 10, fontSize: 12, color: 'var(--muted)' }}>
                   Employee number will be auto-assigned (e.g. YVA25001) on save.
+                </div>
+              )}
+              {showPayRates && form.premiumEnabled && (
+                <div style={{ marginTop: 10, fontSize: 12, color: 'var(--muted)' }}>
+                  Example: a 4:00 pm to 12:00 am shift with a {form.premiumPercent || '15'}% premium starting at {form.premiumStartTime || '21:00'} will split 5 regular hours and 3 premium hours automatically.
+                </div>
+              )}
+              {showPayRates && (form.defaultShiftStart || form.defaultShiftEnd) && (
+                <div style={{ marginTop: 6, fontSize: 12, color: 'var(--muted)' }}>
+                  Saved schedule: {form.defaultShiftStart || '—'} to {form.defaultShiftEnd || '—'}. Invoice rows for this employee will auto-fill these times.
                 </div>
               )}
 
