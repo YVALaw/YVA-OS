@@ -173,7 +173,7 @@ function buildRaw(to: string, subject: string, body: string, from: string): stri
   const msg = [
     `From: ${from}`,
     `To: ${to}`,
-    `Subject: ${subject}`,
+    `Subject: ${encodeMimeHeader(subject)}`,
     'MIME-Version: 1.0',
     'Content-Type: text/plain; charset=utf-8',
     '',
@@ -193,6 +193,11 @@ function utf8ToBase64Url(value: string): string {
     .replace(/=/g, '')
 }
 
+function encodeMimeHeader(value: string): string {
+  if (!/[^\x20-\x7E]/.test(value)) return value
+  return `=?UTF-8?B?${utf8ToBase64(value)}?=`
+}
+
 function buildRawWithAttachments(
   to: string,
   subject: string,
@@ -204,7 +209,7 @@ function buildRawWithAttachments(
   const parts = [
     `From: ${from}`,
     `To: ${to}`,
-    `Subject: ${subject}`,
+    `Subject: ${encodeMimeHeader(subject)}`,
     'MIME-Version: 1.0',
     `Content-Type: multipart/mixed; boundary="${boundary}"`,
     '',
