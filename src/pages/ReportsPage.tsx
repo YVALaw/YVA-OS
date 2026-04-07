@@ -153,6 +153,33 @@ export default function ReportsPage() {
     return true
   }).sort((a, b) => (Number(b.subtotal)||0) - (Number(a.subtotal)||0)), [store.invoices, from, to])
 
+  const invoiceNetBreakdown = useMemo(() => {
+    return invoicesInRange
+      .map(inv => {
+        const estPayroll = (inv.items || []).reduce((sum, item) => {
+          const employee = store.employees.find(emp => emp.name?.toLowerCase() === item.employeeName?.toLowerCase())
+          const payRate = Number(employee?.payRate) || 0
+          return sum + ((Number(item.hoursTotal) || 0) * payRate)
+        }, 0)
+        const billed = Number(inv.subtotal) || 0
+        return {
+          id: inv.id,
+          number: inv.number,
+          clientName: inv.clientName || '—',
+          projectName: inv.projectName || '—',
+          billed,
+          estPayroll,
+          net: billed - estPayroll,
+          date: inv.date || inv.billingEnd || inv.billingStart || '',
+        }
+      })
+      .sort((a, b) => {
+        const dateCmp = (b.date || '').localeCompare(a.date || '')
+        if (dateCmp !== 0) return dateCmp
+        return b.number.localeCompare(a.number, undefined, { numeric: true, sensitivity: 'base' })
+      })
+  }, [invoicesInRange, store.employees])
+
   // Build bar chart data (last 6 months from ALL invoices, not filtered range)
   const chartData = useMemo(() => {
     const months = getLast6Months()
@@ -900,6 +927,46 @@ export default function ReportsPage() {
           </div>
         </div>
       </div>}
+
+      {can.viewOwnerStats(role) && (
+        <div className="data-card">
+          <div className="data-card-title">Net Earnings by Invoice</div>
+          <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 12 }}>
+            Net per invoice = billed amount minus estimated payroll for the employees on that invoice. General business expenses are not allocated here.
+          </div>
+          <div className="table-wrap">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Invoice</th>
+                  <th>Client</th>
+                  <th>Project</th>
+                  <th>Date</th>
+                  <th style={{ textAlign: 'right' }}>Billed</th>
+                  <th style={{ textAlign: 'right' }}>Est. Payroll</th>
+                  <th style={{ textAlign: 'right' }}>Net</th>
+                </tr>
+              </thead>
+              <tbody>
+                {invoiceNetBreakdown.slice(0, 20).map(row => (
+                  <tr key={row.id}>
+                    <td className="td-name">{row.number}</td>
+                    <td>{row.clientName}</td>
+                    <td className="td-muted">{row.projectName}</td>
+                    <td className="td-muted">{row.date || '—'}</td>
+                    <td style={{ textAlign: 'right', fontWeight: 700 }}>{formatMoney(row.billed)}</td>
+                    <td style={{ textAlign: 'right', color: '#f87171', fontWeight: 700 }}>{formatMoney(row.estPayroll)}</td>
+                    <td style={{ textAlign: 'right', color: row.net >= 0 ? '#4ade80' : '#f87171', fontWeight: 800 }}>{formatMoney(row.net)}</td>
+                  </tr>
+                ))}
+                {invoiceNetBreakdown.length === 0 && (
+                  <tr><td colSpan={7} className="td-empty">No invoices in range.</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       {/* Employee Performance */}
       {computed.employeePerformance.length > 0 && (
