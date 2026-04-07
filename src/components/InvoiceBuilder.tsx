@@ -47,6 +47,12 @@ function parseHours(val: string): number {
     const [h, m] = v.split(':')
     return (parseInt(h, 10) || 0) + (parseInt(m, 10) || 0) / 60
   }
+  const minuteStyle = v.match(/^(\d+)\.(\d{2})$/)
+  if (minuteStyle) {
+    const hours = parseInt(minuteStyle[1], 10) || 0
+    const minutes = parseInt(minuteStyle[2], 10) || 0
+    if (minutes < 60) return hours + minutes / 60
+  }
   return parseFloat(v) || 0
 }
 
