@@ -278,7 +278,8 @@ export async function sendEmail(
   if (!to) return { mode: 'mailto', attached: false }
   const attachments = options?.attachments || []
   let fallbackReason: string | undefined
-  if (await isGmailConnected()) {
+  const connected = await isGmailConnected()
+  if (connected) {
     try {
       await sendGmailMessage(to, subject, body, attachments)
       return { mode: 'gmail', attached: attachments.length > 0 }
@@ -286,6 +287,8 @@ export async function sendEmail(
       console.error('Gmail send failed, falling back to mailto:', err)
       fallbackReason = err instanceof Error ? err.message : 'Gmail send failed'
     }
+  } else {
+    fallbackReason = 'Gmail is not connected for the current signed-in session'
   }
   if (attachments.length > 0) {
     for (const attachment of attachments) downloadAttachment(attachment)
