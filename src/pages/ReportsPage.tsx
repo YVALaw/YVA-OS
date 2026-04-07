@@ -196,6 +196,9 @@ export default function ReportsPage() {
   // Overdue + unpaid attention items
   const overdueInvoices = store.invoices.filter(inv => (inv.status || '').toLowerCase() === 'overdue')
   const draftInvoices   = store.invoices.filter(inv => (inv.status || '').toLowerCase() === 'draft')
+  const allUnpaidInvoices = useMemo(() => store.invoices
+    .filter(inv => !['paid', 'draft'].includes((inv.status || 'draft').toLowerCase()))
+    .sort((a, b) => (b.dueDate || b.date || '').localeCompare(a.dueDate || a.date || '')), [store.invoices])
 
   // Employee anniversary alerts — employees hitting a milestone this year (1, 2, 3, 5, 10+ years)
   const anniversaries = useMemo(() => {
@@ -791,8 +794,8 @@ export default function ReportsPage() {
             </div>
             <div className="kpi-card" style={cardStyle} onClick={() => setKpiDrill('unpaid')}>
               <div className="kpi-label">Unpaid</div>
-              <div className="kpi-value kpi-value-warn">{computed.unpaidCount}</div>
-              <div className="kpi-sub">awaiting payment</div>
+              <div className="kpi-value kpi-value-warn">{allUnpaidInvoices.length}</div>
+              <div className="kpi-sub">all unpaid invoices</div>
             </div>
             <div className="kpi-card" style={cardStyle} onClick={() => setKpiDrill('topClient')}>
               <div className="kpi-label">Top Client</div>
@@ -927,46 +930,6 @@ export default function ReportsPage() {
           </div>
         </div>
       </div>}
-
-      {can.viewOwnerStats(role) && (
-        <div className="data-card">
-          <div className="data-card-title">Net Earnings by Invoice</div>
-          <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 12 }}>
-            Net per invoice = billed amount minus estimated payroll for the employees on that invoice. General business expenses are not allocated here.
-          </div>
-          <div className="table-wrap">
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>Invoice</th>
-                  <th>Client</th>
-                  <th>Project</th>
-                  <th>Date</th>
-                  <th style={{ textAlign: 'right' }}>Billed</th>
-                  <th style={{ textAlign: 'right' }}>Est. Payroll</th>
-                  <th style={{ textAlign: 'right' }}>Net</th>
-                </tr>
-              </thead>
-              <tbody>
-                {invoiceNetBreakdown.slice(0, 20).map(row => (
-                  <tr key={row.id}>
-                    <td className="td-name">{row.number}</td>
-                    <td>{row.clientName}</td>
-                    <td className="td-muted">{row.projectName}</td>
-                    <td className="td-muted">{row.date || '—'}</td>
-                    <td style={{ textAlign: 'right', fontWeight: 700 }}>{formatMoney(row.billed)}</td>
-                    <td style={{ textAlign: 'right', color: '#f87171', fontWeight: 700 }}>{formatMoney(row.estPayroll)}</td>
-                    <td style={{ textAlign: 'right', color: row.net >= 0 ? '#4ade80' : '#f87171', fontWeight: 800 }}>{formatMoney(row.net)}</td>
-                  </tr>
-                ))}
-                {invoiceNetBreakdown.length === 0 && (
-                  <tr><td colSpan={7} className="td-empty">No invoices in range.</td></tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
 
       {/* Employee Performance */}
       {computed.employeePerformance.length > 0 && (
@@ -1404,21 +1367,22 @@ export default function ReportsPage() {
             .map(e => ({ label: e.description, sub: `${e.date || ''}${e.category ? ' · ' + e.category : ''}`, right: formatMoney(Number(e.amount)||0) }))
         } else if (kpiDrill === 'net') {
           title = 'Net Earnings — Breakdown'
-          items = [
-            { label: 'Total Billed',       right: formatMoney(computed.totalBilled) },
-            { label: 'Est. Payroll',        right: `− ${formatMoney(computed.totalPayroll)}` },
-            { label: 'Business Expenses',   right: `− ${formatMoney(totalExpenses)}` },
-            { label: 'Net Earnings',        right: formatMoney(netAfterExpenses), sub: netAfterExpenses >= 0 ? 'Positive' : 'Negative' },
-          ]
+          summary = `Overall: ${formatMoney(computed.totalBilled)} billed − ${formatMoney(computed.totalPayroll)} payroll − ${formatMoney(totalExpenses)} expenses = ${formatMoney(netAfterExpenses)}`
+          items = invoiceNetBreakdown.map(row => ({
+            label: `${row.number} — ${row.clientName}`,
+            sub: `${row.projectName} · ${row.date || 'No date'} · Billed ${formatMoney(row.billed)} · Payroll ${formatMoney(row.estPayroll)}`,
+            right: formatMoney(row.net),
+            nav: navInv(store.invoices.find(inv => inv.id === row.id) || { id: row.id, number: row.number } as Invoice),
+          }))
         } else if (kpiDrill === 'paid') {
           title = 'Paid Invoices in Range'
           items = invoicesInRange
             .filter(i => (i.status||'').toLowerCase() === 'paid')
             .map(inv => ({ label: `${inv.number} — ${inv.clientName||'—'}`, sub: inv.date||'', right: formatMoney(Number(inv.subtotal)||0), badge: 'badge-green', badgeLabel: 'paid', nav: navInv(inv) }))
         } else if (kpiDrill === 'unpaid') {
-          title = 'Unpaid Invoices in Range'
-          items = invoicesInRange
-            .filter(i => !['paid'].includes((i.status||'').toLowerCase()))
+          title = 'All Unpaid Invoices'
+          summary = `${allUnpaidInvoices.length} unpaid invoice${allUnpaidInvoices.length !== 1 ? 's' : ''} across all periods`
+          items = allUnpaidInvoices
             .map(inv => ({ label: `${inv.number} — ${inv.clientName||'—'}`, sub: inv.dueDate ? `Due ${inv.dueDate}` : (inv.date||''), right: formatMoney(Number(inv.subtotal)||0), badge: sBadge(inv.status), badgeLabel: inv.status||'draft', nav: navInv(inv) }))
         } else if (kpiDrill === 'topClient') {
           title = 'Revenue by Client'
