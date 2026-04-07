@@ -24,6 +24,25 @@ const STATUSES: { key: InvoiceStatus; label: string }[] = [
 
 function uid() { return crypto.randomUUID() }
 
+function parseInvoiceSortValue(value?: string): number {
+  if (!value) return 0
+  const match = value.match(/(\d+)(?!.*\d)/)
+  return match ? parseInt(match[1], 10) : 0
+}
+
+function compareInvoicesDesc(a: Invoice, b: Invoice): number {
+  const byNumber = parseInvoiceSortValue(b.number) - parseInvoiceSortValue(a.number)
+  if (byNumber !== 0) return byNumber
+
+  if ((a.number || '') !== (b.number || '')) {
+    return (b.number || '').localeCompare(a.number || '', undefined, { numeric: true, sensitivity: 'base' })
+  }
+
+  const aDate = a.createdAt || (a.date ? Date.parse(a.date) : 0) || 0
+  const bDate = b.createdAt || (b.date ? Date.parse(b.date) : 0) || 0
+  return bDate - aDate
+}
+
 function statusBadge(s?: string): string {
   switch ((s || '').toLowerCase()) {
     case 'paid':    return 'badge-green'
@@ -439,6 +458,11 @@ export default function InvoicePage() {
       }
       map.get(key)!.invoices.push(inv)
     }
+
+    for (const value of map.values()) {
+      value.invoices.sort(compareInvoicesDesc)
+    }
+
     return Array.from(map.entries())
       .map(([key, val]) => ({ key, ...val }))
       .sort((a, b) => {
