@@ -79,6 +79,7 @@ export default function InvoiceBuilder({ onCreated, onCancel, initialProjectId, 
   const [employees, setEmployees] = useState<Employee[]>([])
   const [clients,   setClients]   = useState<Client[]>([])
   const [projects,  setProjects]  = useState<Project[]>([])
+  const [invoices,  setInvoices]  = useState<Invoice[]>([])
   const [templates, setTemplates] = useState<InvoiceTemplate[]>([])
   const [settings,  setSettings]  = useState<AppSettings>({ usdToDop: 0, companyName: '', companyEmail: '', emailSignature: '' })
 
@@ -87,6 +88,7 @@ export default function InvoiceBuilder({ onCreated, onCancel, initialProjectId, 
       setEmployees(snap.employees)
       setClients(snap.clients)
       setProjects(snap.projects)
+      setInvoices(snap.invoices)
     })
     void loadInvoiceTemplates().then(setTemplates)
     void loadSettings().then(setSettings)
@@ -163,6 +165,21 @@ export default function InvoiceBuilder({ onCreated, onCancel, initialProjectId, 
   const projectEmployees = selectedProject?.employeeIds?.length
     ? employees.filter(e => selectedProject.employeeIds!.includes(e.id))
     : employees
+
+  function nextProjectInvoiceSeq(project: Project, allInvoices: Invoice[]): number {
+    const prefix = projectPrefix(project.name)
+    const maxExisting = allInvoices.reduce((max, invoice) => {
+      const belongsToProject = invoice.projectId === project.id || invoice.projectName === project.name
+      if (!belongsToProject) return max
+      const match = invoice.number?.match(new RegExp(`^${prefix}(\\d+)$`, 'i'))
+      if (!match) return max
+      const seq = parseInt(match[1], 10)
+      return Number.isFinite(seq) ? Math.max(max, seq) : max
+    }, 0)
+    return Math.max(maxExisting + 1, 1)
+  }
+
+  const projectNextSeq = selectedProject ? nextProjectInvoiceSeq(selectedProject, invoices) : null
 
   const grandTotal = rows.reduce((s, r) => s + rowAmount(r, dates), 0)
 
@@ -268,10 +285,11 @@ export default function InvoiceBuilder({ onCreated, onCancel, initialProjectId, 
         let pendingProjectsUpdate: Project[] | null = null
         let pendingInvoiceCounter: number | null = null
         if (selectedProject) {
+          const existingInvoices = await loadInvoices()
           const allProjects = await loadProjects()
           const projIdx = allProjects.findIndex(p => p.id === selectedProject.id)
           const proj = projIdx >= 0 ? allProjects[projIdx] : selectedProject
-          const seq = (proj.nextInvoiceSeq ?? 1)
+          const seq = nextProjectInvoiceSeq(proj, existingInvoices)
           const prefix = projectPrefix(selectedProject.name)
           invNumber = `${prefix}${String(seq).padStart(4, '0')}`
           if (projIdx >= 0) {
@@ -308,6 +326,7 @@ export default function InvoiceBuilder({ onCreated, onCancel, initialProjectId, 
         await saveInvoices([inv, ...existing])
         const fresh = await loadInvoices()
         if (!fresh.some(i => i.id === inv.id)) throw new Error('Invoice creation did not persist.')
+        setInvoices(fresh)
         if (pendingProjectsUpdate) {
           await saveProjects(pendingProjectsUpdate)
         }
@@ -387,7 +406,7 @@ export default function InvoiceBuilder({ onCreated, onCancel, initialProjectId, 
                 {selectedClient.address && <div style={{ fontSize: 11, color: 'var(--muted)' }}>{selectedClient.address}</div>}
                 {selectedProject && (
                   <div style={{ fontSize: 11, color: 'var(--gold)', marginTop: 4 }}>
-                    Next #: {projectPrefix(selectedProject.name)}{String(selectedProject.nextInvoiceSeq ?? 1).padStart(4, '0')}
+                    Next #: {projectPrefix(selectedProject.name)}{String(projectNextSeq ?? 1).padStart(4, '0')}
                   </div>
                 )}
               </>
