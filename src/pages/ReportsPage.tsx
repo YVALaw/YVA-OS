@@ -54,13 +54,18 @@ function getLast6Months(): { label: string; bucket: string }[] {
 
 function BarChart({ data }: { data: { label: string; value: number }[] }) {
   const max = Math.max(...data.map(d => d.value), 1)
+  function fmtBarValue(value: number): string {
+    if (value >= 1000) return `$${(value / 1000).toFixed(1)}k`
+    if (value >= 100) return `$${Math.round(value)}`
+    return `$${value.toFixed(2)}`
+  }
   return (
     <div className="bar-chart-container">
       <div className="bar-chart">
         {data.map((d) => (
           <div key={d.label} className="bar-col">
             {d.value > 0 && (
-              <div className="bar-value">${d.value >= 1000 ? `${(d.value / 1000).toFixed(1)}k` : d.value}</div>
+              <div className="bar-value">{fmtBarValue(d.value)}</div>
             )}
             <div
               className={`bar-fill${d.value === 0 ? ' bar-fill-zero' : ''}`}
