@@ -229,7 +229,19 @@ export async function saveTimesheetBatchInvoices(rows: TimesheetBatchInvoice[]):
 
 export async function saveTimesheetMappings(mappings: TimesheetMapping[]): Promise<void> {
   if (mappings.length === 0) return
-  const rows = mappings.map(mapping => {
+  const deduped = new Map<string, TimesheetMapping>()
+  for (const mapping of mappings) {
+    const sourceValue = typeof mapping.sourceValue === 'string' ? mapping.sourceValue.trim() : ''
+    if (!mapping.userId || !mapping.sourceKind || !sourceValue) continue
+    const key = `${mapping.userId}::${mapping.sourceKind}::${sourceValue.toLowerCase()}`
+    deduped.set(key, {
+      ...mapping,
+      sourceValue,
+    })
+  }
+  if (deduped.size === 0) return
+
+  const rows = Array.from(deduped.values()).map(mapping => {
     const row = toSnake(mapping as unknown as Record<string, unknown>)
     delete row['created_at']
     for (const key of Object.keys(row)) {
