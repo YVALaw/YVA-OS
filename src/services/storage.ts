@@ -2,6 +2,7 @@ import { supabase } from '../lib/supabase'
 import type {
   ActivityLogEntry, AppSettings, Candidate, DataSnapshot,
   Employee, Client, Expense, Invoice, InvoiceTemplate, Project, Task,
+  TimesheetBatchInvoice, TimesheetImportBatch, TimesheetImportRow, TimesheetMapping,
 } from '../data/types'
 
 function formatSupabaseError(action: string, table: string, error: { message?: string; details?: string; hint?: string; code?: string }): Error {
@@ -72,6 +73,20 @@ async function syncAll<T extends { id: string }>(
   }
 }
 
+async function insertMany<T extends Record<string, unknown>>(table: string, items: T[]): Promise<void> {
+  if (items.length === 0) return
+  const rows = items.map(item => {
+    const row = toSnake(item as Record<string, unknown>)
+    delete row['created_at']
+    for (const key of Object.keys(row)) {
+      if (row[key] === '') row[key] = null
+    }
+    return row
+  })
+  const { error } = await supabase.from(table).insert(rows)
+  if (error) throw formatSupabaseError('Insert into', table, error)
+}
+
 // ─── Employees ────────────────────────────────────────────────────────────────
 
 export async function loadEmployees(): Promise<Employee[]> {
@@ -125,6 +140,99 @@ export async function loadCandidates(): Promise<Candidate[]> {
 }
 export async function saveCandidates(candidates: Candidate[]): Promise<void> {
   return syncAll('candidates', candidates)
+}
+
+// ─── Timesheet Automation ────────────────────────────────────────────────────
+
+export async function loadTimesheetImportBatches(limit = 25): Promise<TimesheetImportBatch[]> {
+  const { data, error } = await supabase
+    .from('timesheet_import_batches')
+    .select('*')
+    .order('created_at', { ascending: false })
+    .limit(limit)
+  if (error) throw formatSupabaseError('Load from', 'timesheet_import_batches', error)
+  return (data || []).map(row => toCamel<TimesheetImportBatch>(row as Record<string, unknown>))
+}
+
+export async function loadTimesheetImportRows(batchId: string): Promise<TimesheetImportRow[]> {
+  const { data, error } = await supabase
+    .from('timesheet_import_rows')
+    .select('*')
+    .eq('batch_id', batchId)
+    .order('row_index', { ascending: true })
+  if (error) throw formatSupabaseError('Load from', 'timesheet_import_rows', error)
+  return (data || []).map(row => toCamel<TimesheetImportRow>(row as Record<string, unknown>))
+}
+
+export async function loadTimesheetBatchInvoices(batchId: string): Promise<TimesheetBatchInvoice[]> {
+  const { data, error } = await supabase
+    .from('timesheet_batch_invoices')
+    .select('*')
+    .eq('batch_id', batchId)
+    .order('created_at', { ascending: true })
+  if (error) throw formatSupabaseError('Load from', 'timesheet_batch_invoices', error)
+  return (data || []).map(row => toCamel<TimesheetBatchInvoice>(row as Record<string, unknown>))
+}
+
+export async function loadTimesheetMappings(): Promise<TimesheetMapping[]> {
+  const { data, error } = await supabase
+    .from('timesheet_mappings')
+    .select('*')
+    .order('created_at', { ascending: true })
+  if (error) throw formatSupabaseError('Load from', 'timesheet_mappings', error)
+  return (data || []).map(row => toCamel<TimesheetMapping>(row as Record<string, unknown>))
+}
+
+export async function findTimesheetImportBatchByDedupeKey(dedupeKey: string): Promise<TimesheetImportBatch | null> {
+  const { data, error } = await supabase
+    .from('timesheet_import_batches')
+    .select('*')
+    .eq('dedupe_key', dedupeKey)
+    .maybeSingle()
+  if (error) throw formatSupabaseError('Load from', 'timesheet_import_batches', error)
+  return data ? toCamel<TimesheetImportBatch>(data as Record<string, unknown>) : null
+}
+
+export async function createTimesheetImportBatch(batch: Omit<TimesheetImportBatch, 'id' | 'createdAt' | 'updatedAt'>): Promise<TimesheetImportBatch> {
+  const { data, error } = await supabase
+    .from('timesheet_import_batches')
+    .insert(toSnake(batch as Record<string, unknown>))
+    .select('*')
+    .single()
+  if (error) throw formatSupabaseError('Save to', 'timesheet_import_batches', error)
+  return toCamel<TimesheetImportBatch>(data as Record<string, unknown>)
+}
+
+export async function updateTimesheetImportBatch(id: string, patch: Partial<TimesheetImportBatch>): Promise<void> {
+  const { error } = await supabase
+    .from('timesheet_import_batches')
+    .update(toSnake(patch as Record<string, unknown>))
+    .eq('id', id)
+  if (error) throw formatSupabaseError('Save to', 'timesheet_import_batches', error)
+}
+
+export async function saveTimesheetImportRows(rows: TimesheetImportRow[]): Promise<void> {
+  await insertMany('timesheet_import_rows', rows)
+}
+
+export async function saveTimesheetBatchInvoices(rows: TimesheetBatchInvoice[]): Promise<void> {
+  await insertMany('timesheet_batch_invoices', rows)
+}
+
+export async function saveTimesheetMappings(mappings: TimesheetMapping[]): Promise<void> {
+  if (mappings.length === 0) return
+  const rows = mappings.map(mapping => {
+    const row = toSnake(mapping as unknown as Record<string, unknown>)
+    delete row['created_at']
+    for (const key of Object.keys(row)) {
+      if (row[key] === '') row[key] = null
+    }
+    return row
+  })
+  const { error } = await supabase
+    .from('timesheet_mappings')
+    .upsert(rows, { onConflict: 'user_id,source_kind,source_value' })
+  if (error) throw formatSupabaseError('Save to', 'timesheet_mappings', error)
 }
 
 // ─── Tasks ────────────────────────────────────────────────────────────────────
@@ -239,6 +347,11 @@ const DEFAULT_SETTINGS: AppSettings = {
   companyName: 'YVA Staffing',
   companyEmail: '',
   emailSignature: '',
+  timesheetAutomationEnabled: false,
+  timesheetNotifyEmail: '',
+  timesheetReminderEnabled: false,
+  timesheetReminderDay: 1,
+  timesheetReminderHour: 9,
 }
 
 export async function loadSettings(): Promise<AppSettings> {
@@ -260,6 +373,12 @@ export async function loadSettings(): Promise<AppSettings> {
     statementEmailTemplate: (row.statement_email_template as string | undefined),
     reminderEmailTemplate:  (row.reminder_email_template as string | undefined),
     gmailClientId:          (row.gmail_client_id as string | undefined),
+    timesheetAutomationEnabled: (row.timesheet_automation_enabled as boolean | undefined) ?? false,
+    timesheetNotifyEmail:    (row.timesheet_notify_email as string | undefined) ?? '',
+    timesheetReminderEnabled: (row.timesheet_reminder_enabled as boolean | undefined) ?? false,
+    timesheetReminderDay: row.timesheet_reminder_day != null ? (row.timesheet_reminder_day as number) : 1,
+    timesheetReminderHour: row.timesheet_reminder_hour != null ? (row.timesheet_reminder_hour as number) : 9,
+    timesheetReminderLastSentAt: (row.timesheet_reminder_last_sent_at as string | undefined),
   }
 }
 
@@ -278,6 +397,12 @@ export async function saveSettings(s: AppSettings): Promise<void> {
     statement_email_template: s.statementEmailTemplate ?? null,
     reminder_email_template:  s.reminderEmailTemplate ?? null,
     gmail_client_id:          s.gmailClientId ?? null,
+    timesheet_automation_enabled: s.timesheetAutomationEnabled ?? false,
+    timesheet_notify_email:    s.timesheetNotifyEmail ?? null,
+    timesheet_reminder_enabled: s.timesheetReminderEnabled ?? false,
+    timesheet_reminder_day:     s.timesheetReminderDay ?? 1,
+    timesheet_reminder_hour:    s.timesheetReminderHour ?? 9,
+    timesheet_reminder_last_sent_at: s.timesheetReminderLastSentAt ?? null,
   }).eq('id', 1)
   if (error) throw formatSupabaseError('Save to', 'settings', error)
 }

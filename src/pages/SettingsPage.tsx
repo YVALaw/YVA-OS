@@ -5,10 +5,11 @@ import {
   loadSnapshot, loadExpenses, loadGeneralExpenses,
   saveEmployees, saveClients, saveProjects, saveInvoices,
   saveCandidates, saveInvoiceCounter,
-  loadInvoices, loadUserRoles, upsertUserRole, type UserRoleRow,
+  loadInvoices, loadTimesheetImportBatches, loadUserRoles, upsertUserRole, type UserRoleRow,
 } from '../services/storage'
 import { supabase } from '../lib/supabase'
-import { initiateGmailAuth, disconnectGmail, isGmailConnected } from '../services/gmail'
+import { initiateGmailAuth, disconnectGmail, isGmailConnected, sendEmail } from '../services/gmail'
+import { importTimesheetCsv } from '../services/timesheetAutomation'
 import { useRole } from '../context/RoleContext'
 import { can, ROLE_LABELS, ROLE_OPTIONS } from '../lib/roles'
 
@@ -19,6 +20,39 @@ type InfoDolarBhdResponse = {
   sell: number
   timestamp?: string
   sourceUrl: string
+}
+
+function isoDate(d: Date): string {
+  return d.toISOString().slice(0, 10)
+}
+
+function getLastBillingWeek(): { start: string; end: string } {
+  const today = new Date()
+  const currentDay = today.getDay() // 0=Sun
+  const daysSinceMonday = (currentDay + 6) % 7
+  const thisMonday = new Date(today)
+  thisMonday.setDate(today.getDate() - daysSinceMonday)
+  const lastMonday = new Date(thisMonday)
+  lastMonday.setDate(thisMonday.getDate() - 7)
+  const lastSunday = new Date(thisMonday)
+  lastSunday.setDate(thisMonday.getDate() - 1)
+  return { start: isoDate(lastMonday), end: isoDate(lastSunday) }
+}
+
+const WEEKDAY_OPTIONS = [
+  { value: 1, label: 'Monday' },
+  { value: 2, label: 'Tuesday' },
+  { value: 3, label: 'Wednesday' },
+  { value: 4, label: 'Thursday' },
+  { value: 5, label: 'Friday' },
+  { value: 6, label: 'Saturday' },
+  { value: 0, label: 'Sunday' },
+]
+
+function formatHourOption(hour: number): string {
+  const period = hour >= 12 ? 'PM' : 'AM'
+  const normalized = hour % 12 || 12
+  return `${normalized}:00 ${period}`
 }
 
 type SettingsTab = 'company' | 'email' | 'integrations' | 'currency' | 'notifications' | 'data' | 'access'
@@ -49,10 +83,17 @@ export default function SettingsPage() {
     { label: 'Expenses',   count: 0 },
   ])
   const [importStatus, setImportStatus] = useState<string | null>(null)
+  const [timesheetStatus, setTimesheetStatus] = useState<string | null>(null)
+  const [timesheetReminderStatus, setTimesheetReminderStatus] = useState<string | null>(null)
+  const [testingTimesheetReminder, setTestingTimesheetReminder] = useState(false)
+  const [timesheetBatches, setTimesheetBatches] = useState<Awaited<ReturnType<typeof loadTimesheetImportBatches>>>([])
+  const [billingWeekStart, setBillingWeekStart] = useState(() => getLastBillingWeek().start)
+  const [billingWeekEnd, setBillingWeekEnd] = useState(() => getLastBillingWeek().end)
   const [confirmClear, setConfirmClear] = useState(false)
   const [cleared, setCleared] = useState(false)
   const [fetchingRate, setFetchingRate] = useState(false)
   const [fetchMsg, setFetchMsg] = useState<string | null>(null)
+  const timesheetFileRef = useRef<HTMLInputElement>(null)
   const [activeTab, setActiveTab] = useState<SettingsTab>('company')
   const [notifPerm, setNotifPerm] = useState<NotificationPermission>(
     typeof Notification !== 'undefined' ? Notification.permission : 'default'
@@ -90,6 +131,8 @@ export default function SettingsPage() {
         { label: 'Candidates', count: candidates.length },
         { label: 'Expenses',   count: expenses.length + generalExpenses.length },
       ])
+      const batches = await loadTimesheetImportBatches(10)
+      setTimesheetBatches(batches)
     })()
   }, [activeTab])
 
@@ -176,6 +219,89 @@ export default function SettingsPage() {
       } catch { setImportStatus('Import failed — invalid JSON file.') }
     }
     reader.readAsText(file)
+  }
+
+  function handleTimesheetImport(file: File) {
+    const reader = new FileReader()
+    reader.onload = (e) => {
+      const rawCsv = String(e.target?.result || '')
+      void (async () => {
+        try {
+          setTimesheetStatus('Importing Logwork CSV and creating draft invoices...')
+          const result = await importTimesheetCsv({
+            rawCsv,
+            source: 'logwork',
+            sourceFilename: file.name,
+            billingWeekStart,
+            billingWeekEnd,
+            rawPayload: {
+              source: 'manual-upload',
+              fileName: file.name,
+            },
+          })
+          const notifyTo = (settings.timesheetNotifyEmail || settings.companyEmail || '').trim()
+          let notifyMsg = ''
+          if (notifyTo) {
+            try {
+              if (await isGmailConnected()) {
+                const subject = `Draft invoices ready: ${billingWeekStart} to ${billingWeekEnd}`
+                const body = [
+                  `The Logwork import ${file.name} completed successfully.`,
+                  '',
+                  `Draft invoices created: ${result.invoices.length}`,
+                  `Timesheet rows processed: ${result.rows.length}`,
+                  result.warnings.length ? `Warnings: ${result.warnings.join(' | ')}` : '',
+                  '',
+                  'Open the Invoices screen to review the new drafts before sending.',
+                ].filter(Boolean).join('\n')
+                const sendResult = await sendEmail(notifyTo, subject, body)
+                notifyMsg = sendResult.mode === 'gmail'
+                  ? ' Notification email sent.'
+                  : ` Notification email opened in your mail client.`
+              } else {
+                notifyMsg = ' Notification email skipped because Gmail is not connected.'
+              }
+            } catch (notifyError) {
+              notifyMsg = ` Notification email failed: ${notifyError instanceof Error ? notifyError.message : 'Unknown error'}`
+            }
+          }
+          setTimesheetStatus(
+            (result.invoices.length > 0
+              ? `Created ${result.invoices.length} draft invoice${result.invoices.length !== 1 ? 's' : ''} from ${result.rows.length} timesheet row${result.rows.length !== 1 ? 's' : ''}.${result.warnings.length ? ` ${result.warnings.join(' | ')}` : ''}`
+              : `Imported ${result.rows.length} timesheet row${result.rows.length !== 1 ? 's' : ''}, but no draft invoices were created.${result.warnings.length ? ` ${result.warnings.join(' | ')}` : ''}`) + notifyMsg
+          )
+          const batches = await loadTimesheetImportBatches(10)
+          setTimesheetBatches(batches)
+        } catch (error) {
+          setTimesheetStatus(`Import failed — ${error instanceof Error ? error.message : 'Unknown error'}`)
+        }
+      })()
+    }
+    reader.readAsText(file)
+  }
+
+  async function handleSendTimesheetReminderTest() {
+    setTestingTimesheetReminder(true)
+    setTimesheetReminderStatus(null)
+    try {
+      const res = await fetch('/.netlify/functions/timesheet-reminder', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'test' }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        setTimesheetReminderStatus(`Test reminder failed — ${data?.error || 'Unknown server error'}`)
+      } else {
+        setTimesheetReminderStatus(data?.message || 'Test reminder sent.')
+        const nextSettings = await loadSettings()
+        setSettingsState(nextSettings)
+      }
+    } catch (error) {
+      setTimesheetReminderStatus(`Test reminder failed — ${error instanceof Error ? error.message : 'Unknown error'}`)
+    } finally {
+      setTestingTimesheetReminder(false)
+    }
   }
 
   function exportData() {
@@ -568,10 +694,10 @@ export default function SettingsPage() {
       )}
 
       {/* ── Data ── */}
-      {activeTab === 'data' && (
-        <>
-          <div className="settings-section">
-            <div className="settings-section-title">Data Overview</div>
+        {activeTab === 'data' && (
+          <>
+            <div className="settings-section">
+              <div className="settings-section-title">Data Overview</div>
             <div className="settings-stats-grid">
               {stats.map((s) => (
                 <div key={s.label} className="settings-stat-card">
@@ -580,10 +706,173 @@ export default function SettingsPage() {
                 </div>
               ))}
             </div>
-          </div>
+            </div>
 
-          <div className="settings-section">
-            <div className="settings-section-title">Backup &amp; Restore</div>
+            <div className="settings-section">
+              <div className="settings-section-title">Timesheet Import</div>
+              <div className="settings-row">
+                <div className="settings-row-info">
+                  <div className="settings-row-label">Import tracking enabled</div>
+                  <div className="settings-row-sub">Store raw Logwork CSV files, dedupe imports, and create draft invoices by project.</div>
+                </div>
+                <button
+                  className={settings.timesheetAutomationEnabled ? 'btn-primary btn-sm' : 'btn-ghost btn-sm'}
+                  onClick={() => updateSettings({ timesheetAutomationEnabled: !settings.timesheetAutomationEnabled })}
+                >
+                  {settings.timesheetAutomationEnabled ? 'Enabled' : 'Disabled'}
+                </button>
+              </div>
+              <div className="settings-row">
+                <div className="settings-row-info">
+                  <div className="settings-row-label">Manual import reminder</div>
+                  <div className="settings-row-sub">Emails you only when the last completed Monday-Sunday billing week still has not been imported.</div>
+                </div>
+                <button
+                  className={settings.timesheetReminderEnabled ? 'btn-primary btn-sm' : 'btn-ghost btn-sm'}
+                  onClick={() => updateSettings({ timesheetReminderEnabled: !settings.timesheetReminderEnabled })}
+                >
+                  {settings.timesheetReminderEnabled ? 'Enabled' : 'Disabled'}
+                </button>
+              </div>
+              <div className="settings-row">
+                <div className="settings-row-info">
+                  <div className="settings-row-label">Notification email</div>
+                  <div className="settings-row-sub">Where draft-ready notices should go. Leave blank to use the company email.</div>
+                </div>
+                <input
+                  className="form-input"
+                  style={{ width: 320, fontSize: 12 }}
+                  type="email"
+                  placeholder="you@company.com"
+                  value={settings.timesheetNotifyEmail || ''}
+                  onChange={e => updateSettings({ timesheetNotifyEmail: e.target.value })}
+                />
+              </div>
+              <div className="settings-row">
+                <div className="settings-row-info">
+                  <div className="settings-row-label">Reminder schedule</div>
+                  <div className="settings-row-sub">The server checks once per hour and sends the reminder on your selected day and hour.</div>
+                </div>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                  <select
+                    className="form-select"
+                    style={{ width: 150 }}
+                    value={settings.timesheetReminderDay ?? 1}
+                    onChange={e => updateSettings({ timesheetReminderDay: Number(e.target.value) })}
+                  >
+                    {WEEKDAY_OPTIONS.map(option => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                  <select
+                    className="form-select"
+                    style={{ width: 140 }}
+                    value={settings.timesheetReminderHour ?? 9}
+                    onChange={e => updateSettings({ timesheetReminderHour: Number(e.target.value) })}
+                  >
+                    {Array.from({ length: 24 }, (_, hour) => (
+                      <option key={hour} value={hour}>{formatHourOption(hour)}</option>
+                    ))}
+                  </select>
+                  <button className="btn-ghost btn-sm" onClick={handleSendTimesheetReminderTest} disabled={testingTimesheetReminder}>
+                    {testingTimesheetReminder ? 'Sending...' : 'Send Test'}
+                  </button>
+                </div>
+              </div>
+              {settings.timesheetReminderLastSentAt && (
+                <div className="settings-row-sub" style={{ marginTop: 8 }}>
+                  Last reminder sent: {new Date(settings.timesheetReminderLastSentAt).toLocaleString()}
+                </div>
+              )}
+              <div className="settings-row">
+                <div className="settings-row-info">
+                  <div className="settings-row-label">Billing week</div>
+                  <div className="settings-row-sub">The invoice period is always Monday to Sunday for the selected timesheet batch.</div>
+                </div>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  <input
+                    className="form-input"
+                    style={{ width: 140, fontSize: 12 }}
+                    type="date"
+                    value={billingWeekStart}
+                    onChange={e => setBillingWeekStart(e.target.value)}
+                  />
+                  <input
+                    className="form-input"
+                    style={{ width: 140, fontSize: 12 }}
+                    type="date"
+                    value={billingWeekEnd}
+                    onChange={e => setBillingWeekEnd(e.target.value)}
+                  />
+                </div>
+              </div>
+              <div className="settings-row">
+                <div className="settings-row-info">
+                  <div className="settings-row-label">Import Logwork CSV</div>
+                  <div className="settings-row-sub">Creates draft invoices only. You review and send them from the invoice screen later.</div>
+                </div>
+                <button className="btn-primary btn-sm" onClick={() => timesheetFileRef.current?.click()}>Choose CSV</button>
+                <input
+                  ref={timesheetFileRef}
+                  type="file"
+                  accept=".csv,text/csv"
+                  style={{ display: 'none' }}
+                  onChange={(e) => {
+                    const file = e.target.files?.[0]
+                    if (file) handleTimesheetImport(file)
+                    e.target.value = ''
+                  }}
+                />
+              </div>
+              <div className="settings-row-sub" style={{ marginTop: 8 }}>
+                Export the Logwork CSV manually, upload it here, and review the draft invoices before sending.
+              </div>
+              {timesheetReminderStatus && (
+                <div className={`settings-notice ${timesheetReminderStatus.startsWith('Test reminder failed') ? 'settings-notice-error' : 'settings-notice-success'}`} style={{ marginTop: 12 }}>
+                  {timesheetReminderStatus}
+                </div>
+              )}
+              {timesheetStatus && (
+                <div className={`settings-notice ${timesheetStatus.startsWith('Import failed') ? 'settings-notice-error' : 'settings-notice-success'}`} style={{ marginTop: 12 }}>
+                  {timesheetStatus}
+                </div>
+              )}
+              {timesheetBatches.length > 0 && (
+                <div style={{ marginTop: 16 }}>
+                  <div className="settings-row-label" style={{ marginBottom: 10 }}>Recent imports</div>
+                  <div style={{ display: 'grid', gap: 10 }}>
+                    {timesheetBatches.map(batch => (
+                      <div key={batch.id} className="settings-row" style={{ alignItems: 'flex-start' }}>
+                        <div className="settings-row-info">
+                          <div className="settings-row-label">{batch.sourceFilename || 'Logwork CSV'}</div>
+                          <div className="settings-row-sub">
+                            {batch.billingWeekStart} to {batch.billingWeekEnd} · {batch.status} · {batch.rowCount} rows · {batch.invoiceCount} draft{batch.invoiceCount === 1 ? '' : 's'}
+                          </div>
+                          {batch.errorMessage && <div className="settings-row-sub" style={{ color: '#f59e0b' }}>{batch.errorMessage}</div>}
+                        </div>
+                        <button
+                          className="btn-ghost btn-sm"
+                          onClick={() => {
+                            const blob = new Blob([batch.rawCsv], { type: 'text/csv;charset=utf-8' })
+                            const url = URL.createObjectURL(blob)
+                            const a = document.createElement('a')
+                            a.href = url
+                            a.download = batch.sourceFilename || `timesheet-${batch.billingWeekStart}.csv`
+                            a.click()
+                            URL.revokeObjectURL(url)
+                          }}
+                        >
+                          Download CSV
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="settings-section">
+              <div className="settings-section-title">Backup &amp; Restore</div>
             <div className="settings-row">
               <div className="settings-row-info">
                 <div className="settings-row-label">Export all data</div>

@@ -3,18 +3,17 @@
 ## Project Location
 `C:\Users\cronu\Desktop\Invoice - Copy\yva-os-refactor\`
 
-## Repo Sync Status
-Compared against: `C:\Users\cronu\Desktop\YVA projects in git\YVA-OS\`
-Checked on: `2026-04-06`
-
-Current status:
-- [x] `src/` and `supabase/` are aligned with `YVA-OS`
-- [x] PDF/email attachment flow, employee statement payment flow, sidebar collapse behavior, Banco Popular settings flow, and invoice persistence messaging are now mirrored in both repos
-- [x] This repo remains the deployment/worktree path documented at the top of this file
-
-Remaining repo-local differences:
-- [ ] `CLAUDE.md` still needs to stay path-specific to this repo
-- [ ] Generated files such as `tsconfig.tsbuildinfo` may differ by local build state
+## Current Logic Updates
+- Employee schedule and premium-rate logic now live in the app layer: default shift start/end plus premium start time and premium percent are stored on each employee.
+- Invoice calculations use the saved employee schedule when available. Premium time increases both client billing and employee payroll; missing schedule falls back to regular rate.
+- Daily-grid invoice entries and simple total-hour entries both use the same payroll split logic.
+- Reports payroll CSV now uses premium-aware invoice items instead of raw hours × rate.
+- Hour parsing accepts decimal hours, `h:mm`, and legacy minute-style values like `3.08` meaning `3h 08m`.
+- Candidate conversion now creates the employee record when moved to hired and removes the candidate card once conversion is complete.
+- Gmail auth now uses a Netlify server function for token exchange and refresh; the Google client secret lives in `GMAIL_CLIENT_SECRET` on Netlify, not in the browser.
+- USD→DOP auto-fetch now comes from InfoDolar Banco BHD data via a Netlify function, with manual entry still available.
+- Timesheet automation is now wired for weekly Logwork CSV imports: raw CSV batches are stored in Supabase, rows are normalized into draft invoices grouped by project, billing periods stay Monday-Sunday, and the invoice renderer now shows time-entry start/stop details plus premium-aware bill amounts.
+  - Required Supabase tables/columns for this feature: `timesheet_import_batches`, `timesheet_import_rows`, `timesheet_mappings`, `timesheet_batch_invoices`, plus `settings.timesheet_automation_enabled` and `settings.timesheet_notify_email`.
 
 ## Tech Stack
 - React 18 + TypeScript + Vite
@@ -91,8 +90,10 @@ All data is scoped to the authenticated user via Supabase RLS.
   - Per-employee daily hours grid OR simple total hours mode
   - Auto-generates invoice number: per-project prefix (FNPR0001) or global INV-001
   - Fields: client, project, invoice date, due date, billing period, notes/message
-  - Supports h:mm and comma-decimal hour formats (8:30 = 8.5h)
+  - Supports h:mm, comma-decimal, and legacy minute-style hour formats (8:30 = 8.5h, 3.08 = 3h08m)
   - Templates: save current form as reusable template, load from list
+  - Employee rows can inherit saved shift start/end and premium pay settings from the employee profile
+  - Daily-grid and simple total-hour entries use the same premium-aware payroll split logic
 - **"Quick Invoice"** → simple modal for fixed-price invoices — always creates as `sent`, auto-emails client
 - When invoice is created via builder or Quick Invoice → status auto-set to `sent` + email auto-sent
 - Invoices page is **project-grouped**: collapsible sections per project, table rows per invoice; Unassigned section at bottom
@@ -123,12 +124,13 @@ All data is scoped to the authenticated user via Supabase RLS.
 ## Employee Statements
 - Each employee card has a "Statements" button
 - Date range filter (From/To) with quick Clear
-- Summary: total hours (h mm), total billed, total payroll cost
+- Summary: total hours (h mm), total billed, premium-adjusted total payroll cost
 - Per-invoice table with Project column
 - Statement invoice rows sort by invoice number descending (latest first)
 - Each invoice row has direct actions for Email and Mark as Paid / Undo
 - Mark as Paid saves immediately with today's date (no modal)
 - Paid state persists in `invoices.employee_payments` JSONB, keyed by employee id
+- Premium split is shown when an employee has a saved premium schedule
 - Email actions show visual confirmation on successful send
 - "Totals by Project" breakdown section
 - Print PDF button in modal footer
@@ -176,11 +178,10 @@ Also shows: Employee Performance table, Revenue by Client/Project, All-Time Clie
 
 ## Currency Conversion
 - Settings page has USD→DOP exchange rate field
-- "Auto-fetch" now targets Banco Popular's `BPDConsultaTasa` API product (`GET /consultaTasa`)
-- Currency tab includes configurable Banco Popular endpoint + subscription key fields for the fetch request
-- Subscription key is stored locally in the browser for the auto-fetch flow; the fetched rate itself is still stored in `settings`
+- "Auto-fetch" button hits a Netlify function that scrapes InfoDolar Banco BHD sell rate
 - Rate stored in `settings` table
 - Shown on invoice cards, PDFs, and portal as `RD$XXXXX`
+- Manual rate entry still works if the fetch fails
 
 ## Notifications
 - Browser Notification API
@@ -197,18 +198,19 @@ Also shows: Employee Performance table, Revenue by Client/Project, All-Time Clie
 - Partial payment amount editable in the status-change modal
 
 ## Gmail Integration
-- Service: `src/services/gmail.ts` — OAuth2 PKCE flow, token refresh, `sendGmailMessage()`, `sendEmail()` (universal)
-- `sendEmail(to, subject, body)` — uses Gmail API if connected, falls back to `mailto:` if not
+- Service: `src/services/gmail.ts` — OAuth2 PKCE flow with Netlify-backed token exchange/refresh, `sendGmailMessage()`, `sendEmail()` (universal)
+- `sendEmail(to, subject, body, attachment?)` — uses Gmail API if connected, falls back to `mailto:` if not
+- Optional attachment support builds multipart/mixed MIME when provided
 - Invoice emails, reminder emails, and employee statement emails attach a generated PDF when Gmail is connected
 - If Gmail is not connected, the app falls back to `mailto:` and downloads the matching PDF so it can be attached manually
 - **Per-user OAuth**: each logged-in user connects their own Gmail account independently
   - `gmailClientId` stored in shared `settings` table (one per org)
   - `gmailAccessToken`, `gmailRefreshToken`, `gmailTokenExpiry`, `gmailEmail` stored in **Supabase user metadata** (`supabase.auth.updateUser({ data: {...} })`)
   - Read via `supabase.auth.getUser()` → `user.user_metadata`
-- **OAuth flow**: User enters Google OAuth Client ID in Settings → clicks "Connect Gmail" → PKCE redirect to Google → callback at `/oauth-callback` → tokens saved to user metadata
+- **OAuth flow**: User enters Google OAuth Client ID in Settings → clicks "Connect Gmail" → PKCE redirect to Google → callback at `/oauth-callback` → token exchange/refresh handled by `/.netlify/functions/gmail-oauth` → tokens saved to user metadata
 - Token auto-refreshes on expiry using stored refresh token
 - Disconnect option in Settings clears all Gmail tokens from user metadata
-- **Setup**: Google Cloud Console → enable Gmail API → OAuth 2.0 Client ID (Web application) → add `{origin}/oauth-callback` as Authorized Redirect URI. The app uses PKCE and only requires the Client ID in Settings.
+- **Setup**: Google Cloud Console → enable Gmail API → OAuth 2.0 Client ID (Web application) → add `{origin}/oauth-callback` as Authorized Redirect URI and set `GMAIL_CLIENT_SECRET` in Netlify
 - All email-sending functions (invoice email, payment reminder, statement email, client reminder) use `sendEmail()` and therefore support Gmail automatically
 
 ## PDF / Print Output
@@ -427,6 +429,7 @@ Current local-only work not yet pushed:
 
 - UI refinement pass across dashboard, invoices, team board, search, and modal layouts remains local-only and has been build-verified.
 - Employee premium/night-shift support is implemented locally.
+- Weekly timesheet import automation is implemented locally and creates draft invoices from Logwork CSVs while storing the raw batch history.
 - Employee profiles and the add/edit employee modal now support:
   - `defaultShiftStart`
   - `defaultShiftEnd`

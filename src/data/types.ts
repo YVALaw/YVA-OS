@@ -85,6 +85,7 @@ export type InvoiceItem = {
   position?: string
   hoursTotal: number
   rate: number
+  billAmount?: number
   shiftStart?: string
   shiftEnd?: string
   regularHours?: number
@@ -92,7 +93,16 @@ export type InvoiceItem = {
   basePayRate?: number
   premiumPercent?: number
   totalPay?: number
+  timeEntries?: InvoiceTimeEntry[]
   daily?: Record<string, string>
+}
+
+export type InvoiceTimeEntry = {
+  date: string
+  startTime?: string
+  endTime?: string
+  hours: number
+  note?: string
 }
 
 export type EmployeePaymentRecord = {
@@ -200,6 +210,76 @@ export type AppSettings = {
   reminderEmailTemplate?: string
   // Gmail OAuth integration
   gmailClientId?: string
+  timesheetAutomationEnabled?: boolean
+  timesheetNotifyEmail?: string
+  timesheetReminderEnabled?: boolean
+  timesheetReminderDay?: number
+  timesheetReminderHour?: number
+  timesheetReminderLastSentAt?: string
+}
+
+export type TimesheetImportStatus = 'received' | 'parsed' | 'drafts_created' | 'ready' | 'error' | 'processed'
+
+export type TimesheetImportBatch = {
+  id: string
+  userId?: string
+  source: string
+  sourceFilename?: string
+  sourceHash: string
+  dedupeKey: string
+  billingWeekStart: string
+  billingWeekEnd: string
+  rawCsv: string
+  rawPayload?: Record<string, unknown>
+  status: TimesheetImportStatus | string
+  rowCount: number
+  projectCount: number
+  invoiceCount: number
+  errorMessage?: string
+  createdAt?: number | string
+  updatedAt?: number | string
+}
+
+export type TimesheetImportRow = {
+  id: string
+  userId?: string
+  batchId: string
+  rowIndex: number
+  rawEmployeeName: string
+  rawProjectName: string
+  employeeId?: string | null
+  projectId?: string | null
+  workDate: string
+  startTime?: string
+  endTime?: string
+  hours: number
+  rate?: number | null
+  amount?: number | null
+  notes?: string
+  matchStatus: 'matched' | 'unmatched' | 'manual' | 'error' | string
+  matchReason?: string
+  createdAt?: number | string
+}
+
+export type TimesheetMapping = {
+  id: string
+  userId?: string
+  sourceKind: 'employee' | 'project'
+  sourceValue: string
+  employeeId?: string | null
+  projectId?: string | null
+  createdAt?: number | string
+}
+
+export type TimesheetBatchInvoice = {
+  id: string
+  userId?: string
+  batchId: string
+  projectId: string
+  invoiceId?: string | null
+  invoiceNumber?: string
+  invoiceStatus: string
+  createdAt?: number | string
 }
 
 export type TaskStatus = 'todo' | 'in-progress' | 'done'

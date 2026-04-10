@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { Invoice } from '../data/types'
+import { formatTimeEntrySummary } from '../utils/timesheet'
 
 type Payload = { inv: Invoice }
 
@@ -97,16 +98,21 @@ export default function PortalPage() {
             </thead>
             <tbody>
               {(inv.items ?? []).map((it, i) => (
-                <tr key={i} style={{ borderBottom: '1px solid #f1f5f9' }}>
-                  <td style={{ padding: '12px', fontSize: 14 }}>
-                    <strong>{it.employeeName}</strong>
-                    {it.position && <span style={{ color: '#888', fontWeight: 400 }}> — {it.position}</span>}
-                  </td>
-                  <td style={{ padding: '12px', textAlign: 'right', fontSize: 14, color: '#555' }}>{it.hoursTotal}h</td>
-                  <td style={{ padding: '12px', textAlign: 'right', fontSize: 14, color: '#555' }}>${it.rate}/hr</td>
-                  <td style={{ padding: '12px', textAlign: 'right', fontSize: 14, fontWeight: 700 }}>{fmtMoney(it.hoursTotal * it.rate)}</td>
-                </tr>
-              ))}
+                  <tr key={i} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                    <td style={{ padding: '12px', fontSize: 14 }}>
+                      <strong>{it.employeeName}</strong>
+                      {it.position && <span style={{ color: '#888', fontWeight: 400 }}> — {it.position}</span>}
+                      {it.timeEntries?.length ? (
+                        <div style={{ color: '#6b7280', fontSize: 11, lineHeight: 1.5, marginTop: 4, whiteSpace: 'pre-line' }}>
+                          {formatTimeEntrySummary(it.timeEntries)}
+                        </div>
+                      ) : null}
+                    </td>
+                    <td style={{ padding: '12px', textAlign: 'right', fontSize: 14, color: '#555' }}>{it.hoursTotal}h</td>
+                    <td style={{ padding: '12px', textAlign: 'right', fontSize: 14, color: '#555' }}>${it.rate}/hr</td>
+                    <td style={{ padding: '12px', textAlign: 'right', fontSize: 14, fontWeight: 700 }}>{fmtMoney(Number(it.billAmount ?? (it.hoursTotal * it.rate)))}</td>
+                  </tr>
+                ))}
             </tbody>
             <tfoot>
               <tr style={{ borderTop: '2px solid #111' }}>

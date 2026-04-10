@@ -10,6 +10,7 @@ import { formatMoney } from '../utils/money'
 import InvoiceBuilder from '../components/InvoiceBuilder'
 import { sendEmail, type SendEmailResult } from '../services/gmail'
 import { htmlToPdfAttachment } from '../utils/pdf'
+import { formatTimeEntrySummaryHtml } from '../utils/timesheet'
 
 type InvoiceStatus = 'draft' | 'sent' | 'viewed' | 'paid' | 'overdue' | 'partial'
 
@@ -90,13 +91,13 @@ function buildInvoiceHTML(inv: Invoice, settings: AppSettings, autoPrint = false
       const dt = new Date(d + 'T12:00:00')
       return '<th style="text-align:center;font-size:9px;padding:6px 2px;min-width:26px">' + dayAbbr[dt.getDay()] + '<br>' + (dt.getMonth()+1) + '/' + dt.getDate() + '</th>'
     }).join('')
-    const bodyRows = (inv.items || []).map(it => {
-      const dayCells = allDates.map(d => {
-        const h = parseH(it.daily?.[d] || '')
-        return '<td style="text-align:center;font-size:11px;color:' + (h > 0 ? '#111' : '#ccc') + '">' + (h > 0 ? (h % 1 === 0 ? String(h) : h.toFixed(1)) : '—') + '</td>'
+      const bodyRows = (inv.items || []).map(it => {
+        const dayCells = allDates.map(d => {
+          const h = parseH(it.daily?.[d] || '')
+          return '<td style="text-align:center;font-size:11px;color:' + (h > 0 ? '#111' : '#ccc') + '">' + (h > 0 ? (h % 1 === 0 ? String(h) : h.toFixed(1)) : '—') + '</td>'
+        }).join('')
+        return '<tr><td style="white-space:nowrap"><strong>' + it.employeeName + '</strong>' + (it.position ? '<br><span style="font-size:10px;color:#888">' + it.position + '</span>' : '') + (it.timeEntries?.length ? '<div style="font-size:10px;color:#6b7280;line-height:1.45;margin-top:4px;white-space:pre-line">' + formatTimeEntrySummaryHtml(it.timeEntries) + '</div>' : '') + '</td>' + dayCells + '<td style="text-align:right;font-weight:700;white-space:nowrap">' + it.hoursTotal + 'h</td><td style="text-align:right;white-space:nowrap">$' + it.rate + '/hr</td><td style="text-align:right;font-weight:700;white-space:nowrap">$' + Number(it.billAmount ?? (it.hoursTotal * it.rate)).toFixed(2) + '</td></tr>'
       }).join('')
-      return '<tr><td style="white-space:nowrap"><strong>' + it.employeeName + '</strong>' + (it.position ? '<br><span style="font-size:10px;color:#888">' + it.position + '</span>' : '') + '</td>' + dayCells + '<td style="text-align:right;font-weight:700;white-space:nowrap">' + it.hoursTotal + 'h</td><td style="text-align:right;white-space:nowrap">$' + it.rate + '/hr</td><td style="text-align:right;font-weight:700;white-space:nowrap">$' + (it.hoursTotal * it.rate).toFixed(2) + '</td></tr>'
-    }).join('')
     const colSpan = allDates.length + 3
     itemsSection = `
     <div style="overflow-x:auto;margin-top:16px">
@@ -109,8 +110,8 @@ function buildInvoiceHTML(inv: Invoice, settings: AppSettings, autoPrint = false
     </div>`
   } else {
     const bodyRows = (inv.items || []).map(it =>
-      '<tr><td><strong>' + it.employeeName + '</strong>' + (it.position ? '<br><span style="font-size:11px;color:#888">' + it.position + '</span>' : '') + '</td><td style="text-align:right">' + it.hoursTotal + 'h</td><td style="text-align:right">$' + it.rate + '/hr</td><td style="text-align:right"><strong>$' + (it.hoursTotal * it.rate).toFixed(2) + '</strong></td></tr>'
-    ).join('')
+      '<tr><td><strong>' + it.employeeName + '</strong>' + (it.position ? '<br><span style="font-size:11px;color:#888">' + it.position + '</span>' : '') + (it.timeEntries?.length ? '<div style="font-size:10px;color:#6b7280;line-height:1.45;margin-top:4px;white-space:pre-line">' + formatTimeEntrySummaryHtml(it.timeEntries) + '</div>' : '') + '</td><td style="text-align:right">' + it.hoursTotal + 'h</td><td style="text-align:right">$' + it.rate + '/hr</td><td style="text-align:right"><strong>$' + Number(it.billAmount ?? (it.hoursTotal * it.rate)).toFixed(2) + '</strong></td></tr>'
+      ).join('')
     itemsSection = `
     <table>
       <thead><tr><th>Team Member</th><th style="text-align:right">Hours</th><th style="text-align:right">Rate</th><th style="text-align:right">Amount</th></tr></thead>

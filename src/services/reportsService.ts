@@ -200,7 +200,7 @@ export function computeReports(store: DataSnapshot, range: DateRange): ReportsRe
       const emp = store.employees.find(e => (item.employeeId && e.id === item.employeeId) || e.name.toLowerCase() === empName.toLowerCase())
       const payroll = payrollFromInvoiceItem(item, emp)
       ep.hours   += h
-      ep.billed  += h * (Number(item.rate) || 0)
+      ep.billed  += Number(item.billAmount ?? (h * (Number(item.rate) || 0))) || 0
       ep.payroll += payroll.totalPay
       ep.invIds.add(inv.id)
     }
