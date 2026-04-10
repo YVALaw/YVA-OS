@@ -11,6 +11,7 @@ import type {
 } from '../data/types'
 import {
   createTimesheetImportBatch,
+  deleteTimesheetImportBatch,
   findTimesheetImportBatchByDedupeKey,
   loadClients,
   loadEmployees,
@@ -442,14 +443,18 @@ export async function importTimesheetCsv(input: TimesheetImportInput): Promise<T
   const duplicate = await findTimesheetImportBatchByDedupeKey(dedupeKey)
   if (duplicate) {
     const batchInvoices = await loadTimesheetBatchInvoices(duplicate.id)
-    const invoiceIds = batchInvoices.map(record => record.invoiceId).filter(Boolean) as string[]
-    const invoices = snapshot.invoices.filter(invoice => invoiceIds.includes(invoice.id))
-    return {
-      batch: duplicate,
-      invoices,
-      rows: [],
-      warnings: ['This timesheet batch was already imported.'],
-      reused: true,
+    if ((duplicate.invoiceCount || 0) === 0 && batchInvoices.length === 0) {
+      await deleteTimesheetImportBatch(duplicate.id)
+    } else {
+      const invoiceIds = batchInvoices.map(record => record.invoiceId).filter(Boolean) as string[]
+      const invoices = snapshot.invoices.filter(invoice => invoiceIds.includes(invoice.id))
+      return {
+        batch: duplicate,
+        invoices,
+        rows: [],
+        warnings: ['This timesheet batch was already imported.'],
+        reused: true,
+      }
     }
   }
 
@@ -681,16 +686,17 @@ export async function importTimesheetCsv(input: TimesheetImportInput): Promise<T
     errorMessage: warnings.size ? Array.from(warnings).join(' | ') : undefined,
   })
 
-  const persistedRows = rows.map(row => ({ ...row, batchId: batch.id }))
-  await saveTimesheetImportRows(persistedRows)
+  try {
+    const persistedRows = rows.map(row => ({ ...row, batchId: batch.id }))
+    await saveTimesheetImportRows(persistedRows)
 
-  const createdInvoices: Invoice[] = []
-  const batchInvoiceRows: TimesheetBatchInvoice[] = []
-  const projectsToSave = snapshot.projects.map(project => ({ ...project }))
-  const existingInvoices = snapshot.invoices.map(invoice => ({ ...invoice }))
-  const usedProjectIds = new Set<string>()
+    const createdInvoices: Invoice[] = []
+    const batchInvoiceRows: TimesheetBatchInvoice[] = []
+    const projectsToSave = snapshot.projects.map(project => ({ ...project }))
+    const existingInvoices = snapshot.invoices.map(invoice => ({ ...invoice }))
+    const usedProjectIds = new Set<string>()
 
-  for (const [projectId, payload] of grouped.entries()) {
+    for (const [projectId, payload] of grouped.entries()) {
     const project = projectsToSave.find(item => item.id === projectId)
     if (!project) continue
 
@@ -732,10 +738,10 @@ export async function importTimesheetCsv(input: TimesheetImportInput): Promise<T
       invoiceNumber: invoice.number,
       invoiceStatus: invoice.status || 'draft',
     })
-  }
+    }
 
-  let unresolvedDraftCount = 0
-  for (const payload of unresolvedGroups.values()) {
+    let unresolvedDraftCount = 0
+    for (const payload of unresolvedGroups.values()) {
     const billingDate = billingEnd || billingStart || new Date().toISOString().slice(0, 10)
     const items = buildInvoiceItems(Array.from(payload.employeeBuckets.values()))
     const subtotal = items.reduce((sum, item) => sum + (Number(item.billAmount ?? item.hoursTotal * item.rate) || 0), 0)
@@ -760,28 +766,35 @@ export async function importTimesheetCsv(input: TimesheetImportInput): Promise<T
     unresolvedDraftCount += 1
     createdInvoices.push(invoice)
     existingInvoices.push(invoice)
-  }
+    }
 
-  if (createdInvoices.length > 0) {
-    await saveInvoices(existingInvoices)
-    await saveProjects(projectsToSave)
-    if (batchInvoiceRows.length > 0) await saveTimesheetBatchInvoices(batchInvoiceRows)
-    await saveTimesheetMappings(matchedMappings)
-  }
+    if (createdInvoices.length > 0) {
+      await saveInvoices(existingInvoices)
+      await saveProjects(projectsToSave)
+      if (batchInvoiceRows.length > 0) await saveTimesheetBatchInvoices(batchInvoiceRows)
+      await saveTimesheetMappings(matchedMappings)
+    }
 
-  await updateTimesheetImportBatch(batch.id, {
-    status: createdInvoices.length > 0 ? 'drafts_created' : 'parsed',
-    rowCount: persistedRows.length,
-    projectCount: usedProjectIds.size,
-    invoiceCount: createdInvoices.length,
-    errorMessage: warnings.size ? Array.from(warnings).join(' | ') : undefined,
-  })
+    await updateTimesheetImportBatch(batch.id, {
+      status: createdInvoices.length > 0 ? 'drafts_created' : 'parsed',
+      rowCount: persistedRows.length,
+      projectCount: usedProjectIds.size,
+      invoiceCount: createdInvoices.length,
+      errorMessage: warnings.size ? Array.from(warnings).join(' | ') : undefined,
+    })
 
-  return {
-    batch: { ...batch, status: createdInvoices.length > 0 ? 'drafts_created' : 'parsed' },
-    invoices: createdInvoices,
-    rows: persistedRows,
-    warnings: Array.from(warnings),
-    reused: false,
+    return {
+      batch: { ...batch, status: createdInvoices.length > 0 ? 'drafts_created' : 'parsed' },
+      invoices: createdInvoices,
+      rows: persistedRows,
+      warnings: Array.from(warnings),
+      reused: false,
+    }
+  } catch (error) {
+    await updateTimesheetImportBatch(batch.id, {
+      status: 'error',
+      errorMessage: error instanceof Error ? error.message : 'Unknown import error',
+    })
+    throw error
   }
 }

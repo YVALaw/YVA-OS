@@ -211,6 +211,14 @@ export async function updateTimesheetImportBatch(id: string, patch: Partial<Time
   if (error) throw formatSupabaseError('Save to', 'timesheet_import_batches', error)
 }
 
+export async function deleteTimesheetImportBatch(id: string): Promise<void> {
+  const { error } = await supabase
+    .from('timesheet_import_batches')
+    .delete()
+    .eq('id', id)
+  if (error) throw formatSupabaseError('Delete from', 'timesheet_import_batches', error)
+}
+
 export async function saveTimesheetImportRows(rows: TimesheetImportRow[]): Promise<void> {
   await insertMany('timesheet_import_rows', rows)
 }
