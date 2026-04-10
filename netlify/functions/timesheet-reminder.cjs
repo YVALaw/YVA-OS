@@ -3,7 +3,7 @@ const { createClient } = require('@supabase/supabase-js')
 const TOKEN_ENDPOINT = 'https://oauth2.googleapis.com/token'
 const GMAIL_SEND_ENDPOINT = 'https://gmail.googleapis.com/gmail/v1/users/me/messages/send'
 const DEFAULT_TIMEZONE = process.env.TIMESHEET_REMINDER_TZ || 'America/New_York'
-const TIMESHEET_REMINDER_ENABLED = false
+const TIMESHEET_REMINDER_ENABLED = true
 
 function json(statusCode, body) {
   return {
@@ -184,9 +184,6 @@ async function sendReminder({ force = false } = {}) {
   const now = new Date()
   const { start, end, local } = lastCompletedBillingWeek(now, timeZone)
 
-  if (!settings.timesheet_automation_enabled) {
-    return { skipped: true, reason: 'Timesheet import tracking is disabled.' }
-  }
   if (!settings.timesheet_reminder_enabled && !force) {
     return { skipped: true, reason: 'Timesheet reminder is disabled.' }
   }
@@ -209,11 +206,6 @@ async function sendReminder({ force = false } = {}) {
     }
   }
 
-  const alreadyImported = await alreadyImportedForWeek(supabase, start, end)
-  if (alreadyImported && !force) {
-    return { skipped: true, reason: `Timesheet for ${start} to ${end} is already imported.` }
-  }
-
   const recipient = String(settings.timesheet_notify_email || settings.company_email || '').trim()
   if (!recipient) throw new Error('timesheet_notify_email or company_email is required')
 
@@ -226,15 +218,14 @@ async function sendReminder({ force = false } = {}) {
 
   const subject = `Manual timesheet import reminder: ${start} to ${end}`
   const body = [
-    `The Logwork timesheet for ${start} to ${end} has not been imported yet.`,
+    `Reminder to draft invoices for the billing week ${start} to ${end}.`,
     '',
     'Next step:',
-    '1. Export the Logwork CSV manually.',
-    '2. Open YVA OS -> Settings -> Data.',
-    '3. Upload the CSV in the Timesheet Import section.',
-    '4. Review the draft invoices before sending.',
+    '1. Review the completed billing week.',
+    '2. Draft the invoices for that period.',
+    '3. Review the draft invoices before sending.',
     '',
-    force ? 'This was triggered as a test reminder.' : 'This reminder was sent automatically because the billing week is still missing.',
+    force ? 'This was triggered as a test reminder.' : 'This reminder was sent automatically on your configured weekly schedule.',
   ].join('\n')
 
   await sendGmailReminder({

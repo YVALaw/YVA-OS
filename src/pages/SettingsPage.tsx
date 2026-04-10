@@ -709,6 +709,89 @@ export default function SettingsPage() {
               </select>
             </div>
           )}
+
+          <div className="settings-row" style={{ marginTop: 12 }}>
+            <div className="settings-row-info">
+              <div className="settings-row-label">Weekly Draft Reminder Email</div>
+              <div className="settings-row-sub">
+                Sends you an email on the selected weekly schedule to remind you to draft invoices for the completed billing week.
+              </div>
+            </div>
+            <button
+              className={settings.timesheetReminderEnabled ? 'btn-primary btn-sm' : 'btn-ghost btn-sm'}
+              onClick={() => updateSettings({ timesheetReminderEnabled: !settings.timesheetReminderEnabled })}
+            >
+              {settings.timesheetReminderEnabled ? 'Enabled' : 'Disabled'}
+            </button>
+          </div>
+
+          <div className="settings-row">
+            <div className="settings-row-info">
+              <div className="settings-row-label">Reminder email</div>
+              <div className="settings-row-sub">Where the weekly draft reminder should go. Leave blank to use the company email.</div>
+            </div>
+            <input
+              className="form-input"
+              style={{ width: 320, fontSize: 12 }}
+              type="email"
+              placeholder="you@company.com"
+              value={settings.timesheetNotifyEmail || ''}
+              onChange={e => updateSettings({ timesheetNotifyEmail: e.target.value })}
+            />
+          </div>
+
+          <div className="settings-row">
+            <div className="settings-row-info">
+              <div className="settings-row-label">Reminder schedule</div>
+              <div className="settings-row-sub">The server checks every 5 minutes and sends the reminder on your selected day and time.</div>
+            </div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+              <select
+                className="form-select"
+                style={{ width: 150 }}
+                value={settings.timesheetReminderDay ?? 1}
+                onChange={e => updateSettings({ timesheetReminderDay: Number(e.target.value) })}
+              >
+                {WEEKDAY_OPTIONS.map(option => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+              <select
+                className="form-select"
+                style={{ width: 140 }}
+                value={settings.timesheetReminderHour ?? 9}
+                onChange={e => updateSettings({ timesheetReminderHour: Number(e.target.value) })}
+              >
+                {Array.from({ length: 24 }, (_, hour) => (
+                  <option key={hour} value={hour}>{formatHourOption(hour)}</option>
+                ))}
+              </select>
+              <select
+                className="form-select"
+                style={{ width: 90 }}
+                value={settings.timesheetReminderMinute ?? 0}
+                onChange={e => updateSettings({ timesheetReminderMinute: Number(e.target.value) })}
+              >
+                {Array.from({ length: 12 }, (_, step) => step * 5).map(minute => (
+                  <option key={minute} value={minute}>:{formatMinuteOption(minute)}</option>
+                ))}
+              </select>
+              <button className="btn-ghost btn-sm" onClick={handleSendTimesheetReminderTest} disabled={testingTimesheetReminder}>
+                {testingTimesheetReminder ? 'Sending...' : 'Send Test'}
+              </button>
+            </div>
+          </div>
+
+          {settings.timesheetReminderLastSentAt && (
+            <div className="settings-row-sub" style={{ marginTop: 8 }}>
+              Last reminder sent: {new Date(settings.timesheetReminderLastSentAt).toLocaleString()}
+            </div>
+          )}
+          {timesheetReminderStatus && (
+            <div className={`settings-notice ${timesheetReminderStatus.startsWith('Test reminder failed') ? 'settings-notice-error' : 'settings-notice-success'}`} style={{ marginTop: 12 }}>
+              {timesheetReminderStatus}
+            </div>
+          )}
         </div>
       )}
 
