@@ -215,6 +215,7 @@ export type AppSettings = {
   timesheetReminderEnabled?: boolean
   timesheetReminderDay?: number
   timesheetReminderHour?: number
+  timesheetReminderMinute?: number
   timesheetReminderLastSentAt?: string
 }
 

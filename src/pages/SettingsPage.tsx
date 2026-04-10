@@ -55,6 +55,10 @@ function formatHourOption(hour: number): string {
   return `${normalized}:00 ${period}`
 }
 
+function formatMinuteOption(minute: number): string {
+  return String(minute).padStart(2, '0')
+}
+
 type SettingsTab = 'company' | 'email' | 'integrations' | 'currency' | 'notifications' | 'data' | 'access'
 
 const ALL_TABS: { id: SettingsTab; label: string; adminOnly?: boolean }[] = [
@@ -751,7 +755,7 @@ export default function SettingsPage() {
               <div className="settings-row">
                 <div className="settings-row-info">
                   <div className="settings-row-label">Reminder schedule</div>
-                  <div className="settings-row-sub">The server checks once per hour and sends the reminder on your selected day and hour.</div>
+                  <div className="settings-row-sub">The server checks every 5 minutes and sends the reminder on your selected day and time.</div>
                 </div>
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
                   <select
@@ -772,6 +776,16 @@ export default function SettingsPage() {
                   >
                     {Array.from({ length: 24 }, (_, hour) => (
                       <option key={hour} value={hour}>{formatHourOption(hour)}</option>
+                    ))}
+                  </select>
+                  <select
+                    className="form-select"
+                    style={{ width: 90 }}
+                    value={settings.timesheetReminderMinute ?? 0}
+                    onChange={e => updateSettings({ timesheetReminderMinute: Number(e.target.value) })}
+                  >
+                    {Array.from({ length: 12 }, (_, step) => step * 5).map(minute => (
+                      <option key={minute} value={minute}>:{formatMinuteOption(minute)}</option>
                     ))}
                   </select>
                   <button className="btn-ghost btn-sm" onClick={handleSendTimesheetReminderTest} disabled={testingTimesheetReminder}>

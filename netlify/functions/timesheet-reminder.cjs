@@ -29,6 +29,7 @@ function formatLocalParts(date, timeZone) {
     month: '2-digit',
     day: '2-digit',
     hour: '2-digit',
+    minute: '2-digit',
     hour12: false,
     weekday: 'short',
   })
@@ -40,6 +41,7 @@ function formatLocalParts(date, timeZone) {
     month: Number(map.month),
     day: Number(map.day),
     hour: Number(map.hour),
+    minute: Number(map.minute),
     weekday: weekdayMap[map.weekday] ?? 0,
     date: `${map.year}-${map.month}-${map.day}`,
   }
@@ -187,12 +189,13 @@ async function sendReminder({ force = false } = {}) {
 
   const reminderDay = Number(settings.timesheet_reminder_day ?? 1)
   const reminderHour = Number(settings.timesheet_reminder_hour ?? 9)
+  const reminderMinute = Number(settings.timesheet_reminder_minute ?? 0)
   const lastSentDate = typeof settings.timesheet_reminder_last_sent_at === 'string'
     ? settings.timesheet_reminder_last_sent_at.slice(0, 10)
     : ''
 
   if (!force) {
-    if (local.weekday !== reminderDay || local.hour !== reminderHour) {
+    if (local.weekday !== reminderDay || local.hour !== reminderHour || local.minute !== reminderMinute) {
       return { skipped: true, reason: 'Current time does not match the configured reminder schedule.' }
     }
     if (lastSentDate === local.date) {
@@ -257,7 +260,7 @@ exports.handler = async function handler(event) {
   if (event.httpMethod === 'GET') {
     return json(200, {
       ok: true,
-      schedule: '0 * * * *',
+      schedule: '*/5 * * * *',
       timezone: getEnv('TIMESHEET_REMINDER_TZ') || DEFAULT_TIMEZONE,
       message: 'Timesheet reminder function is available.',
     })
@@ -281,5 +284,5 @@ exports.handler = async function handler(event) {
 }
 
 exports.config = {
-  schedule: '0 * * * *',
+  schedule: '*/5 * * * *',
 }

@@ -352,6 +352,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   timesheetReminderEnabled: false,
   timesheetReminderDay: 1,
   timesheetReminderHour: 9,
+  timesheetReminderMinute: 0,
 }
 
 export async function loadSettings(): Promise<AppSettings> {
@@ -378,6 +379,7 @@ export async function loadSettings(): Promise<AppSettings> {
     timesheetReminderEnabled: (row.timesheet_reminder_enabled as boolean | undefined) ?? false,
     timesheetReminderDay: row.timesheet_reminder_day != null ? (row.timesheet_reminder_day as number) : 1,
     timesheetReminderHour: row.timesheet_reminder_hour != null ? (row.timesheet_reminder_hour as number) : 9,
+    timesheetReminderMinute: row.timesheet_reminder_minute != null ? (row.timesheet_reminder_minute as number) : 0,
     timesheetReminderLastSentAt: (row.timesheet_reminder_last_sent_at as string | undefined),
   }
 }
@@ -402,6 +404,7 @@ export async function saveSettings(s: AppSettings): Promise<void> {
     timesheet_reminder_enabled: s.timesheetReminderEnabled ?? false,
     timesheet_reminder_day:     s.timesheetReminderDay ?? 1,
     timesheet_reminder_hour:    s.timesheetReminderHour ?? 9,
+    timesheet_reminder_minute:  s.timesheetReminderMinute ?? 0,
     timesheet_reminder_last_sent_at: s.timesheetReminderLastSentAt ?? null,
   }).eq('id', 1)
   if (error) throw formatSupabaseError('Save to', 'settings', error)
