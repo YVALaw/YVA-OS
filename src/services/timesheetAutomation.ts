@@ -273,24 +273,30 @@ function buildNormalizedMappingRows(
   projectName: string,
   projectId: string,
 ): TimesheetMapping[] {
-  return [
-    {
+  const rows: TimesheetMapping[] = []
+  const normalizedEmployee = normalizeLookup(employeeName)
+  const normalizedProject = normalizeLookup(projectName)
+  if (normalizedEmployee) {
+    rows.push({
       id: uid(),
       userId,
       sourceKind: 'employee',
-      sourceValue: normalizeLookup(employeeName),
+      sourceValue: normalizedEmployee,
       employeeId,
       projectId: null,
-    },
-    {
+    })
+  }
+  if (normalizedProject) {
+    rows.push({
       id: uid(),
       userId,
       sourceKind: 'project',
-      sourceValue: normalizeLookup(projectName),
+      sourceValue: normalizedProject,
       employeeId: null,
       projectId,
-    },
-  ]
+    })
+  }
+  return rows
 }
 
 function findByNormalizedName<T extends { id: string; name: string }>(items: T[], value: string): T | undefined {
@@ -343,6 +349,14 @@ function parseCsvRowToCandidate(row: CSVRecord, billingWeekStart: string): {
     amount,
     notes,
   }
+}
+
+function shouldSkipCandidate(candidate: { rawEmployeeName: string; hours: number; startTime: string; endTime: string }): boolean {
+  const employeeKey = normalizeLookup(candidate.rawEmployeeName)
+  if (!employeeKey) return true
+  if (employeeKey === 'total') return true
+  if (candidate.hours <= 0 && !candidate.startTime && !candidate.endTime) return true
+  return false
 }
 
 function employeeAssignedProjects(employee: Employee, projects: Project[]): Project[] {
@@ -502,6 +516,7 @@ export async function importTimesheetCsv(input: TimesheetImportInput): Promise<T
 
   records.forEach((rowRecord, index) => {
     const candidate = parseCsvRowToCandidate(rowRecord, billingStart)
+    if (shouldSkipCandidate(candidate)) return
     const matchedEmployeeMapping = findMapping(existingMappings, 'employee', candidate.rawEmployeeName)
     const matchedProjectMapping = findMapping(existingMappings, 'project', candidate.rawProjectName)
     const employee = matchedEmployeeMapping?.employeeId

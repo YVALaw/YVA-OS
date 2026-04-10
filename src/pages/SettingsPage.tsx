@@ -5,7 +5,7 @@ import {
   loadSnapshot, loadExpenses, loadGeneralExpenses,
   saveEmployees, saveClients, saveProjects, saveInvoices,
   saveCandidates, saveInvoiceCounter,
-  loadInvoices, loadTimesheetImportBatches, loadUserRoles, upsertUserRole, type UserRoleRow,
+  deleteTimesheetImportBatch, loadInvoices, loadTimesheetImportBatches, loadUserRoles, upsertUserRole, type UserRoleRow,
 } from '../services/storage'
 import { supabase } from '../lib/supabase'
 import { initiateGmailAuth, disconnectGmail, isGmailConnected, sendEmail } from '../services/gmail'
@@ -305,6 +305,19 @@ export default function SettingsPage() {
       setTimesheetReminderStatus(`Test reminder failed — ${error instanceof Error ? error.message : 'Unknown error'}`)
     } finally {
       setTestingTimesheetReminder(false)
+    }
+  }
+
+  async function handleDeleteTimesheetBatch(batchId: string) {
+    const confirmed = window.confirm('Delete this uploaded timesheet batch from history? This removes the stored CSV and import record, but does not delete invoices that were already created.')
+    if (!confirmed) return
+    try {
+      await deleteTimesheetImportBatch(batchId)
+      const batches = await loadTimesheetImportBatches(10)
+      setTimesheetBatches(batches)
+      setTimesheetStatus('Timesheet batch deleted from import history.')
+    } catch (error) {
+      setTimesheetStatus(`Import cleanup failed — ${error instanceof Error ? error.message : 'Unknown error'}`)
     }
   }
 
@@ -864,20 +877,29 @@ export default function SettingsPage() {
                           </div>
                           {batch.errorMessage && <div className="settings-row-sub" style={{ color: '#f59e0b' }}>{batch.errorMessage}</div>}
                         </div>
-                        <button
-                          className="btn-ghost btn-sm"
-                          onClick={() => {
-                            const blob = new Blob([batch.rawCsv], { type: 'text/csv;charset=utf-8' })
-                            const url = URL.createObjectURL(blob)
-                            const a = document.createElement('a')
-                            a.href = url
-                            a.download = batch.sourceFilename || `timesheet-${batch.billingWeekStart}.csv`
-                            a.click()
-                            URL.revokeObjectURL(url)
-                          }}
-                        >
-                          Download CSV
-                        </button>
+                        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                          <button
+                            className="btn-ghost btn-sm"
+                            onClick={() => {
+                              const blob = new Blob([batch.rawCsv], { type: 'text/csv;charset=utf-8' })
+                              const url = URL.createObjectURL(blob)
+                              const a = document.createElement('a')
+                              a.href = url
+                              a.download = batch.sourceFilename || `timesheet-${batch.billingWeekStart}.csv`
+                              a.click()
+                              URL.revokeObjectURL(url)
+                            }}
+                          >
+                            Download CSV
+                          </button>
+                          <button
+                            className="btn-ghost btn-sm"
+                            style={{ color: '#f87171' }}
+                            onClick={() => void handleDeleteTimesheetBatch(batch.id)}
+                          >
+                            Delete
+                          </button>
+                        </div>
                       </div>
                     ))}
                   </div>
