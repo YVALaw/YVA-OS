@@ -185,6 +185,28 @@ export default function InvoiceBuilder({ onCreated, onCancel, initialProjectId, 
     ? employees.filter(e => selectedProject.employeeIds!.includes(e.id))
     : employees
 
+  useEffect(() => {
+    if (!selectedProject) return
+    if (selectedProject.clientId && selectedProject.clientId !== clientId) {
+      setClientId(selectedProject.clientId)
+    }
+    if (editInvoice && !editInvoice.projectId) {
+      const nextRate = selectedProject.rate != null && selectedProject.rate !== ''
+        ? String(selectedProject.rate)
+        : ''
+      setRows(prev => prev.map(row => {
+        if (!row.employeeName.trim()) return row
+        const employee = employees.find(e => e.id === row.employeeId) || employees.find(e => e.name === row.employeeName)
+        return {
+          ...row,
+          rate: nextRate || row.rate,
+          shiftStart: employee?.defaultShiftStart || row.shiftStart,
+          shiftEnd: employee?.defaultShiftEnd || row.shiftEnd,
+        }
+      }))
+    }
+  }, [selectedProject?.id, clientId, editInvoice, employees, selectedProject])
+
   function nextProjectInvoiceSeq(project: Project, allInvoices: Invoice[]): number {
     const maxExisting = allInvoices.reduce((max, invoice) => {
       const belongsToProject = invoice.projectId === project.id || invoice.projectName === project.name
@@ -384,8 +406,23 @@ export default function InvoiceBuilder({ onCreated, onCancel, initialProjectId, 
           })
 
         if (editInvoice) {
+          let nextInvNumber = editInvoice.number
+          let pendingProjectsUpdate: Project[] | null = null
+          if (!editInvoice.projectId && selectedProject) {
+            const existingInvoices = await loadInvoices()
+            const allProjects = await loadProjects()
+            const projIdx = allProjects.findIndex(p => p.id === selectedProject.id)
+            const proj = projIdx >= 0 ? allProjects[projIdx] : selectedProject
+            const seq = nextProjectInvoiceSeq(proj, existingInvoices.filter(invoice => invoice.id !== editInvoice.id))
+            nextInvNumber = `${projectPrefix(selectedProject.name)}${String(seq).padStart(4, '0')}`
+            if (projIdx >= 0) {
+              allProjects[projIdx] = { ...proj, nextInvoiceSeq: seq + 1 }
+              pendingProjectsUpdate = allProjects
+            }
+          }
           const inv: Invoice = {
             ...editInvoice,
+            number:        nextInvNumber,
             date,
             dueDate:       dueDate || undefined,
             clientName:    selectedClient?.name    || editInvoice.clientName || '',
@@ -402,6 +439,9 @@ export default function InvoiceBuilder({ onCreated, onCancel, initialProjectId, 
           }
           const existing = await loadInvoices()
           await saveInvoices(existing.map(i => i.id === inv.id ? inv : i))
+          if (pendingProjectsUpdate) {
+            await saveProjects(pendingProjectsUpdate)
+          }
           const fresh = await loadInvoices()
           if (!fresh.some(i => i.id === inv.id)) throw new Error('Invoice update did not persist.')
           onCreated(inv)

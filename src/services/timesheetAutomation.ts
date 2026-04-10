@@ -310,6 +310,7 @@ function findMapping<T extends { sourceKind: 'employee' | 'project'; sourceValue
 function parseCsvRowToCandidate(row: CSVRecord, billingWeekStart: string): {
   rawEmployeeName: string
   rawProjectName: string
+  rawClientName: string
   workDate: string
   startTime: string
   endTime: string
@@ -320,7 +321,8 @@ function parseCsvRowToCandidate(row: CSVRecord, billingWeekStart: string): {
   matchReason?: string
 } {
   const rawEmployeeName = pickValue(row, ['employee', 'employee name', 'name', 'worker', 'staff'])
-  const rawProjectName = pickValue(row, ['project', 'project name', 'job', 'client', 'assignment'])
+  const rawProjectName = pickValue(row, ['project', 'project name', 'job', 'assignment'])
+  const rawClientName = pickValue(row, ['client', 'client name', 'customer'])
   const workDate = parseDateValue(pickValue(row, ['date', 'work date', 'day', 'shift date'])) || billingWeekStart
   const startTime = normalizeClockInput(pickValue(row, ['start', 'start time', 'clock in', 'in', 'from']))
   const endTime = normalizeClockInput(pickValue(row, ['end', 'end time', 'clock out', 'out', 'to']))
@@ -331,6 +333,7 @@ function parseCsvRowToCandidate(row: CSVRecord, billingWeekStart: string): {
   return {
     rawEmployeeName,
     rawProjectName,
+    rawClientName,
     workDate,
     startTime,
     endTime,
@@ -341,6 +344,26 @@ function parseCsvRowToCandidate(row: CSVRecord, billingWeekStart: string): {
   }
 }
 
+function employeeAssignedProjects(employee: Employee, projects: Project[]): Project[] {
+  return projects.filter(project => Array.isArray(project.employeeIds) && project.employeeIds.includes(employee.id))
+}
+
+function inferProjectFromEmployeeAssignment(
+  employee: Employee,
+  projects: Project[],
+  clients: { id: string; name: string }[],
+  rawClientName: string,
+): Project | undefined {
+  const assigned = employeeAssignedProjects(employee, projects)
+  if (assigned.length === 1) return assigned[0]
+  if (!rawClientName) return undefined
+  const client = findByNormalizedName(clients, rawClientName)
+  if (!client) return undefined
+  const matchingAssigned = assigned.filter(project => project.clientId === client.id)
+  if (matchingAssigned.length === 1) return matchingAssigned[0]
+  return undefined
+}
+
 function summarizeInvoiceEntries(entries: InvoiceTimeEntry[]): Record<string, string> {
   const daily: Record<string, number> = {}
   for (const entry of entries) {
@@ -349,6 +372,45 @@ function summarizeInvoiceEntries(entries: InvoiceTimeEntry[]): Record<string, st
   return Object.fromEntries(
     Object.entries(daily).map(([date, hours]) => [date, formatHours(hours)])
   )
+}
+
+function buildInvoiceItems(
+  buckets: Array<{
+    employee: Employee
+    timeEntries: InvoiceTimeEntry[]
+    hours: number
+    payroll: ReturnType<typeof computePayrollBreakdown>
+    billAmount: number
+    billingRate: number
+  }>
+): InvoiceItem[] {
+  return buckets
+    .map(bucket => {
+      const timeEntries = bucket.timeEntries.sort((a, b) => {
+        if (a.date !== b.date) return a.date.localeCompare(b.date)
+        return `${a.startTime || ''}`.localeCompare(b.startTime || '', undefined, { numeric: true, sensitivity: 'base' })
+      })
+      const summarizedDaily = summarizeInvoiceEntries(timeEntries)
+      const payroll = bucket.payroll
+      return {
+        employeeId: bucket.employee.id,
+        employeeName: bucket.employee.name,
+        position: bucket.employee.role || bucket.employee.employmentType || undefined,
+        hoursTotal: bucket.hours,
+        rate: bucket.billingRate,
+        billAmount: bucket.billAmount,
+        shiftStart: bucket.employee.defaultShiftStart || undefined,
+        shiftEnd: bucket.employee.defaultShiftEnd || undefined,
+        regularHours: payroll.regularHours,
+        premiumHours: payroll.premiumHours,
+        basePayRate: payroll.basePayRate,
+        premiumPercent: payroll.premiumPercent,
+        totalPay: payroll.totalPay,
+        timeEntries,
+        daily: summarizedDaily,
+      } satisfies InvoiceItem
+    })
+    .sort((a, b) => a.employeeName.localeCompare(b.employeeName))
 }
 
 export async function importTimesheetCsv(input: TimesheetImportInput): Promise<TimesheetImportResult> {
@@ -399,6 +461,7 @@ export async function importTimesheetCsv(input: TimesheetImportInput): Promise<T
 
   const employeeIndex = snapshot.employees.slice().sort((a, b) => a.name.localeCompare(b.name))
   const projectIndex = snapshot.projects.slice().sort((a, b) => a.name.localeCompare(b.name))
+  const clientIndex = snapshot.clients.slice().sort((a, b) => a.name.localeCompare(b.name))
 
   const rows: TimesheetImportRow[] = []
   const warnings = new Set<string>()
@@ -406,6 +469,20 @@ export async function importTimesheetCsv(input: TimesheetImportInput): Promise<T
   const grouped = new Map<string, {
     project: Project
     projectName: string
+    employeeBuckets: Map<string, {
+      employee: Employee
+      rows: TimesheetImportRow[]
+      timeEntries: InvoiceTimeEntry[]
+      hours: number
+      payroll: ReturnType<typeof computePayrollBreakdown>
+      billAmount: number
+      billingRate: number
+      daily: Record<string, number>
+    }>
+  }>()
+  const unresolvedGroups = new Map<string, {
+    label: string
+    client?: { id: string; name: string; email?: string; address?: string }
     employeeBuckets: Map<string, {
       employee: Employee
       rows: TimesheetImportRow[]
@@ -425,9 +502,13 @@ export async function importTimesheetCsv(input: TimesheetImportInput): Promise<T
     const employee = matchedEmployeeMapping?.employeeId
       ? snapshot.employees.find(emp => emp.id === matchedEmployeeMapping.employeeId)
       : findByNormalizedName(employeeIndex, candidate.rawEmployeeName)
-    const project = matchedProjectMapping?.projectId
+    const explicitProject = matchedProjectMapping?.projectId
       ? snapshot.projects.find(proj => proj.id === matchedProjectMapping.projectId)
       : findByNormalizedName(projectIndex, candidate.rawProjectName)
+    const matchedClient = findByNormalizedName(clientIndex, candidate.rawClientName)
+    const project = explicitProject || (employee
+      ? inferProjectFromEmployeeAssignment(employee, snapshot.projects, snapshot.clients, candidate.rawClientName)
+      : undefined)
 
     const matchReasons: string[] = []
     if (!employee) matchReasons.push(`Unmatched employee: ${candidate.rawEmployeeName || '(blank)'}`)
@@ -439,7 +520,7 @@ export async function importTimesheetCsv(input: TimesheetImportInput): Promise<T
       batchId: 'pending',
       rowIndex: index + 1,
       rawEmployeeName: candidate.rawEmployeeName || '',
-      rawProjectName: candidate.rawProjectName || '',
+      rawProjectName: candidate.rawProjectName || '(blank)',
       employeeId: employee?.id || null,
       projectId: project?.id || null,
       workDate: candidate.workDate,
@@ -455,11 +536,75 @@ export async function importTimesheetCsv(input: TimesheetImportInput): Promise<T
 
     rows.push(storedRow)
     if (matchReasons.length) warnings.add(matchReasons.join(' | '))
-    if (!employee || !project) return
+    if (!employee) return
 
     const premiumConfig = employeePremiumConfig(employee)
     const shiftStart = employee.defaultShiftStart || ''
     const shiftEnd = employee.defaultShiftEnd || ''
+    const rowHours = candidate.hours
+    const payroll = computePayrollBreakdown(rowHours, employee, shiftStart, shiftEnd)
+
+    if (!project) {
+      const unresolvedKey = matchedClient?.id || normalizeLookup(candidate.rawClientName) || employee.id
+      const unresolvedGroup = unresolvedGroups.get(unresolvedKey) || {
+        label: matchedClient?.name || candidate.rawClientName || 'Unassigned project review',
+        client: matchedClient
+          ? {
+              id: matchedClient.id,
+              name: matchedClient.name,
+              email: matchedClient.email,
+              address: matchedClient.address,
+            }
+          : undefined,
+        employeeBuckets: new Map(),
+      }
+      if (!unresolvedGroups.has(unresolvedKey)) unresolvedGroups.set(unresolvedKey, unresolvedGroup)
+
+      const unresolvedBillingRate = Number(candidate.rate ?? matchedClient?.defaultRate ?? employee.payRate ?? 0) || 0
+      const unresolvedBucket = unresolvedGroup.employeeBuckets.get(employee.id) || {
+        employee,
+        rows: [],
+        timeEntries: [],
+        hours: 0,
+        payroll: computePayrollBreakdown(0, employee, shiftStart, shiftEnd),
+        billAmount: 0,
+        billingRate: unresolvedBillingRate,
+        daily: {},
+      }
+
+      const unresolvedBill = computePremiumAdjustedAmount(
+        rowHours,
+        unresolvedBucket.billingRate,
+        premiumConfig.percent,
+        premiumConfig.enabled && Boolean(shiftStart && shiftEnd),
+        shiftStart,
+        shiftEnd,
+        premiumConfig.startTime,
+      )
+
+      unresolvedBucket.rows.push(storedRow)
+      unresolvedBucket.timeEntries.push({
+        date: candidate.workDate,
+        startTime: candidate.startTime || undefined,
+        endTime: candidate.endTime || undefined,
+        hours: rowHours,
+        note: candidate.notes || undefined,
+      })
+      unresolvedBucket.hours = addHours(unresolvedBucket.hours, rowHours)
+      unresolvedBucket.payroll = {
+        totalHours: addHours(unresolvedBucket.payroll.totalHours, payroll.totalHours),
+        regularHours: addHours(unresolvedBucket.payroll.regularHours, payroll.regularHours),
+        premiumHours: addHours(unresolvedBucket.payroll.premiumHours, payroll.premiumHours),
+        basePayRate: payroll.basePayRate,
+        premiumPercent: payroll.premiumPercent,
+        totalPay: addHours(unresolvedBucket.payroll.totalPay, payroll.totalPay),
+      }
+      unresolvedBucket.billAmount = addHours(unresolvedBucket.billAmount, unresolvedBill.totalAmount)
+      unresolvedBucket.daily[candidate.workDate] = formatHours(addHours(Number(unresolvedBucket.daily[candidate.workDate] || 0), rowHours))
+      unresolvedGroup.employeeBuckets.set(employee.id, unresolvedBucket)
+      return
+    }
+
     const rowsForGroup = grouped.get(project.id) || {
       project,
       projectName: project.name,
@@ -477,9 +622,6 @@ export async function importTimesheetCsv(input: TimesheetImportInput): Promise<T
       billingRate: Number(project.rate ?? employee.payRate ?? candidate.rate ?? 0) || 0,
       daily: {},
     }
-
-    const rowHours = candidate.hours
-    const payroll = computePayrollBreakdown(rowHours, employee, shiftStart, shiftEnd)
     const bill = computePremiumAdjustedAmount(
       rowHours,
       bucket.billingRate,
@@ -556,33 +698,7 @@ export async function importTimesheetCsv(input: TimesheetImportInput): Promise<T
     const seq = nextProjectInvoiceSeq(project, existingInvoices)
     const number = `${projectPrefix(project.name)}${String(seq).padStart(4, '0')}`
     const billingDate = billingEnd || billingStart || new Date().toISOString().slice(0, 10)
-    const items = Array.from(payload.employeeBuckets.values())
-      .map(bucket => {
-        const timeEntries = bucket.timeEntries.sort((a, b) => {
-          if (a.date !== b.date) return a.date.localeCompare(b.date)
-          return `${a.startTime || ''}`.localeCompare(b.startTime || '', undefined, { numeric: true, sensitivity: 'base' })
-        })
-        const summarizedDaily = summarizeInvoiceEntries(timeEntries)
-        const payroll = bucket.payroll
-        return {
-          employeeId: bucket.employee.id,
-          employeeName: bucket.employee.name,
-          position: bucket.employee.role || bucket.employee.employmentType || undefined,
-          hoursTotal: bucket.hours,
-          rate: bucket.billingRate,
-          billAmount: bucket.billAmount,
-          shiftStart: bucket.employee.defaultShiftStart || undefined,
-          shiftEnd: bucket.employee.defaultShiftEnd || undefined,
-          regularHours: payroll.regularHours,
-          premiumHours: payroll.premiumHours,
-          basePayRate: payroll.basePayRate,
-          premiumPercent: payroll.premiumPercent,
-          totalPay: payroll.totalPay,
-          timeEntries,
-          daily: summarizedDaily,
-        } satisfies InvoiceItem
-      })
-      .sort((a, b) => a.employeeName.localeCompare(b.employeeName))
+    const items = buildInvoiceItems(Array.from(payload.employeeBuckets.values()))
 
     const subtotal = items.reduce((sum, item) => sum + (Number(item.billAmount ?? item.hoursTotal * item.rate) || 0), 0)
     const invoice: Invoice = {
@@ -618,10 +734,38 @@ export async function importTimesheetCsv(input: TimesheetImportInput): Promise<T
     })
   }
 
+  let unresolvedDraftCount = 0
+  for (const payload of unresolvedGroups.values()) {
+    const billingDate = billingEnd || billingStart || new Date().toISOString().slice(0, 10)
+    const items = buildInvoiceItems(Array.from(payload.employeeBuckets.values()))
+    const subtotal = items.reduce((sum, item) => sum + (Number(item.billAmount ?? item.hoursTotal * item.rate) || 0), 0)
+    const invoice: Invoice = {
+      id: uid(),
+      number: `TMP-${String(unresolvedDraftCount + 1).padStart(3, '0')}`,
+      date: billingDate,
+      billingStart: billingStart,
+      billingEnd: billingEnd,
+      clientName: payload.client?.name || '',
+      clientEmail: payload.client?.email || '',
+      clientAddress: payload.client?.address || '',
+      projectId: null,
+      projectName: '',
+      status: 'draft',
+      subtotal,
+      notes: `Generated from ${source}${input.sourceFilename ? ` (${input.sourceFilename})` : ''}. Project needs review before sending.`,
+      items,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    }
+    unresolvedDraftCount += 1
+    createdInvoices.push(invoice)
+    existingInvoices.push(invoice)
+  }
+
   if (createdInvoices.length > 0) {
     await saveInvoices(existingInvoices)
     await saveProjects(projectsToSave)
-    await saveTimesheetBatchInvoices(batchInvoiceRows)
+    if (batchInvoiceRows.length > 0) await saveTimesheetBatchInvoices(batchInvoiceRows)
     await saveTimesheetMappings(matchedMappings)
   }
 
