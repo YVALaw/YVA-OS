@@ -3,6 +3,7 @@ const { createClient } = require('@supabase/supabase-js')
 const TOKEN_ENDPOINT = 'https://oauth2.googleapis.com/token'
 const GMAIL_SEND_ENDPOINT = 'https://gmail.googleapis.com/gmail/v1/users/me/messages/send'
 const DEFAULT_TIMEZONE = process.env.TIMESHEET_REMINDER_TZ || 'America/New_York'
+const TIMESHEET_REMINDER_ENABLED = false
 
 function json(statusCode, body) {
   return {
@@ -174,6 +175,9 @@ async function updateLastSentAt(supabase, timestamp) {
 }
 
 async function sendReminder({ force = false } = {}) {
+  if (!TIMESHEET_REMINDER_ENABLED) {
+    return { skipped: true, reason: 'Timesheet reminder feature is disabled.' }
+  }
   const context = await loadContext()
   const { supabase, settings, reminderUser, clientSecret } = context
   const timeZone = getEnv('TIMESHEET_REMINDER_TZ') || DEFAULT_TIMEZONE

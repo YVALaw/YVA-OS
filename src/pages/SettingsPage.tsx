@@ -61,6 +61,8 @@ function formatMinuteOption(minute: number): string {
 
 type SettingsTab = 'company' | 'email' | 'integrations' | 'currency' | 'notifications' | 'data' | 'access'
 
+const SHOW_TIMESHEET_IMPORT_UI = false
+
 const ALL_TABS: { id: SettingsTab; label: string; adminOnly?: boolean }[] = [
   { id: 'company',       label: 'Company' },
   { id: 'email',         label: 'Email' },
@@ -725,6 +727,7 @@ export default function SettingsPage() {
             </div>
             </div>
 
+            {SHOW_TIMESHEET_IMPORT_UI && (
             <div className="settings-section">
               <div className="settings-section-title">Timesheet Import</div>
               <div className="settings-row">
@@ -906,6 +909,7 @@ export default function SettingsPage() {
                 </div>
               )}
             </div>
+            )}
 
             <div className="settings-section">
               <div className="settings-section-title">Backup &amp; Restore</div>
