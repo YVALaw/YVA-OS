@@ -190,12 +190,14 @@ async function sendReminder({ force = false } = {}) {
   const reminderDay = Number(settings.timesheet_reminder_day ?? 1)
   const reminderHour = Number(settings.timesheet_reminder_hour ?? 9)
   const reminderMinute = Number(settings.timesheet_reminder_minute ?? 0)
+  const reminderMinuteBucket = Math.max(0, Math.min(55, reminderMinute - (reminderMinute % 5)))
+  const currentMinuteBucket = Math.max(0, Math.min(55, local.minute - (local.minute % 5)))
   const lastSentDate = typeof settings.timesheet_reminder_last_sent_at === 'string'
     ? settings.timesheet_reminder_last_sent_at.slice(0, 10)
     : ''
 
   if (!force) {
-    if (local.weekday !== reminderDay || local.hour !== reminderHour || local.minute !== reminderMinute) {
+    if (local.weekday !== reminderDay || local.hour !== reminderHour || currentMinuteBucket !== reminderMinuteBucket) {
       return { skipped: true, reason: 'Current time does not match the configured reminder schedule.' }
     }
     if (lastSentDate === local.date) {
@@ -257,7 +259,7 @@ async function sendReminder({ force = false } = {}) {
 exports.handler = async function handler(event) {
   if (event.httpMethod === 'OPTIONS') return json(200, { ok: true })
 
-  if (event.httpMethod === 'GET') {
+  if (event.httpMethod === 'GET' && event.queryStringParameters?.info === '1') {
     return json(200, {
       ok: true,
       schedule: '*/5 * * * *',
@@ -266,13 +268,15 @@ exports.handler = async function handler(event) {
     })
   }
 
-  if (event.httpMethod !== 'POST') return json(405, { error: 'Method not allowed' })
+  if (event.httpMethod !== 'POST' && event.httpMethod !== 'GET') return json(405, { error: 'Method not allowed' })
 
   let payload = {}
-  try {
-    payload = JSON.parse(event.body || '{}')
-  } catch {
-    return json(400, { error: 'Invalid JSON body' })
+  if (event.httpMethod === 'POST') {
+    try {
+      payload = JSON.parse(event.body || '{}')
+    } catch {
+      return json(400, { error: 'Invalid JSON body' })
+    }
   }
 
   try {

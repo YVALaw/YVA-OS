@@ -1,3 +1,5 @@
 [build]
   functions = "netlify/functions"
 
+[functions."timesheet-reminder"]
+  schedule = "*/5 * * * *"
