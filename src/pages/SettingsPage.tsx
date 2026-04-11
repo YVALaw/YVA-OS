@@ -74,7 +74,7 @@ const ALL_TABS: { id: SettingsTab; label: string; adminOnly?: boolean }[] = [
 ]
 
 export default function SettingsPage() {
-  const { role: currentRole, loading: roleLoading } = useRole()
+  const { role: currentRole, userId: currentUserId, loading: roleLoading } = useRole()
   const TABS = roleLoading ? ALL_TABS.filter(t => !t.adminOnly) : ALL_TABS.filter(t => !t.adminOnly || can.manageRoles(currentRole))
   const fileRef = useRef<HTMLInputElement>(null)
   const [settings, setSettingsState] = useState<AppSettings>({
@@ -107,6 +107,10 @@ export default function SettingsPage() {
   const [gmailConnected, setGmailConnected] = useState(false)
   const [gmailEmail, setGmailEmail] = useState<string | undefined>()
   const [userRoles, setUserRoles] = useState<UserRoleRow[]>([])
+  const [accessStatus, setAccessStatus] = useState<string | null>(null)
+  const [accessStatusKind, setAccessStatusKind] = useState<'success' | 'error'>('success')
+  const [confirmDeleteUser, setConfirmDeleteUser] = useState<UserRoleRow | null>(null)
+  const [deletingUserId, setDeletingUserId] = useState<string | null>(null)
   const [rateSourceMeta, setRateSourceMeta] = useState<InfoDolarBhdResponse | null>(null)
 
   useEffect(() => {
@@ -320,6 +324,44 @@ export default function SettingsPage() {
       setTimesheetStatus('Timesheet batch deleted from import history.')
     } catch (error) {
       setTimesheetStatus(`Import cleanup failed — ${error instanceof Error ? error.message : 'Unknown error'}`)
+    }
+  }
+
+  async function deleteUserAccount(target: UserRoleRow) {
+    if (target.user_id === currentUserId) {
+      setAccessStatusKind('error')
+      setAccessStatus('You cannot delete your own signed-in account.')
+      setConfirmDeleteUser(null)
+      return
+    }
+
+    setDeletingUserId(target.user_id)
+    setAccessStatusKind('success')
+    setAccessStatus(null)
+    try {
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session?.access_token) throw new Error('You must be signed in as CEO to delete accounts.')
+
+      const res = await fetch('/.netlify/functions/delete-user-account', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({ userId: target.user_id }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data?.error || `Delete failed (${res.status})`)
+
+      setUserRoles(prev => prev.filter(row => row.user_id !== target.user_id))
+      setAccessStatusKind('success')
+      setAccessStatus(`${target.email || 'User'} was deleted.`)
+      setConfirmDeleteUser(null)
+    } catch (error) {
+      setAccessStatusKind('error')
+      setAccessStatus(error instanceof Error ? error.message : 'Failed to delete user account.')
+    } finally {
+      setDeletingUserId(null)
     }
   }
 
@@ -1037,8 +1079,13 @@ export default function SettingsPage() {
         <div className="settings-section">
           <div className="settings-section-title">Team Access</div>
           <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 16 }}>
-            Manage what each user can see. New users default to Recruiter until assigned a role.
+            Manage what each user can see. New users default to Recruiter until assigned a role. CEO can delete accounts from the app and Supabase Auth.
           </div>
+          {accessStatus && (
+            <div className={`settings-notice ${accessStatusKind === 'success' ? 'settings-notice-success' : 'settings-notice-error'}`} style={{ marginBottom: 12 }}>
+              {accessStatus}
+            </div>
+          )}
           {userRoles.length === 0 ? (
             <div style={{ color: 'var(--muted)', fontSize: 13, padding: '16px 0' }}>No users found. Users appear here after they first log in.</div>
           ) : (
@@ -1048,7 +1095,8 @@ export default function SettingsPage() {
                   <tr>
                     <th>Email</th>
                     <th>Role</th>
-                    <th></th>
+                    <th>Status</th>
+                    <th>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1060,6 +1108,7 @@ export default function SettingsPage() {
                           className="form-select"
                           style={{ width: 160, fontSize: 12 }}
                           value={u.role}
+                          disabled={deletingUserId === u.user_id}
                           onChange={async e => {
                             const newRole = e.target.value
                             await upsertUserRole(u.user_id, u.email, newRole)
@@ -1072,7 +1121,22 @@ export default function SettingsPage() {
                         </select>
                       </td>
                       <td>
-                        <span className="badge badge-blue" style={{ fontSize: 10 }}>{ROLE_LABELS[u.role as keyof typeof ROLE_LABELS] || u.role}</span>
+                        <span className="badge badge-blue" style={{ fontSize: 10 }}>
+                          {u.user_id === currentUserId ? 'Current user' : (ROLE_LABELS[u.role as keyof typeof ROLE_LABELS] || u.role)}
+                        </span>
+                      </td>
+                      <td>
+                        <button
+                          className="btn-danger btn-xs"
+                          disabled={u.user_id === currentUserId || deletingUserId === u.user_id}
+                          title={u.user_id === currentUserId ? 'You cannot delete your own signed-in account' : 'Delete this user account'}
+                          onClick={() => {
+                            setAccessStatus(null)
+                            setConfirmDeleteUser(u)
+                          }}
+                        >
+                          {deletingUserId === u.user_id ? 'Deleting…' : 'Delete'}
+                        </button>
                       </td>
                     </tr>
                   ))}
@@ -1091,6 +1155,23 @@ export default function SettingsPage() {
             <div className="confirm-actions">
               <button className="btn-ghost" onClick={() => setConfirmClear(false)}>Cancel</button>
               <button className="btn-danger" onClick={doClear}>Yes, clear everything</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {confirmDeleteUser && (
+        <div className="modal-overlay" onClick={() => deletingUserId ? undefined : setConfirmDeleteUser(null)}>
+          <div className="confirm-dialog" onClick={(e) => e.stopPropagation()}>
+            <div className="confirm-title">Delete user account?</div>
+            <div className="confirm-body">
+              This will permanently delete {confirmDeleteUser.email || 'this user'} from Supabase Auth and remove them from Team Access. They will no longer be able to sign in with this account.
+            </div>
+            <div className="confirm-actions">
+              <button className="btn-ghost" disabled={Boolean(deletingUserId)} onClick={() => setConfirmDeleteUser(null)}>Cancel</button>
+              <button className="btn-danger" disabled={Boolean(deletingUserId)} onClick={() => void deleteUserAccount(confirmDeleteUser)}>
+                {deletingUserId ? 'Deleting…' : 'Yes, delete account'}
+              </button>
             </div>
           </div>
         </div>
