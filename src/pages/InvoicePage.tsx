@@ -254,7 +254,6 @@ export default function InvoicePage() {
   const [sendConfirmInv, setSendConfirmInv] = useState<Invoice | null>(null)
   const [quickModal, setQuickModal] = useState(false)
   const [quickProjectId, setQuickProjectId] = useState<string | undefined>()
-  const [statusModal, setStatusModal] = useState(false)
   const [editId, setEditId] = useState<string | null>(null)
   const [newStatus, setNewStatus] = useState<InvoiceStatus>('draft')
   const [newAmountPaid, setNewAmountPaid] = useState('')
@@ -399,23 +398,33 @@ export default function InvoicePage() {
   }
 
   function openStatusEdit(inv: Invoice) {
+    if (editId === inv.id) {
+      setEditId(null)
+      return
+    }
     setEditId(inv.id)
     setNewStatus((inv.status as InvoiceStatus) || 'draft')
     setNewAmountPaid(inv.amountPaid != null ? String(inv.amountPaid) : '')
-    setStatusModal(true)
   }
-  function saveStatus() {
-    if (!editId) return
-    const amtPaid = newStatus === 'partial' ? (parseFloat(newAmountPaid) || 0) : undefined
+  function applyStatusChange(targetId: string, status: InvoiceStatus, amountPaid?: string) {
+    const amtPaid = status === 'partial' ? (parseFloat(amountPaid || '') || 0) : undefined
     void persist(invoices.map((inv) => {
-      if (inv.id !== editId) return inv
-      const histEntry = { status: newStatus, changedAt: Date.now() }
+      if (inv.id !== targetId) return inv
+      const histEntry = { status, changedAt: Date.now() }
       return {
-        ...inv, status: newStatus, amountPaid: amtPaid, updatedAt: Date.now(),
+        ...inv, status, amountPaid: amtPaid, updatedAt: Date.now(),
         statusHistory: [...(inv.statusHistory || []), histEntry],
       }
     }))
-    setStatusModal(false)
+    setEditId(null)
+  }
+
+  function handleInlineStatusSelect(inv: Invoice, nextStatus: InvoiceStatus) {
+    setEditId(inv.id)
+    setNewStatus(nextStatus)
+    if (nextStatus !== 'partial') {
+      applyStatusChange(inv.id, nextStatus)
+    }
   }
 
   function duplicateInvoice(inv: Invoice) {
@@ -563,7 +572,43 @@ export default function InvoicePage() {
                             <div className={`invoice-row-due${overdue ? ' overdue' : ''}`}><strong>Due</strong> {inv.dueDate || '—'}</div>
                           </div>
                           <div className="invoice-row-amount">
-                            <span className={`badge ${statusBadge(inv.status)}`} style={{ fontSize: 10 }}>{inv.status || 'draft'}</span>
+                            {editId === inv.id ? (
+                              <div onClick={e => e.stopPropagation()} style={{ display: 'grid', gap: 6, justifyItems: 'end', width: '100%' }}>
+                                <select
+                                  className="form-select"
+                                  style={{ minWidth: 118, fontSize: 12, padding: '4px 8px' }}
+                                  value={newStatus}
+                                  onChange={(e) => handleInlineStatusSelect(inv, e.target.value as InvoiceStatus)}
+                                >
+                                  {STATUSES.map((s) => <option key={s.key} value={s.key}>{s.label}</option>)}
+                                </select>
+                                {newStatus === 'partial' && (
+                                  <>
+                                    <input
+                                      className="form-input"
+                                      type="number"
+                                      placeholder="Amount paid"
+                                      style={{ width: 118, fontSize: 12, padding: '5px 8px' }}
+                                      value={newAmountPaid}
+                                      onChange={e => setNewAmountPaid(e.target.value)}
+                                    />
+                                    <div style={{ display: 'flex', gap: 6 }}>
+                                      <button className="btn-xs btn-ghost" onClick={() => setEditId(null)}>Cancel</button>
+                                      <button className="btn-xs btn-primary" onClick={() => applyStatusChange(inv.id, 'partial', newAmountPaid)}>Save</button>
+                                    </div>
+                                  </>
+                                )}
+                              </div>
+                            ) : (
+                              <button
+                                className={`badge ${statusBadge(inv.status)}`}
+                                style={{ fontSize: 10, border: 0, cursor: 'pointer' }}
+                                title="Change status"
+                                onClick={() => openStatusEdit(inv)}
+                              >
+                                {inv.status || 'draft'}
+                              </button>
+                            )}
                             <div className="invoice-row-total">{formatMoney(Number(inv.subtotal)||0)}</div>
                             {inv.status === 'partial' && inv.amountPaid != null && (
                               <div className="invoice-row-paid-note">{formatMoney(inv.amountPaid)} paid so far</div>
@@ -579,7 +624,6 @@ export default function InvoicePage() {
                             <button className="btn-xs btn-ghost" title="Share portal" onClick={() => shareInvoice(inv)}>🔗</button>
                             <button className="btn-xs btn-ghost" title="Duplicate" onClick={() => duplicateInvoice(inv)}>⧉</button>
                             <button className="btn-xs btn-ghost" title="Edit invoice" onClick={() => openEditInvoice(inv)}>✏</button>
-                            <button className="btn-xs btn-ghost" title="Update status" onClick={() => openStatusEdit(inv)}>✎</button>
                             <button className="btn-xs btn-danger" onClick={() => setConfirmDelete(inv.id)}>×</button>
                           </div>
                         </div>
@@ -646,60 +690,6 @@ export default function InvoicePage() {
             <div className="modal-footer">
               <button className="btn-ghost" onClick={() => setQuickModal(false)}>Cancel</button>
               <button className="btn-primary" onClick={saveQuick} disabled={!form.clientName || !form.subtotal}>Create</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Status update */}
-      {statusModal && (
-        <div className="modal-overlay" onClick={() => setStatusModal(false)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <h2 className="modal-title">Update Status</h2>
-              <button className="modal-close btn-icon" onClick={() => setStatusModal(false)}>✕</button>
-            </div>
-            <div className="modal-body">
-              <div className="form-group">
-                <label className="form-label">Status</label>
-                <select className="form-select" value={newStatus} onChange={(e) => setNewStatus(e.target.value as InvoiceStatus)}>
-                  {STATUSES.map((s) => <option key={s.key} value={s.key}>{s.label}</option>)}
-                </select>
-              </div>
-              {newStatus === 'partial' && (
-                <div className="form-group" style={{ marginTop: 12 }}>
-                  <label className="form-label">Amount Paid ($)</label>
-                  <input
-                    className="form-input"
-                    type="number"
-                    placeholder="0.00"
-                    value={newAmountPaid}
-                    onChange={e => setNewAmountPaid(e.target.value)}
-                  />
-                  <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 4 }}>
-                    Enter how much has been received so far.
-                  </div>
-                </div>
-              )}
-              {(() => {
-                const hist = invoices.find(i => i.id === editId)?.statusHistory || []
-                if (hist.length === 0) return null
-                return (
-                  <div style={{ marginTop: 16, borderTop: '1px solid var(--border)', paddingTop: 12 }}>
-                    <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.07em', color: 'var(--muted)', marginBottom: 8 }}>Status History</div>
-                    {[...hist].reverse().slice(0, 6).map((h, i) => (
-                      <div key={i} style={{ display: 'flex', gap: 10, alignItems: 'center', fontSize: 12, marginBottom: 5 }}>
-                        <span className={`badge ${statusBadge(h.status)}`} style={{ fontSize: 10 }}>{h.status}</span>
-                        <span style={{ color: 'var(--muted)' }}>{new Date(h.changedAt).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</span>
-                      </div>
-                    ))}
-                  </div>
-                )
-              })()}
-            </div>
-            <div className="modal-footer">
-              <button className="btn-ghost" onClick={() => setStatusModal(false)}>Cancel</button>
-              <button className="btn-primary" onClick={saveStatus}>Save</button>
             </div>
           </div>
         </div>

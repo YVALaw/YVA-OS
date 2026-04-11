@@ -8,7 +8,8 @@ import {
   type DateRange,
 } from '../services/reportsService'
 import { formatMoney, fmtHoursHM } from '../utils/money'
-import { loadSettings, loadGeneralExpenses, loadCandidates } from '../services/storage'
+import { payrollFromInvoiceItem } from '../utils/payroll'
+import { loadSettings, loadGeneralExpenses, loadCandidates, loadExpenses } from '../services/storage'
 import type { AppSettings, Candidate, DataSnapshot, Expense, Invoice } from '../data/types'
 import { useRole } from '../context/RoleContext'
 import { can } from '../lib/roles'
@@ -139,12 +140,14 @@ export default function ReportsPage() {
   const [settings, setSettings] = useState<AppSettings>({ usdToDop: 0, companyName: 'YVA Staffing', companyEmail: '', emailSignature: '' })
   const [store, setStore] = useState<DataSnapshot>({ employees: [], clients: [], projects: [], invoices: [], invoiceCounter: 1 })
   const [generalExpenses, setGeneralExpenses] = useState<Expense[]>([])
+  const [allExpenses, setAllExpenses] = useState<Expense[]>([])
   const [candidates, setCandidates] = useState<Candidate[]>([])
 
   useEffect(() => {
     void loadSettings().then(setSettings)
     void getAllDataSnapshot().then(setStore)
     void loadGeneralExpenses().then(setGeneralExpenses)
+    void loadExpenses().then(setAllExpenses)
     void loadCandidates().then(setCandidates)
   }, [])
 
@@ -162,11 +165,14 @@ export default function ReportsPage() {
     return invoicesInRange
       .map(inv => {
         const estPayroll = (inv.items || []).reduce((sum, item) => {
-          const employee = store.employees.find(emp => emp.name?.toLowerCase() === item.employeeName?.toLowerCase())
-          const payRate = Number(employee?.payRate) || 0
-          return sum + ((Number(item.hoursTotal) || 0) * payRate)
+          const employee = store.employees.find(emp => (item.employeeId && emp.id === item.employeeId) || emp.name?.toLowerCase() === item.employeeName?.toLowerCase())
+          const payroll = payrollFromInvoiceItem(item, employee)
+          return sum + payroll.totalPay
         }, 0)
         const billed = Number(inv.subtotal) || 0
+        const collected = (inv.status || '').toLowerCase() === 'paid'
+          ? billed
+          : Math.min(Math.max(Number(inv.amountPaid) || 0, 0), billed)
         return {
           id: inv.id,
           number: inv.number,
@@ -204,6 +210,130 @@ export default function ReportsPage() {
   const allUnpaidInvoices = useMemo(() => store.invoices
     .filter(inv => !['paid', 'draft'].includes((inv.status || 'draft').toLowerCase()))
     .sort((a, b) => (b.dueDate || b.date || '').localeCompare(a.dueDate || a.date || '')), [store.invoices])
+
+  const payrollDueByEmployee = useMemo(() => {
+    const rows = new Map<string, { name: string; totalDue: number; invoiceIds: Set<string>; lineCount: number }>()
+    for (const inv of store.invoices) {
+      for (const item of inv.items || []) {
+        const employee = store.employees.find(emp =>
+          (item.employeeId && emp.id === item.employeeId) ||
+          emp.name?.toLowerCase() === item.employeeName?.toLowerCase(),
+        )
+        const key = item.employeeId || employee?.id || item.employeeName || 'unknown'
+        const name = employee?.name || item.employeeName || 'Unknown employee'
+        const payroll = payrollFromInvoiceItem(item, employee).totalPay
+        if (!payroll) continue
+        const paymentRecord = inv.employeePayments?.[item.employeeId || '']
+          || (employee?.id ? inv.employeePayments?.[employee.id] : undefined)
+          || inv.employeePayments?.[item.employeeName || '']
+          || (employee?.name ? inv.employeePayments?.[employee.name] : undefined)
+        const paidAmount = paymentRecord?.status === 'paid'
+          ? Math.max(0, Number(paymentRecord.amount ?? payroll) || payroll)
+          : 0
+        const due = Math.max(0, payroll - paidAmount)
+        if (due <= 0) continue
+        const entry = rows.get(key) || { name, totalDue: 0, invoiceIds: new Set<string>(), lineCount: 0 }
+        entry.totalDue += due
+        entry.invoiceIds.add(inv.id)
+        entry.lineCount += 1
+        rows.set(key, entry)
+      }
+    }
+    return Array.from(rows.entries())
+      .map(([key, row]) => ({
+        key,
+        name: row.name,
+        totalDue: row.totalDue,
+        invoiceCount: row.invoiceIds.size,
+        lineCount: row.lineCount,
+      }))
+      .sort((a, b) => b.totalDue - a.totalDue)
+  }, [store.employees, store.invoices])
+
+  const totalPayrollDue = useMemo(
+    () => payrollDueByEmployee.reduce((sum, row) => sum + row.totalDue, 0),
+    [payrollDueByEmployee],
+  )
+
+  const projectProfitability = useMemo(() => {
+    const rows = new Map<string, {
+      projectId: string | null
+      projectName: string
+      clientName: string
+      billed: number
+      collected: number
+      payrollDue: number
+      expenses: number
+      invoiceCount: number
+      hours: number
+    }>()
+
+    const ensureRow = (projectId: string | null | undefined, projectName: string | undefined, clientName?: string) => {
+      const key = projectId || projectName || '__unassigned__'
+      if (!rows.has(key)) {
+        rows.set(key, {
+          projectId: projectId || null,
+          projectName: projectName || 'Unassigned',
+          clientName: clientName || '—',
+          billed: 0,
+          collected: 0,
+          payrollDue: 0,
+          expenses: 0,
+          invoiceCount: 0,
+          hours: 0,
+        })
+      }
+      return rows.get(key)!
+    }
+
+    for (const inv of invoicesInRange) {
+      const row = ensureRow(inv.projectId, inv.projectName, inv.clientName)
+      row.billed += Number(inv.subtotal) || 0
+        row.collected += (inv.status || '').toLowerCase() === 'paid'
+          ? Number(inv.subtotal) || 0
+          : Math.min(Math.max(Number(inv.amountPaid) || 0, 0), Number(inv.subtotal) || 0)
+      row.invoiceCount += 1
+
+      for (const item of inv.items || []) {
+        const employee = store.employees.find(emp =>
+          (item.employeeId && emp.id === item.employeeId) ||
+          emp.name?.toLowerCase() === item.employeeName?.toLowerCase(),
+        )
+        const payroll = payrollFromInvoiceItem(item, employee).totalPay
+        const paymentRecord = inv.employeePayments?.[item.employeeId || '']
+          || (employee?.id ? inv.employeePayments?.[employee.id] : undefined)
+          || inv.employeePayments?.[item.employeeName || '']
+          || (employee?.name ? inv.employeePayments?.[employee.name] : undefined)
+        const paidAmount = paymentRecord?.status === 'paid'
+          ? Math.max(0, Number(paymentRecord.amount ?? payroll) || payroll)
+          : 0
+        row.payrollDue += Math.max(0, payroll - paidAmount)
+        row.hours += Number(item.hoursTotal) || 0
+      }
+    }
+
+    const rangeProjectExpenses = allExpenses.filter(expense => {
+      if (!expense.projectId) return false
+      if (from && expense.date && expense.date < from) return false
+      if (to && expense.date && expense.date > to) return false
+      return true
+    })
+
+    for (const expense of rangeProjectExpenses) {
+      const project = store.projects.find(p => p.id === expense.projectId)
+      const client = store.clients.find(c => c.id === project?.clientId)
+      const row = ensureRow(expense.projectId, project?.name || expense.projectId, client?.name)
+      row.expenses += Number(expense.amount) || 0
+    }
+
+    return Array.from(rows.values())
+        .filter(row => row.billed > 0 || row.collected > 0 || row.payrollDue > 0 || row.expenses > 0)
+        .map(row => ({
+          ...row,
+          net: row.billed - row.payrollDue - row.expenses,
+        }))
+        .sort((a, b) => b.net - a.net)
+  }, [allExpenses, from, invoicesInRange, store.clients, store.employees, store.projects, to])
 
   // Employee anniversary alerts — employees hitting a milestone this year (1, 2, 3, 5, 10+ years)
   const anniversaries = useMemo(() => {
@@ -763,7 +893,14 @@ export default function ReportsPage() {
               <div className="kpi-card" style={cardStyle} onClick={() => setKpiDrill('billed')}>
                 <div className="kpi-label">Total Billed</div>
                 <div className="kpi-value">{formatMoney(computed.totalBilled)}</div>
-                <div className="kpi-sub">{computed.invoiceCount} invoice{computed.invoiceCount === 1 ? '' : 's'} in range</div>
+                <div className="kpi-sub">{computed.invoiceCount} invoice{computed.invoiceCount === 1 ? '' : 's'} invoiced in range</div>
+              </div>
+            )}
+            {can.viewOwnerStats(role) && (
+              <div className="kpi-card" style={cardStyle} onClick={() => setKpiDrill('collected')}>
+                <div className="kpi-label">Collected</div>
+                <div className="kpi-value" style={{ color: '#38bdf8' }}>{formatMoney(computed.totalCollected)}</div>
+                <div className="kpi-sub">cash actually received in range</div>
               </div>
             )}
             <div className="kpi-card" style={cardStyle} onClick={() => setKpiDrill('hours')}>
@@ -778,6 +915,14 @@ export default function ReportsPage() {
                 <div className="kpi-sub">based on employee pay rates</div>
               </div>
             )}
+            {can.viewOwnerStats(role) && (
+              <div className="kpi-card" style={cardStyle} onClick={() => setKpiDrill('payrollDue')}>
+                <div className="kpi-label">Payroll Due</div>
+                <div className="kpi-value" style={{ color: '#fb7185' }}>{formatMoney(totalPayrollDue)}</div>
+                <div className="kpi-sub">{payrollDueByEmployee.length} employee{payrollDueByEmployee.length === 1 ? '' : 's'} still owed</div>
+                <div className="kpi-note">Not limited by the current date filter.</div>
+              </div>
+            )}
             <div className="kpi-card" style={cardStyle} onClick={() => setKpiDrill('expenses')}>
               <div className="kpi-label">Business Expenses</div>
               <div className="kpi-value" style={{ color: '#fb923c' }}>{formatMoney(totalExpenses)}</div>
@@ -789,7 +934,7 @@ export default function ReportsPage() {
                 <div className="kpi-value" style={{ color: netAfterExpenses >= 0 ? '#4ade80' : '#f87171' }}>
                   {formatMoney(netAfterExpenses)}
                 </div>
-                <div className="kpi-sub">billed − payroll − expenses</div>
+                <div className="kpi-sub">billed − payroll due − expenses</div>
               </div>
             )}
             <div className="kpi-card" style={cardStyle} onClick={() => setKpiDrill('paid')}>
@@ -857,12 +1002,21 @@ export default function ReportsPage() {
                 </div>
               </div>
             )}
-            {computed.unpaidCount > 0 && (
+            {allUnpaidInvoices.length > 0 && (
               <div className="attention-item">
                 <div className="attention-item-dot attention-item-dot-warn" />
                 <div className="attention-item-body">
-                  <div className="attention-item-title">{computed.unpaidCount} Unpaid in Selected Range</div>
-                  <div className="attention-item-sub">{formatMoney(computed.totalBilled - (computed.paidCount > 0 ? computed.totalBilled * (computed.paidCount / computed.invoiceCount) : 0))} outstanding</div>
+                  <div className="attention-item-title">{allUnpaidInvoices.length} Unpaid Invoice{allUnpaidInvoices.length !== 1 ? 's' : ''}</div>
+                  <div className="attention-item-sub">Client balances still awaiting collection</div>
+                </div>
+              </div>
+            )}
+            {payrollDueByEmployee.length > 0 && (
+              <div className="attention-item">
+                <div className="attention-item-dot attention-item-dot-warn" style={{ background: '#fb7185' }} />
+                <div className="attention-item-body">
+                  <div className="attention-item-title">{payrollDueByEmployee.length} Team Member{payrollDueByEmployee.length !== 1 ? 's' : ''} Still Owed</div>
+                  <div className="attention-item-sub">{formatMoney(totalPayrollDue)} payroll liability outstanding</div>
                 </div>
               </div>
             )}
@@ -887,7 +1041,7 @@ export default function ReportsPage() {
                 </div>
               </div>
             ))}
-            {overdueInvoices.length === 0 && draftInvoices.length === 0 && computed.unpaidCount === 0 && expiringContracts.length === 0 && anniversaries.length === 0 && (
+            {overdueInvoices.length === 0 && draftInvoices.length === 0 && allUnpaidInvoices.length === 0 && payrollDueByEmployee.length === 0 && expiringContracts.length === 0 && anniversaries.length === 0 && (
               <div style={{ fontSize: 13, color: 'var(--muted)', padding: '12px 0', textAlign: 'center' }}>
                 All clear — nothing needs attention
               </div>
@@ -941,6 +1095,47 @@ export default function ReportsPage() {
           </div>
         </div>
       </div>}
+
+      {can.viewOwnerStats(role) && (
+        <div className="data-card">
+          <div className="data-card-header">
+            <div>
+              <div className="data-card-title">Project Profitability</div>
+              <div className="data-card-subtitle">Billed work minus payroll still owed and project-specific expenses for the selected range.</div>
+            </div>
+          </div>
+          <div className="table-wrap">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Project</th>
+                  <th>Client</th>
+                  <th style={{ textAlign: 'right' }}>Billed</th>
+                  <th style={{ textAlign: 'right' }}>Collected</th>
+                  <th style={{ textAlign: 'right' }}>Payroll Due</th>
+                  <th style={{ textAlign: 'right' }}>Expenses</th>
+                  <th style={{ textAlign: 'right' }}>Net</th>
+                </tr>
+              </thead>
+              <tbody>
+                {projectProfitability.length === 0 ? (
+                  <tr><td colSpan={7} className="td-empty">No project profitability data for this range.</td></tr>
+                ) : projectProfitability.map(row => (
+                  <tr key={row.projectId || row.projectName}>
+                    <td className="td-name">{row.projectName}</td>
+                    <td className="td-muted">{row.clientName || '—'}</td>
+                    <td style={{ textAlign: 'right' }}>{formatMoney(row.billed)}</td>
+                    <td style={{ textAlign: 'right', color: '#38bdf8' }}>{formatMoney(row.collected)}</td>
+                    <td style={{ textAlign: 'right', color: '#fb7185' }}>{formatMoney(row.payrollDue)}</td>
+                    <td style={{ textAlign: 'right', color: '#fb923c' }}>{formatMoney(row.expenses)}</td>
+                    <td style={{ textAlign: 'right', color: row.net >= 0 ? '#4ade80' : '#f87171', fontWeight: 700 }}>{formatMoney(row.net)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       {/* Employee Performance */}
       {computed.employeePerformance.length > 0 && (
@@ -1363,6 +1558,31 @@ export default function ReportsPage() {
             badge: sBadge(inv.status), badgeLabel: inv.status || 'draft',
             nav: navInv(inv),
           }))
+        } else if (kpiDrill === 'collected') {
+          title = 'Collected Cash — Invoices in Range'
+          summary = `${formatMoney(computed.totalCollected)} collected against ${formatMoney(computed.totalBilled)} billed in the selected range`
+          items = invoicesInRange
+            .filter(inv => {
+              const billed = Number(inv.subtotal) || 0
+              const collected = (inv.status || '').toLowerCase() === 'paid'
+                ? billed
+                : Math.min(Math.max(Number(inv.amountPaid) || 0, 0), billed)
+              return collected > 0
+            })
+            .map(inv => {
+              const billed = Number(inv.subtotal) || 0
+              const collected = (inv.status || '').toLowerCase() === 'paid'
+                ? billed
+                : Math.min(Math.max(Number(inv.amountPaid) || 0, 0), billed)
+              return {
+                label: `${inv.number} — ${inv.clientName || '—'}`,
+                sub: `${inv.projectName || 'No project'} · ${inv.date || ''} · Billed ${formatMoney(billed)}`,
+                right: formatMoney(collected),
+                badge: sBadge(inv.status),
+                badgeLabel: inv.status || 'draft',
+                nav: navInv(inv),
+              }
+            })
         } else if (kpiDrill === 'hours') {
           title = 'Total Hours — By Employee'
           items = [...computed.employeePerformance]
@@ -1374,6 +1594,14 @@ export default function ReportsPage() {
             .filter(e => e.payroll > 0)
             .sort((a, b) => b.payroll - a.payroll)
             .map(e => ({ label: e.name, sub: fmtHoursHM(e.hours) + ' billed', right: formatMoney(e.payroll) }))
+        } else if (kpiDrill === 'payrollDue') {
+          title = 'Payroll Due — Outstanding by Employee'
+          summary = `${formatMoney(totalPayrollDue)} still owed across ${payrollDueByEmployee.length} employee${payrollDueByEmployee.length === 1 ? '' : 's'}`
+          items = payrollDueByEmployee.map(row => ({
+            label: row.name,
+            sub: `${row.invoiceCount} invoice${row.invoiceCount !== 1 ? 's' : ''} with unpaid payroll`,
+            right: formatMoney(row.totalDue),
+          }))
         } else if (kpiDrill === 'expenses') {
           title = 'Business Expenses in Range'
           items = [...rangeExpenses]
@@ -1381,7 +1609,7 @@ export default function ReportsPage() {
             .map(e => ({ label: e.description, sub: `${e.date || ''}${e.category ? ' · ' + e.category : ''}`, right: formatMoney(Number(e.amount)||0) }))
         } else if (kpiDrill === 'net') {
           title = 'Net Earnings — Breakdown'
-          summary = `Overall: ${formatMoney(computed.totalBilled)} billed − ${formatMoney(computed.totalPayroll)} payroll − ${formatMoney(totalExpenses)} expenses = ${formatMoney(netAfterExpenses)}`
+          summary = `Overall: ${formatMoney(computed.totalBilled)} billed − ${formatMoney(computed.totalPayroll)} payroll due − ${formatMoney(totalExpenses)} expenses = ${formatMoney(netAfterExpenses)}`
           items = invoiceNetBreakdown.map(row => ({
             label: `${row.number} — ${row.clientName}`,
             sub: `${row.projectName} · ${row.date || 'No date'} · Billed ${formatMoney(row.billed)} · Payroll ${formatMoney(row.estPayroll)}`,

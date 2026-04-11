@@ -103,6 +103,7 @@ export default function CandidatesPage() {
   const [hireAttachments, setHireAttachments] = useState<Attachment[]>([])
   const [checkedTasks, setCheckedTasks] = useState<Set<number>>(new Set())
   const dragId = useRef<string | null>(null)
+  const dragSuppressRef = useRef<string | null>(null)
   const [attachments, setAttachments] = useState<Attachment[]>([])
   const fileInputRef = useRef<HTMLInputElement>(null)
   const hireFileInputRef = useRef<HTMLInputElement>(null)
@@ -275,6 +276,7 @@ export default function CandidatesPage() {
   // drag and drop
   function onDragStart(id: string) {
     dragId.current = id
+    dragSuppressRef.current = id
   }
 
   function onDrop(stage: CandidateStage) {
@@ -285,6 +287,9 @@ export default function CandidatesPage() {
   }
 
   const byStage = (stage: CandidateStage) => candidates.filter((c) => c.stage === stage)
+  const offerPipelineCount = candidates.filter((candidate) => candidate.stage === 'interview' || candidate.stage === 'offer').length
+  const hiredCount = candidates.filter((candidate) => candidate.stage === 'hired').length
+  const rejectedCount = candidates.filter((candidate) => candidate.stage === 'rejected').length
 
   if (hiredOnly) {
     return (
@@ -326,6 +331,25 @@ export default function CandidatesPage() {
         <button className="btn-primary" onClick={openAdd}>+ Add Candidate</button>
       </div>
 
+      <div className="metric-grid-4">
+        <div className="settings-stat-card board-kpi-card">
+          <div className="settings-stat-count">{candidates.length}</div>
+          <div className="settings-stat-label">Visible Candidates</div>
+        </div>
+        <div className="settings-stat-card board-kpi-card">
+          <div className="settings-stat-count" style={{ color: '#c084fc' }}>{offerPipelineCount}</div>
+          <div className="settings-stat-label">Interview / Offer Stage</div>
+        </div>
+        <div className="settings-stat-card board-kpi-card">
+          <div className="settings-stat-count" style={{ color: '#4ade80' }}>{hiredCount}</div>
+          <div className="settings-stat-label">Converted To Hire</div>
+        </div>
+        <div className="settings-stat-card board-kpi-card">
+          <div className="settings-stat-count" style={{ color: rejectedCount > 0 ? '#f87171' : 'var(--soft)' }}>{rejectedCount}</div>
+          <div className="settings-stat-label">Closed Out</div>
+        </div>
+      </div>
+
       <div className="kanban-board">
         {STAGES.map(({ key, label }) => (
           <div
@@ -336,25 +360,58 @@ export default function CandidatesPage() {
             onDrop={() => onDrop(key)}
           >
             <div className="kanban-col-header">
-              <span className={`kanban-stage-dot kanban-stage-dot-${key}`} />
-              <span className="kanban-col-label">{label}</span>
-              <span className="kanban-col-count">{byStage(key).length}</span>
+              <div className="board-lane-header-main">
+                <span className={`kanban-stage-dot kanban-stage-dot-${key}`} />
+                <span className="kanban-col-label">{label}</span>
+                <span className="kanban-col-count">{byStage(key).length}</span>
+              </div>
+              <div className="board-lane-header-meta">
+                <span>{byStage(key).filter(candidate => Boolean(candidate.email)).length} with email</span>
+                <span>{byStage(key).filter(candidate => Boolean(candidate.resumeUrl || candidate.attachments?.length)).length} with docs</span>
+              </div>
             </div>
 
             <div className="kanban-cards">
               {byStage(key).map((c) => (
                 <div
                   key={c.id}
-                  className="kanban-card"
+                  className="kanban-card board-kanban-card"
                   draggable
                   onDragStart={() => onDragStart(c.id)}
+                  onDragEnd={() => { window.setTimeout(() => { dragSuppressRef.current = null }, 0) }}
                   style={{ cursor: 'pointer' }}
-                  onClick={() => navigate('/candidates/' + c.id)}
+                  onClick={() => {
+                    if (dragSuppressRef.current === c.id) return
+                    navigate('/candidates/' + c.id)
+                  }}
                 >
-                  <div className="kanban-card-name">{c.name}</div>
-                  {c.role && <div className="kanban-card-role">{c.role}</div>}
-                  {c.email && <div className="kanban-card-meta">{c.email}</div>}
-                  {c.source && <div className="kanban-card-source">{c.source}</div>}
+                  <div className="board-kanban-top">
+                    <div>
+                      <div className="kanban-card-name">{c.name}</div>
+                      {c.role && <div className="kanban-card-role">{c.role}</div>}
+                    </div>
+                    <span className="board-drag-hint">Drag</span>
+                  </div>
+                  <div className="board-contact-line board-contact-line-sm">
+                    {c.email && <span>{c.email}</span>}
+                    {c.email && c.phone && <span className="board-card-dot">•</span>}
+                    {c.phone && <span>{c.phone}</span>}
+                  </div>
+                  <div className="board-kanban-stats">
+                    <div>
+                      <div className="stat-label">Source</div>
+                      <div className="stat-value">{c.source || 'Manual'}</div>
+                    </div>
+                    <div>
+                      <div className="stat-label">Applied</div>
+                      <div className="stat-value">{c.appliedAt || '—'}</div>
+                    </div>
+                    <div>
+                      <div className="stat-label">Docs</div>
+                      <div className="stat-value">{(c.attachments?.length || 0) + (c.resumeUrl ? 1 : 0)}</div>
+                    </div>
+                  </div>
+                  {c.notes && <div className="kanban-card-meta">{c.notes}</div>}
                   <div className="kanban-card-actions">
                     <button className="btn-xs btn-ghost" onClick={ev => { ev.stopPropagation(); navigate('/candidates/' + c.id) }}>View</button>
                     <button className="btn-xs btn-danger" onClick={ev => { ev.stopPropagation(); setConfirmDelete(c.id) }}>Remove</button>
@@ -371,13 +428,19 @@ export default function CandidatesPage() {
 
       {/* Add / Edit Modal */}
       {modal && (
-        <div className="modal-overlay" onClick={() => setModal(null)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <h2 className="modal-title">Add Candidate</h2>
+        <div className="sheet-overlay" onClick={() => setModal(null)}>
+          <aside className="sheet-panel" onClick={(e) => e.stopPropagation()}>
+            <div className="sheet-header">
+              <div>
+                <div className="sheet-eyebrow">Hiring Pipeline</div>
+                <h2 className="sheet-title">Add Candidate</h2>
+                <p className="sheet-subtitle">Capture the profile, source, and supporting material without leaving the board view.</p>
+              </div>
               <button className="modal-close btn-icon" onClick={() => setModal(null)}>✕</button>
             </div>
-            <div className="modal-body">
+            <div className="sheet-body">
+              <div className="sheet-section">
+                <div className="sheet-section-title">Candidate Profile</div>
               <div className="form-grid-2">
                 <div className="form-group">
                   <label className="form-label">Name *</label>
@@ -422,9 +485,12 @@ export default function CandidatesPage() {
                   <textarea className="form-textarea" rows={3} value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} placeholder="Interview notes, comments..." />
                 </div>
               </div>
+              </div>
 
               {/* Attachments */}
-              <div style={{ marginTop: 16, borderTop: '1px solid var(--border)', paddingTop: 14 }}>
+              <div className="sheet-section">
+                <div className="sheet-section-title">Files &amp; Documents</div>
+              <div style={{ marginTop: 4 }}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
                   <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.07em', color: 'var(--muted)' }}>
                     Files &amp; Documents {attachments.length > 0 && `(${attachments.length})`}
@@ -457,14 +523,15 @@ export default function CandidatesPage() {
                   </div>
                 )}
               </div>
+              </div>
             </div>
-            <div className="modal-footer">
+            <div className="sheet-footer">
               <button className="btn-ghost" onClick={() => setModal(null)}>Cancel</button>
               <button className="btn-primary" onClick={saveForm} disabled={!form.name.trim()}>
                 Add Candidate
               </button>
             </div>
-          </div>
+          </aside>
         </div>
       )}
 

@@ -8,12 +8,15 @@
 - Invoice calculations use the saved employee schedule when available. Premium time increases both client billing and employee payroll; missing schedule falls back to regular rate.
 - Daily-grid invoice entries and simple total-hour entries both use the same payroll split logic.
 - Reports payroll CSV now uses premium-aware invoice items instead of raw hours × rate.
+- Dashboard `Net Earnings` is now treated as a cash-style metric: collected invoice revenue minus payroll due minus business expenses. `Total Billed` still shows full invoiced volume separately.
+- Dashboard financial follow-up is being refined locally: clearer `Collected` and `Payroll Due` visibility, direct status changes from invoice rows, and a project profitability view based on collected cash minus payroll due and project expenses.
 - Hour parsing accepts decimal hours, `h:mm`, and legacy minute-style values like `3.08` meaning `3h 08m`.
 - Candidate conversion now creates the employee record when moved to hired and removes the candidate card once conversion is complete.
 - Gmail auth now uses a Netlify server function for token exchange and refresh; the Google client secret lives in `GMAIL_CLIENT_SECRET` on Netlify, not in the browser.
 - USD→DOP auto-fetch now comes from InfoDolar Banco BHD data via a Netlify function, with manual entry still available.
-- Timesheet automation is now wired for weekly Logwork CSV imports: raw CSV batches are stored in Supabase, rows are normalized into draft invoices grouped by project, billing periods stay Monday-Sunday, and the invoice renderer now shows time-entry start/stop details plus premium-aware bill amounts.
-  - Required Supabase tables/columns for this feature: `timesheet_import_batches`, `timesheet_import_rows`, `timesheet_mappings`, `timesheet_batch_invoices`, plus `settings.timesheet_automation_enabled` and `settings.timesheet_notify_email`.
+- The experimental Logwork timesheet import flow remains in the codebase and database schema, but the UI is hidden in production because the source data was not reliable enough for safe invoice automation.
+- The weekly reminder email remains active as a standalone reminder under Settings → Notifications, independent of the hidden timesheet import UI.
+- Keep in progress for later: a real notifications system plus a notifications bell in the UI. Do not fold that into the current reminder-only implementation yet.
 
 ## Tech Stack
 - React 18 + TypeScript + Vite
@@ -191,6 +194,7 @@ Also shows: Employee Performance table, Revenue by Client/Project, All-Time Clie
 - **Weekly reminder scheduler**: Settings → select day-of-week → fires on app open if not yet fired today
   - Stored as `reminderDay` (0=Sun…6=Sat) + `reminderLastFired` (ISO date) in settings
   - Fires from `maybeFireReminder()` in `App.tsx` via `useEffect` on mount
+- **Weekly draft reminder email**: Settings → Notifications → select weekday/hour/minute + recipient; sent by the Netlify `timesheet-reminder` scheduled function using the connected Gmail sender account
 
 ## Invoice Statuses
 `draft` | `sent` | `viewed` | `paid` | `overdue` | `partial`

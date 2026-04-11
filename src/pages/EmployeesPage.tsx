@@ -660,15 +660,23 @@ export default function EmployeesPage() {
       ),
     },
   ]
+  const activeMemberCount = filtered.filter((employee) => (employee.status || 'Active').toLowerCase() === 'active').length
+  const onboardingCount = filtered.filter((employee) => ['onboarding', 'trial'].includes((employee.status || '').toLowerCase())).length
+  const assignedMemberCount = filtered.filter((employee) => projects.some((project) => (project.employeeIds || []).includes(employee.id))).length
+  const unassignedMemberCount = filtered.length - assignedMemberCount
+  const editSheetOpen = modal === 'add' || modal === 'edit'
 
   function renderEmployeeCard(employee: Employee, key?: string) {
     const color = avatarColor(employee.name)
-    const empInvoiceCount = invoices.filter(inv => (inv.items||[]).some(it => it.employeeName?.toLowerCase() === employee.name.toLowerCase())).length
+    const empInvoices = invoices.filter(inv => (inv.items||[]).some(it => it.employeeName?.toLowerCase() === employee.name.toLowerCase()))
+    const empInvoiceCount = empInvoices.length
     const empNum = employee.employeeNumber
+    const summary = summarizeEmployeeInvoices(employee, empInvoices)
+    const assignedProjects = projects.filter(project => (project.employeeIds || []).includes(employee.id))
     return (
-      <div key={key || employee.id} className="entity-card compact" style={{ borderTop: `2px solid ${statusColor(employee.status)}`, cursor: 'pointer' }} onClick={() => navigate('/employees/' + employee.id)}>
+      <div key={key || employee.id} className="entity-card compact board-entity-card" style={{ borderTop: `2px solid ${statusColor(employee.status)}`, cursor: 'pointer' }} onClick={() => navigate('/employees/' + employee.id)}>
         <div className="card-top">
-          <div className="card-top-left">
+          <div className="board-top-left">
             <div className="avatar" style={{ background: color }}>{initials(employee.name)}</div>
             <div>
               <div className="card-name">{employee.name}</div>
@@ -676,6 +684,11 @@ export default function EmployeesPage() {
             </div>
           </div>
           <span className={`badge ${statusBadge(employee.status)}`}>{employee.status || 'Active'}</span>
+        </div>
+        <div className="board-contact-line">
+          {employee.email && <span>{employee.email}</span>}
+          {employee.email && employee.phone && <span className="board-card-dot">•</span>}
+          {employee.phone && <span>{employee.phone}</span>}
         </div>
         <div className="card-stats">
           {showPayRates && employee.payRate && (
@@ -724,12 +737,28 @@ export default function EmployeesPage() {
             <div className="stat-label">Invoices</div>
             <div className="stat-value">{empInvoiceCount}</div>
           </div>
+          {summary.hours > 0 && (
+            <div className="stat-item">
+              <div className="stat-label">Hours Logged</div>
+              <div className="stat-value">{fmtHoursHM(summary.hours)}</div>
+            </div>
+          )}
         </div>
+        <div className="board-card-secondary">
+          {assignedProjects.length > 0 ? assignedProjects.slice(0, 3).map(project => (
+            <span key={project.id} className="pill-meta">{project.name}</span>
+          )) : <span className="pill-meta">Unassigned</span>}
+        </div>
+        {showPayRates && summary.premiumHours > 0 && (
+          <div className="board-alert-strip board-alert-strip-compact" style={{ color: 'var(--gold)' }}>
+            {summary.premiumHours.toFixed(1)}h premium time on record
+          </div>
+        )}
         {(employee as {notes?:string}).notes && (
           <div className="card-detail" style={{ fontSize: 11, opacity: .75 }}>{(employee as {notes?:string}).notes}</div>
         )}
         <div className="card-footer">
-          <button className="btn-xs btn-teal" onClick={ev => { ev.stopPropagation(); navigate('/employees/' + employee.id) }}>View Profile</button>
+          <button className="btn-xs btn-teal" onClick={ev => { ev.stopPropagation(); setSelectedEmp(employee); setModal('statements') }}>Statements</button>
           <button className="btn-xs btn-ghost" onClick={ev => { ev.stopPropagation(); openEdit(employee) }}>Edit</button>
           <button className="btn-xs btn-danger" onClick={ev => { ev.stopPropagation(); setConfirmDelete(employee.id) }}>Remove</button>
         </div>
@@ -754,6 +783,27 @@ export default function EmployeesPage() {
             </button>
           </div>
           <button className="btn-primary" onClick={openAdd}>+ Add Member</button>
+        </div>
+      </div>
+
+      <div className="metric-grid-4">
+        <div className="settings-stat-card board-kpi-card">
+          <div className="settings-stat-count">{filtered.length}</div>
+          <div className="settings-stat-label">Visible Members</div>
+        </div>
+        <div className="settings-stat-card board-kpi-card">
+          <div className="settings-stat-count" style={{ color: '#4ade80' }}>{activeMemberCount}</div>
+          <div className="settings-stat-label">Active Staff</div>
+        </div>
+        <div className="settings-stat-card board-kpi-card">
+          <div className="settings-stat-count" style={{ color: '#60a5fa' }}>{assignedMemberCount}</div>
+          <div className="settings-stat-label">Assigned To Projects</div>
+        </div>
+        <div className="settings-stat-card board-kpi-card">
+          <div className="settings-stat-count" style={{ color: onboardingCount > 0 ? '#c084fc' : '#f87171' }}>
+            {onboardingCount > 0 ? onboardingCount : unassignedMemberCount}
+          </div>
+          <div className="settings-stat-label">{onboardingCount > 0 ? 'Onboarding / Trial' : 'Unassigned Members'}</div>
         </div>
       </div>
 
@@ -833,10 +883,14 @@ export default function EmployeesPage() {
           {projectColumns.map(column => (
             <div key={column.id} className="team-lane">
               <div className="team-lane-header">
-                <div>
+                <div className="team-lane-header-main">
                   <div className="team-lane-title">{column.name}</div>
                   <div className="team-lane-sub">
                     {column.employees.length} member{column.employees.length !== 1 ? 's' : ''}
+                  </div>
+                  <div className="team-lane-header-meta">
+                    <span className="pill-meta">{column.employees.filter(employee => (employee.status || 'Active').toLowerCase() === 'active').length} active</span>
+                    <span className="pill-meta">{column.employees.filter(employee => employee.premiumEnabled).length} premium pay</span>
                   </div>
                 </div>
                 <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
@@ -906,14 +960,20 @@ export default function EmployeesPage() {
       )}
 
       {/* Add/Edit Modal */}
-      {(modal === 'add' || modal === 'edit') && (
-        <div className="modal-overlay" onClick={() => setModal(null)}>
-          <div className="modal modal-lg" onClick={(ev) => ev.stopPropagation()}>
-            <div className="modal-header">
-              <h2 className="modal-title">{modal === 'add' ? 'Add Team Member' : 'Edit Member'}</h2>
+      {editSheetOpen && (
+        <div className="sheet-overlay" onClick={() => setModal(null)}>
+          <aside className="sheet-panel" onClick={(ev) => ev.stopPropagation()}>
+            <div className="sheet-header">
+              <div>
+                <div className="sheet-eyebrow">Team Workspace</div>
+                <h2 className="sheet-title">{modal === 'add' ? 'Add Team Member' : 'Edit Member'}</h2>
+                <p className="sheet-subtitle">Manage staffing details, compensation rules, and supporting documents without leaving the board.</p>
+              </div>
               <button className="modal-close btn-icon" onClick={() => setModal(null)}>✕</button>
             </div>
-            <div className="modal-body">
+            <div className="sheet-body">
+              <div className="sheet-section">
+                <div className="sheet-section-title">Identity</div>
               <div className="form-grid-2">
                 <div className="form-group form-group-full">
                   <label className="form-label">Full Name *</label>
@@ -1020,24 +1080,27 @@ export default function EmployeesPage() {
                   <textarea className="form-textarea" rows={2} value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} placeholder="Performance notes, schedule preferences, etc." />
                 </div>
               </div>
+              </div>
               {modal === 'add' && (
-                <div style={{ marginTop: 10, fontSize: 12, color: 'var(--muted)' }}>
+                <div className="board-summary-note">
                   Employee number will be auto-assigned (e.g. YVA25001) on save.
                 </div>
               )}
               {showPayRates && form.premiumEnabled && (
-                <div style={{ marginTop: 10, fontSize: 12, color: 'var(--muted)' }}>
+                <div className="board-summary-note">
                   Example: a 4:00 pm to 12:00 am shift with a {form.premiumPercent || '15'}% premium starting at {form.premiumStartTime || '21:00'} will split 5 regular hours and 3 premium hours automatically.
                 </div>
               )}
               {showPayRates && (form.defaultShiftStart || form.defaultShiftEnd) && (
-                <div style={{ marginTop: 6, fontSize: 12, color: 'var(--muted)' }}>
+                <div className="board-summary-note">
                   Saved schedule: {form.defaultShiftStart || '—'} to {form.defaultShiftEnd || '—'}. Invoice rows for this employee will auto-fill these times.
                 </div>
               )}
 
               {/* Attachments */}
-              <div style={{ marginTop: 16, borderTop: '1px solid var(--border)', paddingTop: 14 }}>
+              <div className="sheet-section">
+                <div className="sheet-section-title">Files &amp; Documents</div>
+              <div style={{ marginTop: 4 }}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
                   <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.07em', color: 'var(--muted)' }}>
                     Files &amp; Documents {attachments.length > 0 && `(${attachments.length})`}
@@ -1070,14 +1133,15 @@ export default function EmployeesPage() {
                   </div>
                 )}
               </div>
+              </div>
             </div>
-            <div className="modal-footer">
+            <div className="sheet-footer">
               <button className="btn-ghost" onClick={() => setModal(null)}>Cancel</button>
               <button className="btn-primary" onClick={saveForm} disabled={!form.name.trim()}>
                 {modal === 'add' ? 'Add Member' : 'Save Changes'}
               </button>
             </div>
-          </div>
+          </aside>
         </div>
       )}
 

@@ -58,6 +58,7 @@ export type ReportsResult = {
   paidCount: number
   unpaidCount: number
   totalBilled: number
+  totalCollected: number
   totalHours: number
   totalPayroll: number
   totalNetEarnings: number
@@ -131,6 +132,20 @@ function safeSubtotal(inv: Invoice): number {
   return Number.isFinite(n) ? n : 0
 }
 
+function safeAmountPaid(inv: Invoice): number {
+  const n = Number(inv.amountPaid ?? 0)
+  return Number.isFinite(n) ? n : 0
+}
+
+function safeCollected(inv: Invoice): number {
+  const subtotal = safeSubtotal(inv)
+  const amountPaid = Math.max(0, safeAmountPaid(inv))
+  const status = (inv.status || '').toLowerCase()
+  if (status === 'paid') return subtotal
+  if (amountPaid > 0) return Math.min(amountPaid, subtotal)
+  return 0
+}
+
 function safeItems(inv: Invoice): InvoiceItem[] {
   return Array.isArray(inv.items) ? inv.items : []
 }
@@ -159,6 +174,7 @@ export function computeReports(store: DataSnapshot, range: DateRange): ReportsRe
   }
 
   let totalBilled = 0
+  let totalCollected = 0
   let paidCount = 0
   let unpaidCount = 0
 
@@ -172,6 +188,7 @@ export function computeReports(store: DataSnapshot, range: DateRange): ReportsRe
   for (const inv of rows) {
     const subtotal = safeSubtotal(inv)
     totalBilled += subtotal
+    totalCollected += safeCollected(inv)
 
     const status = (inv.status || '').toLowerCase()
     if (status === 'paid') paidCount += 1
@@ -272,7 +289,7 @@ export function computeReports(store: DataSnapshot, range: DateRange): ReportsRe
     insights.push(`Top project in range: ${topP.name} (${Math.round(topP.share * 100)}% of revenue).`)
   }
   if (totalPayroll > 0) {
-    insights.push(`Estimated payroll for range: ${totalPayroll.toLocaleString('en-US', { style: 'currency', currency: 'USD' })} · Net: ${totalNetEarnings.toLocaleString('en-US', { style: 'currency', currency: 'USD' })}.`)
+    insights.push(`Billed for range: ${totalBilled.toLocaleString('en-US', { style: 'currency', currency: 'USD' })} · Payroll due: ${totalPayroll.toLocaleString('en-US', { style: 'currency', currency: 'USD' })} · Invoice margin: ${totalNetEarnings.toLocaleString('en-US', { style: 'currency', currency: 'USD' })}.`)
   }
   if (unpaidCount > 0) {
     insights.push(`Unpaid invoices in range: ${unpaidCount}.`)
@@ -284,6 +301,7 @@ export function computeReports(store: DataSnapshot, range: DateRange): ReportsRe
     paidCount,
     unpaidCount,
     totalBilled,
+    totalCollected,
     totalHours,
     totalPayroll,
     totalNetEarnings,

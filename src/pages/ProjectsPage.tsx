@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import type { Client, Employee, Expense, Invoice, Project, Task, TaskStatus } from '../data/types'
 import { loadSnapshot, saveProjects, loadTasks, saveTasks, loadExpenses, saveExpenses } from '../services/storage'
@@ -42,6 +42,10 @@ function stageBadge(s?: string): string {
     case 'on-hold':   return 'badge-yellow'
     default:          return 'badge-blue'
   }
+}
+
+function initials(name: string) {
+  return name.split(' ').map(part => part[0]).slice(0, 2).join('').toUpperCase()
 }
 
 type LinkEntry = { label: string; url: string }
@@ -219,7 +223,13 @@ export default function ProjectsPage() {
     p.name.toLowerCase().includes(search.toLowerCase()),
   )
   const byStage = (s: ProjectStage) => filtered.filter((p) => (p.status || 'planning').toLowerCase() === s)
+  const activeProjects = filtered.filter((project) => (project.status || '').toLowerCase() === 'active').length
+  const hiringProjects = filtered.filter((project) => (project.status || '').toLowerCase() === 'hiring').length
+  const totalBilled = filtered.reduce((sum, project) => sum + projectBilled(project), 0)
+  const totalExpenses = filtered.reduce((sum, project) => sum + projectExpenseTotal(project), 0)
   const dragId = { current: null as string | null }
+  const dragSuppressRef = useRef<string | null>(null)
+  const panelOpen = modal !== null
 
   return (
     <div className="page-wrap">
@@ -238,6 +248,27 @@ export default function ProjectsPage() {
         </div>
       </div>
 
+      <div className="metric-grid-4">
+        <div className="settings-stat-card board-kpi-card">
+          <div className="settings-stat-count">{filtered.length}</div>
+          <div className="settings-stat-label">Visible Projects</div>
+        </div>
+        <div className="settings-stat-card board-kpi-card">
+          <div className="settings-stat-count" style={{ color: '#4ade80' }}>{activeProjects}</div>
+          <div className="settings-stat-label">Active Delivery</div>
+        </div>
+        <div className="settings-stat-card board-kpi-card">
+          <div className="settings-stat-count" style={{ color: 'var(--gold)' }}>{formatMoney(totalBilled)}</div>
+          <div className="settings-stat-label">Total Billed</div>
+        </div>
+        <div className="settings-stat-card board-kpi-card">
+          <div className="settings-stat-count" style={{ color: hiringProjects > 0 ? '#fb923c' : '#f87171' }}>
+            {hiringProjects > 0 ? hiringProjects : formatMoney(totalExpenses)}
+          </div>
+          <div className="settings-stat-label">{hiringProjects > 0 ? 'Hiring Projects' : 'Tracked Expenses'}</div>
+        </div>
+      </div>
+
       {/* CARDS VIEW */}
       {view === 'cards' && (
         <div className="card-grid">
@@ -247,14 +278,23 @@ export default function ProjectsPage() {
             const billed = projectBilled(p)
             const expTotal = projectExpenseTotal(p)
             const budgetPct = p.budget && p.budget > 0 ? Math.min(100, Math.round((billed / p.budget) * 100)) : null
+            const teamCount = (p.employeeIds ?? []).length
             return (
-              <div key={p.id} className="entity-card" style={{ borderTop: `2px solid ${stageColor(p.status)}`, cursor: 'pointer' }} onClick={() => navigate('/projects/' + p.id)}>
+              <div key={p.id} className="entity-card board-entity-card" style={{ borderTop: `2px solid ${stageColor(p.status)}`, cursor: 'pointer' }} onClick={() => navigate('/projects/' + p.id)}>
                 <div className="card-top">
-                  <div>
-                    <div className="card-name">{p.name}</div>
-                    <div className="card-sub">{cName || 'No client'}</div>
+                  <div className="board-top-left">
+                    <div className="board-avatar" style={{ background: stageColor(p.status) }}>{initials(p.name)}</div>
+                    <div>
+                      <div className="card-name">{p.name}</div>
+                      <div className="card-sub">{cName || 'No client assigned yet'}</div>
+                    </div>
                   </div>
                   <span className={`badge ${stageBadge(p.status)}`}>{p.status || 'Planning'}</span>
+                </div>
+                <div className="board-contact-line">
+                  <span>{p.billingModel || 'hourly'} billing</span>
+                  {(p.startDate || p.endDate) && <span className="board-card-dot">•</span>}
+                  <span>{p.startDate || 'No start date'}{p.endDate ? ` -> ${p.endDate}` : ''}</span>
                 </div>
                 <div className="card-stats">
                   {p.rate && (
@@ -293,6 +333,10 @@ export default function ProjectsPage() {
                       <div className="stat-value">{p.startDate}</div>
                     </div>
                   )}
+                  <div className="stat-item">
+                    <div className="stat-label">Team</div>
+                    <div className="stat-value">{teamCount}</div>
+                  </div>
                   {tc > 0 && (
                     <div className="stat-item">
                       <div className="stat-label">Tasks</div>
@@ -300,9 +344,19 @@ export default function ProjectsPage() {
                     </div>
                   )}
                 </div>
+                <div className="board-card-secondary">
+                  {p.rate && <span className="pill-meta">${p.rate}/hr</span>}
+                  {p.budget && <span className="pill-meta">{formatMoney(p.budget)} budget</span>}
+                  {teamCount > 0 && <span className="pill-meta">{teamCount} assigned</span>}
+                </div>
+                {budgetPct !== null && budgetPct >= 90 && (
+                  <div className="board-alert-strip" style={{ color: budgetPct >= 100 ? '#ef4444' : '#f5b533' }}>
+                    {budgetPct >= 100 ? 'Budget exhausted' : `Budget ${budgetPct}% consumed`}
+                  </div>
+                )}
                 {p.notes && <div className="card-detail">{p.notes}</div>}
                 {(p.employeeIds ?? []).length > 0 && (
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 6 }}>
+                  <div className="board-pill-row">
                     {(p.employeeIds ?? []).map(eid => {
                       const emp = employees.find(e => e.id === eid)
                       return emp ? (
@@ -319,7 +373,8 @@ export default function ProjectsPage() {
                   </div>
                 )}
                 <div className="card-footer">
-                  <button className="btn-xs btn-ghost" onClick={ev => { ev.stopPropagation(); navigate('/projects/' + p.id) }}>View Profile</button>
+                  <button className="btn-xs btn-ghost" onClick={ev => { ev.stopPropagation(); openTaskBoard(p) }}>Tasks</button>
+                  <button className="btn-xs btn-ghost" onClick={ev => { ev.stopPropagation(); openExpenses(p) }}>Expenses</button>
                   <button className="btn-xs btn-ghost" onClick={ev => { ev.stopPropagation(); openEdit(p) }}>Edit</button>
                   <button className="btn-xs btn-danger" onClick={ev => { ev.stopPropagation(); setConfirmDelete(p.id) }}>Remove</button>
                 </div>
@@ -337,51 +392,108 @@ export default function ProjectsPage() {
       {/* KANBAN VIEW */}
       {view === 'kanban' && (
         <div className="kanban-board">
-          {STAGES.map(({ key, label }) => (
-            <div key={key} className={`kanban-col kanban-col-${key}`}>
-              <div className="kanban-col-header">
-                <span className="kanban-stage-dot" />
-                <span className="kanban-col-label">{label}</span>
-                <span className="kanban-col-count">{byStage(key).length}</span>
-              </div>
-              <div className="kanban-cards" onDragOver={(e) => e.preventDefault()} onDrop={() => { if (dragId.current) { moveStage(dragId.current, key); dragId.current = null } }}>
-                {byStage(key).map((p) => (
-                  <div key={p.id} className="kanban-card" draggable onDragStart={() => { dragId.current = p.id }}>
-                    <div className="kanban-card-name">{p.name}</div>
-                    {clientName(p.clientId) && <div className="kanban-card-role">{clientName(p.clientId)}</div>}
-                    {p.rate && <div className="kanban-card-meta">${p.rate}/hr</div>}
-                    {(p.links ?? []).length > 0 && (
-                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3, marginTop: 5 }}>
-                        {(p.links ?? []).map((lk, i) => (
-                          <a key={i} href={lk.url} target="_blank" rel="noopener noreferrer" className="card-link-pill card-link-pill-sm" onClick={e => e.stopPropagation()}>{lk.label}</a>
-                        ))}
-                      </div>
-                    )}
-                    <div className="kanban-card-actions">
-                      <button className="btn-xs btn-ghost" onClick={() => openTaskBoard(p)}>Tasks</button>
-                      <button className="btn-xs btn-ghost" onClick={() => openExpenses(p)}>Expenses</button>
-                      <button className="btn-xs btn-ghost" onClick={() => openEdit(p)}>Edit</button>
-                      <button className="btn-xs btn-danger" onClick={() => setConfirmDelete(p.id)}>×</button>
-                    </div>
+          {STAGES.map(({ key, label }) => {
+            const laneProjects = byStage(key)
+            const laneBilled = laneProjects.reduce((sum, project) => sum + projectBilled(project), 0)
+            const laneTasks = laneProjects.reduce((sum, project) => sum + taskCount(project), 0)
+            return (
+              <div key={key} className={`kanban-col kanban-col-${key}`}>
+                <div className="kanban-col-header">
+                  <div className="board-lane-header-main">
+                    <span className="kanban-stage-dot" />
+                    <span className="kanban-col-label">{label}</span>
+                    <span className="kanban-col-count">{laneProjects.length}</span>
                   </div>
-                ))}
-                {byStage(key).length === 0 && <div className="kanban-empty">Drop here</div>}
+                  <div className="board-lane-header-meta">
+                    <span>{formatMoney(laneBilled)} billed</span>
+                    <span>{laneTasks} tasks</span>
+                  </div>
+                </div>
+                <div className="kanban-cards" onDragOver={(e) => e.preventDefault()} onDrop={() => { if (dragId.current) { moveStage(dragId.current, key); dragId.current = null } }}>
+                  {laneProjects.map((p) => {
+                    const cName = clientName(p.clientId)
+                    const teamCount = (p.employeeIds ?? []).length
+                    return (
+                      <div
+                        key={p.id}
+                        className="kanban-card board-kanban-card"
+                        draggable
+                        onDragStart={() => { dragId.current = p.id; dragSuppressRef.current = p.id }}
+                        onDragEnd={() => { window.setTimeout(() => { dragSuppressRef.current = null }, 0) }}
+                        onClick={() => {
+                          if (dragSuppressRef.current === p.id) return
+                          navigate('/projects/' + p.id)
+                        }}
+                      >
+                        <div className="board-kanban-top">
+                          <div className="board-top-left">
+                            <div className="board-avatar" style={{ background: stageColor(p.status) }}>{initials(p.name)}</div>
+                            <div>
+                              <div className="kanban-card-name">{p.name}</div>
+                              <div className="kanban-card-meta">{cName || 'No client assigned'}</div>
+                            </div>
+                          </div>
+                          <span className="board-drag-hint">Drag</span>
+                        </div>
+                        <div className="board-contact-line board-contact-line-sm">
+                          <span>{p.billingModel || 'hourly'} billing</span>
+                          {p.rate && <><span className="board-card-dot">•</span><span>${p.rate}/hr</span></>}
+                        </div>
+                        <div className="board-kanban-stats">
+                          <div>
+                            <div className="stat-label">Billed</div>
+                            <div className="kanban-card-amount">{formatMoney(projectBilled(p))}</div>
+                          </div>
+                          <div>
+                            <div className="stat-label">Team</div>
+                            <div className="stat-value">{teamCount}</div>
+                          </div>
+                          <div>
+                            <div className="stat-label">Tasks</div>
+                            <div className="stat-value">{taskCount(p)}</div>
+                          </div>
+                        </div>
+                        {p.notes && <div className="kanban-card-meta">{p.notes}</div>}
+                        {(p.links ?? []).length > 0 && (
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3, marginTop: 5 }}>
+                            {(p.links ?? []).slice(0, 2).map((lk, i) => (
+                              <a key={i} href={lk.url} target="_blank" rel="noopener noreferrer" className="card-link-pill card-link-pill-sm" onClick={e => e.stopPropagation()}>{lk.label}</a>
+                            ))}
+                          </div>
+                        )}
+                        <div className="kanban-card-actions">
+                          <button className="btn-xs btn-ghost" onClick={(e) => { e.stopPropagation(); openTaskBoard(p) }}>Tasks</button>
+                          <button className="btn-xs btn-ghost" onClick={(e) => { e.stopPropagation(); openExpenses(p) }}>Expenses</button>
+                          <button className="btn-xs btn-ghost" onClick={(e) => { e.stopPropagation(); openEdit(p) }}>Edit</button>
+                          <button className="btn-xs btn-danger" onClick={(e) => { e.stopPropagation(); setConfirmDelete(p.id) }}>×</button>
+                        </div>
+                      </div>
+                    )
+                  })}
+                  {laneProjects.length === 0 && <div className="kanban-empty">Drop here</div>}
+                </div>
               </div>
-            </div>
-          ))}
+            )
+          })}
         </div>
       )}
 
       {/* Project form modal */}
-      {modal && (
-        <div className="modal-overlay" onClick={() => setModal(null)}>
-          <div className="modal modal-lg" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <h2 className="modal-title">{modal === 'add' ? 'Add Project' : 'Edit Project'}</h2>
+      {panelOpen && (
+        <div className="sheet-overlay" onClick={() => setModal(null)}>
+          <aside className="sheet-panel" onClick={(e) => e.stopPropagation()}>
+            <div className="sheet-header">
+              <div>
+                <div className="sheet-eyebrow">Project Workspace</div>
+                <h2 className="sheet-title">{modal === 'add' ? 'Create Project' : 'Edit Project'}</h2>
+                <p className="sheet-subtitle">Keep staffing, billing, budget, and delivery details together without leaving the board.</p>
+              </div>
               <button className="modal-close btn-icon" onClick={() => setModal(null)}>✕</button>
             </div>
-            <div className="modal-body">
-              <div className="form-grid-2">
+            <div className="sheet-body">
+              <div className="sheet-section">
+                <div className="sheet-section-title">Core Details</div>
+                <div className="form-grid-2">
                 <div className="form-group form-group-full">
                   <label className="form-label">Project Name *</label>
                   <input className="form-input" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Project name" />
@@ -427,9 +539,13 @@ export default function ProjectsPage() {
                   <label className="form-label">Notes</label>
                   <textarea className="form-textarea" rows={2} value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} />
                 </div>
+                </div>
+              </div>
 
                 {/* Team members — searchable dropdown */}
                 {employees.length > 0 && (
+                  <div className="sheet-section">
+                    <div className="sheet-section-title">Staffing</div>
                   <div className="form-group form-group-full">
                     <label className="form-label">Assigned Team Members</label>
                     {/* Selected pills */}
@@ -504,9 +620,12 @@ export default function ProjectsPage() {
                       )}
                     </div>
                   </div>
+                  </div>
                 )}
 
                 {/* Links section */}
+                <div className="sheet-section">
+                  <div className="sheet-section-title">Documents &amp; Links</div>
                 <div className="form-group form-group-full">
                   <label className="form-label">Documents &amp; Links</label>
                   {form.links.length > 0 && (
@@ -526,15 +645,15 @@ export default function ProjectsPage() {
                     <button className="btn-ghost btn-sm" onClick={addLink} disabled={!newLinkLabel.trim() || !newLinkUrl.trim()}>+ Add</button>
                   </div>
                 </div>
-              </div>
+                </div>
             </div>
-            <div className="modal-footer">
+            <div className="sheet-footer">
               <button className="btn-ghost" onClick={() => setModal(null)}>Cancel</button>
               <button className="btn-primary" onClick={saveForm} disabled={!form.name.trim()}>
                 {modal === 'add' ? 'Add Project' : 'Save Changes'}
               </button>
             </div>
-          </div>
+          </aside>
         </div>
       )}
 

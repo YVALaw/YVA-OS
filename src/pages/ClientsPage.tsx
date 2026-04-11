@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import type { ActivityLogEntry, Client, Invoice, Project } from '../data/types'
 import { loadSnapshot, saveClients, loadActivityLog, saveActivityLog, loadSettings } from '../services/storage'
@@ -87,6 +87,7 @@ export default function ClientsPage() {
   const [activityClient, setActivityClient] = useState<Client | null>(null)
   const [activityLog, setActivityLog]       = useState<ActivityLogEntry[]>([])
   const [activityNote, setActivityNote]     = useState('')
+  const dragSuppressRef = useRef<string | null>(null)
 
   function openActivity(c: Client) {
     setActivityClient(c)
@@ -161,6 +162,14 @@ export default function ClientsPage() {
     `${c.name} ${c.email ?? ''}`.toLowerCase().includes(search.toLowerCase()),
   )
   const byStage = (s: ClientStage) => filtered.filter((c) => (c.status || 'lead').toLowerCase() === s)
+  const totalRevenue = filtered.reduce((sum, client) => sum + clientRevenue(client.id), 0)
+  const totalOutstanding = filtered.reduce((sum, client) => sum + clientOutstanding(client.id), 0)
+  const activeClients = filtered.filter(c => (c.status || 'lead').toLowerCase() === 'active').length
+  const contractRisk = filtered.filter((c) => {
+    if (!c.contractEnd) return false
+    const daysLeft = Math.ceil((new Date(c.contractEnd).getTime() - Date.now()) / 86400000)
+    return daysLeft <= 45
+  }).length
 
   function clientRevenue(id: string) {
     const name = clients.find(c => c.id === id)?.name
@@ -205,6 +214,7 @@ export default function ClientsPage() {
   }
 
   const dragId = { current: null as string | null }
+  const panelOpen = modal !== null
 
   return (
     <div className="page-wrap">
@@ -223,6 +233,27 @@ export default function ClientsPage() {
         </div>
       </div>
 
+      <div className="metric-grid-4">
+        <div className="settings-stat-card client-kpi-card">
+          <div className="settings-stat-count">{filtered.length}</div>
+          <div className="settings-stat-label">Visible Clients</div>
+        </div>
+        <div className="settings-stat-card client-kpi-card">
+          <div className="settings-stat-count" style={{ color: '#4ade80' }}>{activeClients}</div>
+          <div className="settings-stat-label">Active Accounts</div>
+        </div>
+        <div className="settings-stat-card client-kpi-card">
+          <div className="settings-stat-count" style={{ color: 'var(--gold)' }}>${totalRevenue.toLocaleString(undefined, { maximumFractionDigits: 0 })}</div>
+          <div className="settings-stat-label">Lifetime Billed</div>
+        </div>
+        <div className="settings-stat-card client-kpi-card">
+          <div className="settings-stat-count" style={{ color: totalOutstanding > 0 ? '#f87171' : '#4ade80' }}>
+            ${totalOutstanding.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+          </div>
+          <div className="settings-stat-label">{contractRisk > 0 ? `${contractRisk} contracts expiring` : 'Outstanding Balance'}</div>
+        </div>
+      </div>
+
       {/* CARDS VIEW */}
       {view === 'cards' && (
         <div className="card-grid">
@@ -232,21 +263,26 @@ export default function ClientsPage() {
             const outstanding = clientOutstanding(c.id)
             const color = avatarColor(c.name)
             return (
-              <div key={c.id} className="entity-card" style={{ borderTop: `2px solid ${stageColor(c.status)}`, cursor: 'pointer' }} onClick={() => navigate('/clients/' + c.id)}>
+              <div key={c.id} className="entity-card client-entity-card" style={{ borderTop: `2px solid ${stageColor(c.status)}`, cursor: 'pointer' }} onClick={() => navigate('/clients/' + c.id)}>
                 <div className="card-top">
                   <div className="card-top-left">
                     <div className="avatar" style={{ background: color }}>{initials(c.name)}</div>
                     <div>
                       <div className="card-name">{c.name}</div>
-                      <div className="card-sub">{c.email || 'No email'}</div>
+                      <div className="card-sub">{c.company || c.email || 'No company or email'}</div>
                     </div>
                   </div>
                   <span className={`badge ${stageBadge(c.status)}`}>{c.status || 'Lead'}</span>
                 </div>
+                <div className="client-card-contact-line">
+                  {c.email && <span>{c.email}</span>}
+                  {c.email && c.phone && <span className="client-card-dot">•</span>}
+                  {c.phone && <span>{c.phone}</span>}
+                </div>
                 <div className="card-stats">
                   <div className="stat-item">
-                    <div className="stat-label">Revenue</div>
-                    <div className="stat-value stat-value-gold">${(rev / 1000).toFixed(1)}k</div>
+                    <div className="stat-label">Billed</div>
+                    <div className="stat-value stat-value-gold">${rev.toLocaleString(undefined, { maximumFractionDigits: 0 })}</div>
                   </div>
                   <div className="stat-item">
                     <div className="stat-label">Projects</div>
@@ -271,11 +307,16 @@ export default function ClientsPage() {
                     </div>
                   )}
                 </div>
+                <div className="client-card-secondary">
+                  {c.address && <span className="pill-meta">{c.address.split(',')[0]}</span>}
+                  {c.timezone && <span className="pill-meta">{c.timezone}</span>}
+                  {c.defaultRate != null && <span className="pill-meta">${c.defaultRate}/hr default</span>}
+                </div>
                 {c.contractEnd && (() => {
                   const daysLeft = Math.ceil((new Date(c.contractEnd).getTime() - Date.now()) / 86400000)
                   if (daysLeft > 60) return null
                   return (
-                    <div style={{ fontSize: 11, color: daysLeft <= 0 ? '#ef4444' : daysLeft <= 30 ? '#f97316' : '#f5b533', marginTop: 4, fontWeight: 600 }}>
+                    <div className="client-alert-strip" style={{ color: daysLeft <= 0 ? '#ef4444' : daysLeft <= 30 ? '#f97316' : '#f5b533' }}>
                       {daysLeft <= 0 ? `Contract expired ${Math.abs(daysLeft)}d ago` : `Contract ends in ${daysLeft}d (${c.contractEnd})`}
                     </div>
                   )
@@ -289,11 +330,10 @@ export default function ClientsPage() {
                   </div>
                 )}
                 <div className="card-footer">
-                  <button className="btn-xs btn-ghost" onClick={ev => { ev.stopPropagation(); navigate('/clients/' + c.id) }}>View Profile</button>
                   {outstanding > 0 && c.email && (
                     <button className="btn-xs btn-ghost" style={{ color: '#fb923c' }} onClick={ev => { ev.stopPropagation(); sendClientReminder(c) }}>✉ Remind</button>
                   )}
-                  <button className="btn-xs btn-ghost" onClick={ev => { ev.stopPropagation(); openEdit(c) }}>Edit</button>
+                  <button className="btn-xs btn-ghost" onClick={ev => { ev.stopPropagation(); openEdit(c) }}>Quick Edit</button>
                   <button className="btn-xs btn-danger" onClick={ev => { ev.stopPropagation(); setConfirmDelete(c.id) }}>Remove</button>
                 </div>
               </div>
@@ -310,97 +350,178 @@ export default function ClientsPage() {
       {/* KANBAN VIEW */}
       {view === 'kanban' && (
         <div className="kanban-board">
-          {STAGES.map(({ key, label }) => (
+          {STAGES.map(({ key, label }) => {
+            const laneClients = byStage(key)
+            const laneOutstanding = laneClients.reduce((sum, client) => sum + clientOutstanding(client.id), 0)
+            const laneRevenue = laneClients.reduce((sum, client) => sum + clientRevenue(client.id), 0)
+            return (
             <div key={key} className={`kanban-col kanban-col-${key}`}>
               <div className="kanban-col-header">
-                <span className="kanban-stage-dot" />
-                <span className="kanban-col-label">{label}</span>
-                <span className="kanban-col-count">{byStage(key).length}</span>
+                <div className="client-lane-header-main">
+                  <span className="kanban-stage-dot" />
+                  <span className="kanban-col-label">{label}</span>
+                  <span className="kanban-col-count">{laneClients.length}</span>
+                </div>
+                <div className="client-lane-header-meta">
+                  <span>${laneRevenue.toLocaleString(undefined, { maximumFractionDigits: 0 })} billed</span>
+                  <span>${laneOutstanding.toLocaleString(undefined, { maximumFractionDigits: 0 })} open</span>
+                </div>
               </div>
               <div className="kanban-cards" onDragOver={(e) => e.preventDefault()} onDrop={() => { if (dragId.current) { moveStage(dragId.current, key); dragId.current = null } }}>
-                {byStage(key).map((c) => (
-                  <div key={c.id} className="kanban-card" draggable onDragStart={() => { dragId.current = c.id }}>
-                    <div className="kanban-card-name">{c.name}</div>
-                    <div className="kanban-card-meta">{c.email || 'No email'}</div>
+                {laneClients.map((c) => {
+                  const rev = clientRevenue(c.id)
+                  const outstanding = clientOutstanding(c.id)
+                  const projCount = clientProjects(c.id)
+                  const color = avatarColor(c.name)
+                  return (
+                  <div
+                    key={c.id}
+                    className="kanban-card client-kanban-card"
+                    draggable
+                    onDragStart={() => { dragId.current = c.id; dragSuppressRef.current = c.id }}
+                    onDragEnd={() => { window.setTimeout(() => { dragSuppressRef.current = null }, 0) }}
+                    onClick={() => {
+                      if (dragSuppressRef.current === c.id) return
+                      navigate('/clients/' + c.id)
+                    }}
+                  >
+                    <div className="client-kanban-top">
+                      <div className="card-top-left">
+                        <div className="avatar avatar-sm" style={{ background: color }}>{initials(c.name)}</div>
+                        <div>
+                          <div className="kanban-card-name">{c.name}</div>
+                          <div className="kanban-card-meta">{c.company || c.email || 'No company or email'}</div>
+                        </div>
+                      </div>
+                      <span className="client-drag-hint">Drag</span>
+                    </div>
+                    <div className="client-card-contact-line client-card-contact-line-sm">
+                      {c.email && <span>{c.email}</span>}
+                      {c.email && c.phone && <span className="client-card-dot">•</span>}
+                      {c.phone && <span>{c.phone}</span>}
+                    </div>
+                    <div className="client-kanban-stats">
+                      <div>
+                        <div className="stat-label">Billed</div>
+                        <div className="kanban-card-amount">${rev.toLocaleString(undefined, { maximumFractionDigits: 0 })}</div>
+                      </div>
+                      <div>
+                        <div className="stat-label">Projects</div>
+                        <div className="stat-value">{projCount}</div>
+                      </div>
+                      <div>
+                        <div className="stat-label">Open</div>
+                        <div className="stat-value" style={{ color: outstanding > 0 ? '#f87171' : '#4ade80' }}>
+                          ${outstanding.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                        </div>
+                      </div>
+                    </div>
                     {(c.links ?? []).length > 0 && (
                       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3, marginTop: 5 }}>
-                        {(c.links ?? []).map((lk, i) => (
+                        {(c.links ?? []).slice(0, 2).map((lk, i) => (
                           <a key={i} href={lk.url} target="_blank" rel="noopener noreferrer" className="card-link-pill card-link-pill-sm" onClick={e => e.stopPropagation()}>{lk.label}</a>
                         ))}
                       </div>
                     )}
+                    {c.contractEnd && (() => {
+                      const daysLeft = Math.ceil((new Date(c.contractEnd).getTime() - Date.now()) / 86400000)
+                      if (daysLeft > 45) return null
+                      return (
+                        <div className="client-alert-strip client-alert-strip-compact" style={{ color: daysLeft <= 0 ? '#ef4444' : '#f97316' }}>
+                          {daysLeft <= 0 ? 'Contract expired' : `Contract ends in ${daysLeft}d`}
+                        </div>
+                      )
+                    })()}
                     <div className="kanban-card-actions">
-                      <button className="btn-xs btn-ghost" onClick={() => openActivity(c)}>Activity</button>
-                      <button className="btn-xs btn-ghost" onClick={() => openEdit(c)}>Edit</button>
-                      <button className="btn-xs btn-danger" onClick={() => setConfirmDelete(c.id)}>×</button>
+                      <button className="btn-xs btn-ghost" onClick={(e) => { e.stopPropagation(); openActivity(c) }}>Activity</button>
+                      <button className="btn-xs btn-ghost" onClick={(e) => { e.stopPropagation(); openEdit(c) }}>Quick Edit</button>
+                      <button className="btn-xs btn-danger" onClick={(e) => { e.stopPropagation(); setConfirmDelete(c.id) }}>×</button>
                     </div>
                   </div>
-                ))}
+                )})}
                 {byStage(key).length === 0 && <div className="kanban-empty">Drop here</div>}
               </div>
             </div>
-          ))}
+          )})}
         </div>
       )}
 
-      {/* Add/Edit Modal */}
-      {modal && (
-        <div className="modal-overlay" onClick={() => setModal(null)}>
-          <div className="modal modal-lg" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <h2 className="modal-title">{modal === 'add' ? 'Add Client' : 'Edit Client'}</h2>
+      {/* Add/Edit Panel */}
+      {panelOpen && (
+        <div className="sheet-overlay" onClick={() => setModal(null)}>
+          <aside className="sheet-panel" onClick={(e) => e.stopPropagation()}>
+            <div className="sheet-header">
+              <div>
+                <div className="sheet-eyebrow">Client Workspace</div>
+                <h2 className="sheet-title">{modal === 'add' ? 'Create Client' : 'Edit Client'}</h2>
+                <p className="sheet-subtitle">Keep the pipeline clean while updating the key billing, contact, and contract details here.</p>
+              </div>
               <button className="modal-close btn-icon" onClick={() => setModal(null)}>✕</button>
             </div>
-            <div className="modal-body">
+            <div className="sheet-body">
+              <div className="sheet-section">
+                <div className="sheet-section-title">Identity</div>
+                <div className="form-grid-2">
+                  <div className="form-group form-group-full">
+                    <label className="form-label">Display Name *</label>
+                    <input className="form-input" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Client / contact name" />
+                  </div>
+                  <div className="form-group form-group-full">
+                    <label className="form-label">Company / Legal Name</label>
+                    <input className="form-input" value={form.company} onChange={(e) => setForm({ ...form, company: e.target.value })} placeholder="Legal entity name (optional)" />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Stage</label>
+                    <select className="form-select" value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}>
+                      {STAGES.map((s) => <option key={s.key} value={s.key}>{s.label}</option>)}
+                    </select>
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Contract End Date</label>
+                    <input className="form-input" type="date" value={form.contractEnd} onChange={(e) => setForm({ ...form, contractEnd: e.target.value })} />
+                  </div>
+                </div>
+              </div>
+
+              <div className="sheet-section">
+                <div className="sheet-section-title">Billing & Contact</div>
+                <div className="form-grid-2">
+                  <div className="form-group">
+                    <label className="form-label">Email</label>
+                    <input className="form-input" type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="billing@client.com" />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Phone</label>
+                    <input className="form-input" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} placeholder="+1 555 000 0000" />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Timezone</label>
+                    <input className="form-input" value={form.timezone} onChange={(e) => setForm({ ...form, timezone: e.target.value })} placeholder="EST / PST" />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Default Rate ($/hr)</label>
+                    <input className="form-input" type="number" value={form.defaultRate} onChange={(e) => setForm({ ...form, defaultRate: e.target.value })} placeholder="8.50" />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Payment Terms</label>
+                    <select className="form-select" value={form.paymentTerms} onChange={(e) => setForm({ ...form, paymentTerms: e.target.value })}>
+                      <option value="">— Not set —</option>
+                      <option value="On receipt">On receipt</option>
+                      <option value="Net 7">Net 7</option>
+                      <option value="Net 15">Net 15</option>
+                      <option value="Net 30">Net 30</option>
+                    </select>
+                  </div>
+                  <div className="form-group form-group-full">
+                    <label className="form-label">Billing Address</label>
+                    <input className="form-input" value={form.address} onChange={(e) => setForm({ ...form, address: e.target.value })} placeholder="123 Main St, City, State" />
+                  </div>
+                </div>
+              </div>
+
+              <div className="sheet-section">
+                <div className="sheet-section-title">Context</div>
               <div className="form-grid-2">
-                <div className="form-group form-group-full">
-                  <label className="form-label">Display Name *</label>
-                  <input className="form-input" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Client / contact name" />
-                </div>
-                <div className="form-group form-group-full">
-                  <label className="form-label">Company / Legal Name</label>
-                  <input className="form-input" value={form.company} onChange={(e) => setForm({ ...form, company: e.target.value })} placeholder="Legal entity name (optional)" />
-                </div>
-                <div className="form-group">
-                  <label className="form-label">Email</label>
-                  <input className="form-input" type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="billing@client.com" />
-                </div>
-                <div className="form-group">
-                  <label className="form-label">Phone</label>
-                  <input className="form-input" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} placeholder="+1 555 000 0000" />
-                </div>
-                <div className="form-group">
-                  <label className="form-label">Stage</label>
-                  <select className="form-select" value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}>
-                    {STAGES.map((s) => <option key={s.key} value={s.key}>{s.label}</option>)}
-                  </select>
-                </div>
-                <div className="form-group">
-                  <label className="form-label">Timezone</label>
-                  <input className="form-input" value={form.timezone} onChange={(e) => setForm({ ...form, timezone: e.target.value })} placeholder="EST / PST" />
-                </div>
-                <div className="form-group">
-                  <label className="form-label">Default Rate ($/hr)</label>
-                  <input className="form-input" type="number" value={form.defaultRate} onChange={(e) => setForm({ ...form, defaultRate: e.target.value })} placeholder="8.50" />
-                </div>
-                <div className="form-group">
-                  <label className="form-label">Payment Terms</label>
-                  <select className="form-select" value={form.paymentTerms} onChange={(e) => setForm({ ...form, paymentTerms: e.target.value })}>
-                    <option value="">— Not set —</option>
-                    <option value="On receipt">On receipt</option>
-                    <option value="Net 7">Net 7</option>
-                    <option value="Net 15">Net 15</option>
-                    <option value="Net 30">Net 30</option>
-                  </select>
-                </div>
-                <div className="form-group">
-                  <label className="form-label">Contract End Date</label>
-                  <input className="form-input" type="date" value={form.contractEnd} onChange={(e) => setForm({ ...form, contractEnd: e.target.value })} />
-                </div>
-                <div className="form-group form-group-full">
-                  <label className="form-label">Billing Address</label>
-                  <input className="form-input" value={form.address} onChange={(e) => setForm({ ...form, address: e.target.value })} placeholder="123 Main St, City, State" />
-                </div>
                 <div className="form-group form-group-full">
                   <label className="form-label">Tags</label>
                   <input className="form-input" value={form.tags} onChange={(e) => setForm({ ...form, tags: e.target.value })} placeholder="e.g. Law firm, US, High priority" />
@@ -430,15 +551,16 @@ export default function ClientsPage() {
                     <button className="btn-ghost btn-sm" onClick={addLink} disabled={!newLinkLabel.trim() || !newLinkUrl.trim()}>+ Add</button>
                   </div>
                 </div>
+                </div>
               </div>
             </div>
-            <div className="modal-footer">
+            <div className="sheet-footer">
               <button className="btn-ghost" onClick={() => setModal(null)}>Cancel</button>
               <button className="btn-primary" onClick={saveForm} disabled={!form.name.trim()}>
                 {modal === 'add' ? 'Add Client' : 'Save Changes'}
               </button>
             </div>
-          </div>
+          </aside>
         </div>
       )}
 
