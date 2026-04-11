@@ -346,7 +346,7 @@ export default function ReportsPage() {
         const years = thisYear - startYearNum
         return milestones.has(years)
       })
-      .map(emp => ({ name: emp.name, years: thisYear - Number(emp.startYear) }))
+      .map(emp => ({ id: emp.id, name: emp.name, years: thisYear - Number(emp.startYear) }))
   }, [store])
 
   // Contract renewal warnings (within 60 days)
@@ -359,6 +359,55 @@ export default function ReportsPage() {
       return d >= today && d <= in60
     }).sort((a, b) => new Date(a.contractEnd!).getTime() - new Date(b.contractEnd!).getTime())
   }, [store])
+
+  const attentionInvoiceDrillModal = (() => {
+    if (kpiDrill !== 'attentionOverdue' && kpiDrill !== 'attentionDrafts') return null
+
+    const isOverdue = kpiDrill === 'attentionOverdue'
+    const rows = isOverdue
+      ? [...overdueInvoices].sort((a, b) => (a.dueDate || a.date || '').localeCompare(b.dueDate || b.date || ''))
+      : [...draftInvoices].sort((a, b) => (b.date || b.billingEnd || '').localeCompare(a.date || a.billingEnd || ''))
+    const title = isOverdue ? 'Needs Attention — Overdue Invoices' : 'Needs Attention — Draft Invoices'
+    const summary = isOverdue
+      ? `${rows.length} overdue invoice${rows.length === 1 ? '' : 's'} need status or collection follow-up`
+      : `${rows.length} draft invoice${rows.length === 1 ? '' : 's'} may be ready to send`
+
+    return (
+      <div className="modal-overlay" onClick={() => setKpiDrill(null)}>
+        <div className="modal" style={{ maxWidth: 580 }} onClick={e => e.stopPropagation()}>
+          <div className="modal-header">
+            <h2 className="modal-title">{title}</h2>
+            <button className="modal-close btn-icon" onClick={() => setKpiDrill(null)}>✕</button>
+          </div>
+          <div style={{ padding: '8px 20px', fontSize: 13, color: 'var(--muted)', borderBottom: '1px solid var(--border)' }}>{summary}</div>
+          <div className="modal-list">
+            {rows.length === 0 ? (
+              <div style={{ padding: '32px 20px', textAlign: 'center', color: 'var(--muted)', fontSize: 13 }}>No invoices need attention.</div>
+            ) : rows.map(inv => (
+              <div
+                key={inv.id}
+                className="modal-list-item nav"
+                onClick={() => {
+                  navigate(`/invoice?q=${encodeURIComponent(inv.number || '')}`)
+                  setKpiDrill(null)
+                }}
+              >
+                <div className="modal-list-main">
+                  <div className="modal-list-label">{inv.number} — {inv.clientName || '—'}</div>
+                  <div className="modal-list-sub">
+                    {inv.projectName || 'No project'}{inv.dueDate ? ' · Due ' + inv.dueDate : inv.date ? ' · ' + inv.date : ''}
+                  </div>
+                </div>
+                <span className={`badge ${sBadge(inv.status)}`} style={{ fontSize: 10, flexShrink: 0 }}>{inv.status || (isOverdue ? 'overdue' : 'draft')}</span>
+                <div className="modal-list-right">{formatMoney(Number(inv.subtotal)||0)}</div>
+                <span className="modal-list-arrow">→</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    )
+  })()
 
   // ── Admin dashboard ─────────────────────────────────────────────────────────
   if (role === 'admin') {
@@ -445,43 +494,47 @@ export default function ReportsPage() {
             <div className="data-card-title">Needs Attention</div>
             <div className="attention-list">
               {overdueInvoices.length > 0 && (
-                <div className="attention-item">
+                <button className="attention-item attention-item-action" type="button" onClick={() => setKpiDrill('attentionOverdue')}>
                   <div className="attention-item-dot" />
                   <div className="attention-item-body">
                     <div className="attention-item-title">{overdueInvoices.length} Overdue Invoice{overdueInvoices.length > 1 ? 's' : ''}</div>
-                    <div className="attention-item-sub">Update status in Invoices</div>
+                    <div className="attention-item-sub">Click to see which invoices are overdue</div>
                   </div>
-                </div>
+                  <span className="attention-item-arrow">→</span>
+                </button>
               )}
               {draftInvoices.length > 0 && (
-                <div className="attention-item">
+                <button className="attention-item attention-item-action" type="button" onClick={() => setKpiDrill('attentionDrafts')}>
                   <div className="attention-item-dot attention-item-dot-warn" />
                   <div className="attention-item-body">
                     <div className="attention-item-title">{draftInvoices.length} Draft Invoice{draftInvoices.length > 1 ? 's' : ''}</div>
-                    <div className="attention-item-sub">Ready to send to clients</div>
+                    <div className="attention-item-sub">Click to see drafts ready to send</div>
                   </div>
-                </div>
+                  <span className="attention-item-arrow">→</span>
+                </button>
               )}
               {expiringContracts.map(c => {
                 const daysLeft = Math.ceil((new Date(c.contractEnd!).getTime() - Date.now()) / 86400000)
                 return (
-                  <div key={c.id} className="attention-item">
+                  <button key={c.id} className="attention-item attention-item-action" type="button" onClick={() => navigate(`/clients/${c.id}`)}>
                     <div className="attention-item-dot" style={{ background: daysLeft <= 14 ? '#ef4444' : '#f97316' }} />
                     <div className="attention-item-body">
                       <div className="attention-item-title">Contract Expiring — {c.name}</div>
                       <div className="attention-item-sub">{daysLeft === 0 ? 'Expires today' : `${daysLeft} day${daysLeft !== 1 ? 's' : ''} left`}</div>
                     </div>
-                  </div>
+                    <span className="attention-item-arrow">→</span>
+                  </button>
                 )
               })}
               {anniversaries.map(a => (
-                <div key={a.name} className="attention-item">
+                <button key={a.id} className="attention-item attention-item-action" type="button" onClick={() => navigate(`/employees/${a.id}`)}>
                   <div className="attention-item-dot" style={{ background: '#a855f7' }} />
                   <div className="attention-item-body">
                     <div className="attention-item-title">{a.name} — {a.years} Year{a.years !== 1 ? 's' : ''}</div>
                     <div className="attention-item-sub">{a.years} year{a.years !== 1 ? 's' : ''} with YVA Staffing</div>
                   </div>
-                </div>
+                  <span className="attention-item-arrow">→</span>
+                </button>
               ))}
               {overdueInvoices.length === 0 && draftInvoices.length === 0 && expiringContracts.length === 0 && anniversaries.length === 0 && (
                 <div style={{ fontSize: 13, color: 'var(--muted)', padding: '12px 0', textAlign: 'center' }}>All clear — nothing needs attention</div>
@@ -519,6 +572,7 @@ export default function ReportsPage() {
             </div>
           </div>
         )}
+        {attentionInvoiceDrillModal}
       </div>
     )
   }
@@ -648,33 +702,36 @@ export default function ReportsPage() {
             <div className="data-card-title">Needs Attention</div>
             <div className="attention-list">
               {overdueInvoices.length > 0 && (
-                <div className="attention-item">
+                <button className="attention-item attention-item-action" type="button" onClick={() => setKpiDrill('attentionOverdue')}>
                   <div className="attention-item-dot" />
                   <div className="attention-item-body">
                     <div className="attention-item-title">{overdueInvoices.length} Overdue Invoice{overdueInvoices.length > 1 ? 's' : ''}</div>
-                    <div className="attention-item-sub">Update status in Invoices</div>
+                    <div className="attention-item-sub">Click to see which invoices are overdue</div>
                   </div>
-                </div>
+                  <span className="attention-item-arrow">→</span>
+                </button>
               )}
               {draftInvoices.length > 0 && (
-                <div className="attention-item">
+                <button className="attention-item attention-item-action" type="button" onClick={() => setKpiDrill('attentionDrafts')}>
                   <div className="attention-item-dot attention-item-dot-warn" />
                   <div className="attention-item-body">
                     <div className="attention-item-title">{draftInvoices.length} Draft Invoice{draftInvoices.length > 1 ? 's' : ''}</div>
-                    <div className="attention-item-sub">Ready to send to clients</div>
+                    <div className="attention-item-sub">Click to see drafts ready to send</div>
                   </div>
-                </div>
+                  <span className="attention-item-arrow">→</span>
+                </button>
               )}
               {expiringContracts.map(c => {
                 const daysLeft = Math.ceil((new Date(c.contractEnd!).getTime() - Date.now()) / 86400000)
                 return (
-                  <div key={c.id} className="attention-item">
+                  <button key={c.id} className="attention-item attention-item-action" type="button" onClick={() => navigate(`/clients/${c.id}`)}>
                     <div className="attention-item-dot" style={{ background: daysLeft <= 14 ? '#ef4444' : '#f97316' }} />
                     <div className="attention-item-body">
                       <div className="attention-item-title">Contract Expiring — {c.name}</div>
                       <div className="attention-item-sub">{daysLeft === 0 ? 'Expires today' : `${daysLeft} day${daysLeft !== 1 ? 's' : ''} left`}</div>
                     </div>
-                  </div>
+                    <span className="attention-item-arrow">→</span>
+                  </button>
                 )
               })}
               {overdueInvoices.length === 0 && draftInvoices.length === 0 && expiringContracts.length === 0 && (
@@ -683,6 +740,7 @@ export default function ReportsPage() {
             </div>
           </div>
         </div>
+        {attentionInvoiceDrillModal}
       </div>
     )
   }
@@ -985,61 +1043,67 @@ export default function ReportsPage() {
           <div className="data-card-title">Needs Attention</div>
           <div className="attention-list">
             {overdueInvoices.length > 0 && (
-              <div className="attention-item">
+              <button className="attention-item attention-item-action" type="button" onClick={() => setKpiDrill('attentionOverdue')}>
                 <div className="attention-item-dot" />
                 <div className="attention-item-body">
                   <div className="attention-item-title">{overdueInvoices.length} Overdue Invoice{overdueInvoices.length > 1 ? 's' : ''}</div>
-                  <div className="attention-item-sub">Update status in Invoices → Pipeline</div>
+                  <div className="attention-item-sub">Click to see which invoices are overdue</div>
                 </div>
-              </div>
+                <span className="attention-item-arrow">→</span>
+              </button>
             )}
             {draftInvoices.length > 0 && (
-              <div className="attention-item">
+              <button className="attention-item attention-item-action" type="button" onClick={() => setKpiDrill('attentionDrafts')}>
                 <div className="attention-item-dot attention-item-dot-warn" />
                 <div className="attention-item-body">
                   <div className="attention-item-title">{draftInvoices.length} Draft Invoice{draftInvoices.length > 1 ? 's' : ''}</div>
-                  <div className="attention-item-sub">Ready to send to clients</div>
+                  <div className="attention-item-sub">Click to see drafts ready to send</div>
                 </div>
-              </div>
+                <span className="attention-item-arrow">→</span>
+              </button>
             )}
             {allUnpaidInvoices.length > 0 && (
-              <div className="attention-item">
+              <button className="attention-item attention-item-action" type="button" onClick={() => setKpiDrill('unpaid')}>
                 <div className="attention-item-dot attention-item-dot-warn" />
                 <div className="attention-item-body">
                   <div className="attention-item-title">{allUnpaidInvoices.length} Unpaid Invoice{allUnpaidInvoices.length !== 1 ? 's' : ''}</div>
-                  <div className="attention-item-sub">Client balances still awaiting collection</div>
+                  <div className="attention-item-sub">Click to see balances awaiting collection</div>
                 </div>
-              </div>
+                <span className="attention-item-arrow">→</span>
+              </button>
             )}
             {payrollDueByEmployee.length > 0 && (
-              <div className="attention-item">
+              <button className="attention-item attention-item-action" type="button" onClick={() => setKpiDrill('payrollDue')}>
                 <div className="attention-item-dot attention-item-dot-warn" style={{ background: '#fb7185' }} />
                 <div className="attention-item-body">
                   <div className="attention-item-title">{payrollDueByEmployee.length} Team Member{payrollDueByEmployee.length !== 1 ? 's' : ''} Still Owed</div>
-                  <div className="attention-item-sub">{formatMoney(totalPayrollDue)} payroll liability outstanding</div>
+                  <div className="attention-item-sub">Click to see {formatMoney(totalPayrollDue)} outstanding by person</div>
                 </div>
-              </div>
+                <span className="attention-item-arrow">→</span>
+              </button>
             )}
             {expiringContracts.map(c => {
               const daysLeft = Math.ceil((new Date(c.contractEnd!).getTime() - Date.now()) / 86400000)
               return (
-                <div key={c.id} className="attention-item">
+                <button key={c.id} className="attention-item attention-item-action" type="button" onClick={() => navigate(`/clients/${c.id}`)}>
                   <div className="attention-item-dot" style={{ background: daysLeft <= 14 ? '#ef4444' : '#f97316' }} />
                   <div className="attention-item-body">
                     <div className="attention-item-title">Contract Expiring — {c.name}</div>
                     <div className="attention-item-sub">{daysLeft === 0 ? 'Expires today' : `${daysLeft} day${daysLeft !== 1 ? 's' : ''} left (${c.contractEnd})`}</div>
                   </div>
-                </div>
+                  <span className="attention-item-arrow">→</span>
+                </button>
               )
             })}
             {anniversaries.map(a => (
-              <div key={a.name} className="attention-item">
+              <button key={a.id} className="attention-item attention-item-action" type="button" onClick={() => navigate(`/employees/${a.id}`)}>
                 <div className="attention-item-dot" style={{ background: '#a855f7' }} />
                 <div className="attention-item-body">
                   <div className="attention-item-title">{a.name} — {a.years} Year{a.years !== 1 ? 's' : ''} Anniversary</div>
                   <div className="attention-item-sub">Celebrating {a.years} year{a.years !== 1 ? 's' : ''} with YVA Staffing in {new Date().getFullYear()}</div>
                 </div>
-              </div>
+                <span className="attention-item-arrow">→</span>
+              </button>
             ))}
             {overdueInvoices.length === 0 && draftInvoices.length === 0 && allUnpaidInvoices.length === 0 && payrollDueByEmployee.length === 0 && expiringContracts.length === 0 && anniversaries.length === 0 && (
               <div style={{ fontSize: 13, color: 'var(--muted)', padding: '12px 0', textAlign: 'center' }}>
@@ -1549,7 +1613,33 @@ export default function ReportsPage() {
 
         const navInv = (inv: Invoice) => `/invoice?q=${encodeURIComponent(inv.number || '')}`
 
-        if (kpiDrill === 'billed') {
+        if (kpiDrill === 'attentionOverdue') {
+          title = 'Needs Attention — Overdue Invoices'
+          summary = `${overdueInvoices.length} overdue invoice${overdueInvoices.length === 1 ? '' : 's'} need status or collection follow-up`
+          items = [...overdueInvoices]
+            .sort((a, b) => (a.dueDate || a.date || '').localeCompare(b.dueDate || b.date || ''))
+            .map(inv => ({
+              label: `${inv.number} — ${inv.clientName || '—'}`,
+              sub: `${inv.projectName || 'No project'}${inv.dueDate ? ' · Due ' + inv.dueDate : inv.date ? ' · ' + inv.date : ''}`,
+              right: formatMoney(Number(inv.subtotal)||0),
+              badge: sBadge(inv.status),
+              badgeLabel: inv.status || 'overdue',
+              nav: navInv(inv),
+            }))
+        } else if (kpiDrill === 'attentionDrafts') {
+          title = 'Needs Attention — Draft Invoices'
+          summary = `${draftInvoices.length} draft invoice${draftInvoices.length === 1 ? '' : 's'} may be ready to send`
+          items = [...draftInvoices]
+            .sort((a, b) => (b.date || b.billingEnd || '').localeCompare(a.date || a.billingEnd || ''))
+            .map(inv => ({
+              label: `${inv.number} — ${inv.clientName || '—'}`,
+              sub: `${inv.projectName || 'No project'}${inv.date ? ' · ' + inv.date : ''}`,
+              right: formatMoney(Number(inv.subtotal)||0),
+              badge: sBadge(inv.status),
+              badgeLabel: inv.status || 'draft',
+              nav: navInv(inv),
+            }))
+        } else if (kpiDrill === 'billed') {
           title = 'Total Billed — Invoices in Range'
           items = invoicesInRange.map(inv => ({
             label: `${inv.number} — ${inv.clientName || '—'}`,
@@ -1601,6 +1691,7 @@ export default function ReportsPage() {
             label: row.name,
             sub: `${row.invoiceCount} invoice${row.invoiceCount !== 1 ? 's' : ''} with unpaid payroll`,
             right: formatMoney(row.totalDue),
+            nav: store.employees.some(emp => emp.id === row.key) ? `/employees/${row.key}` : undefined,
           }))
         } else if (kpiDrill === 'expenses') {
           title = 'Business Expenses in Range'
