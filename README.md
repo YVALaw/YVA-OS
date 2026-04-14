@@ -6,8 +6,8 @@ This project is the React + TypeScript refactor of the legacy single-file invoic
 
 - Create a clean project structure (separation of concerns)
 - Add routing with **Reports** as the landing page
-- Keep the legacy working file frozen in `legacy/`
-- Keep behavior identical in later milestones (no new features yet)
+- Keep the React app as the only maintained invoicing UI
+- Remove the retired legacy single-file app once React feature parity is complete
 
 ## Run locally
 

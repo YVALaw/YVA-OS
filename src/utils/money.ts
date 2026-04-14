@@ -4,7 +4,8 @@ export function formatMoney(n: number): string {
 }
 
 export function fmtHoursHM(h: number): string {
-  const hrs = Math.floor(h)
-  const mins = Math.round((h - hrs) * 60)
+  const totalMinutes = Math.max(0, Math.round((Number.isFinite(h) ? h : 0) * 60))
+  const hrs = Math.floor(totalMinutes / 60)
+  const mins = totalMinutes % 60
   return `${hrs}h ${String(mins).padStart(2, '0')}m`
 }

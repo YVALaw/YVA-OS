@@ -28,6 +28,7 @@ import {
   updateTimesheetImportBatch,
 } from './storage'
 import { supabase } from '../lib/supabase'
+import { invoiceItemAmount } from '../utils/invoiceHours'
 import { computePayrollBreakdown, computePremiumAdjustedAmount, employeePremiumConfig, normalizeClockInput } from '../utils/payroll'
 
 type CSVRecord = Record<string, string>
@@ -721,7 +722,7 @@ export async function importTimesheetCsv(input: TimesheetImportInput): Promise<T
     const billingDate = billingEnd || billingStart || new Date().toISOString().slice(0, 10)
     const items = buildInvoiceItems(Array.from(payload.employeeBuckets.values()))
 
-    const subtotal = items.reduce((sum, item) => sum + (Number(item.billAmount ?? item.hoursTotal * item.rate) || 0), 0)
+    const subtotal = items.reduce((sum, item) => sum + invoiceItemAmount(item), 0)
     const invoice: Invoice = {
       id: uid(),
       number,
@@ -759,7 +760,7 @@ export async function importTimesheetCsv(input: TimesheetImportInput): Promise<T
     for (const payload of unresolvedGroups.values()) {
     const billingDate = billingEnd || billingStart || new Date().toISOString().slice(0, 10)
     const items = buildInvoiceItems(Array.from(payload.employeeBuckets.values()))
-    const subtotal = items.reduce((sum, item) => sum + (Number(item.billAmount ?? item.hoursTotal * item.rate) || 0), 0)
+    const subtotal = items.reduce((sum, item) => sum + invoiceItemAmount(item), 0)
     const invoice: Invoice = {
       id: uid(),
       number: `TMP-${String(unresolvedDraftCount + 1).padStart(3, '0')}`,

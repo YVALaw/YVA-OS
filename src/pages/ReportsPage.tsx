@@ -7,6 +7,7 @@ import {
   getCurrentQuarterRange,
   type DateRange,
 } from '../services/reportsService'
+import { formatInvoiceHoursEntry, invoiceItemHours } from '../utils/invoiceHours'
 import { formatMoney, fmtHoursHM } from '../utils/money'
 import { payrollFromInvoiceItem } from '../utils/payroll'
 import { loadSettings, loadGeneralExpenses, loadCandidates, loadExpenses } from '../services/storage'
@@ -308,7 +309,7 @@ export default function ReportsPage() {
           ? Math.max(0, Number(paymentRecord.amount ?? payroll) || payroll)
           : 0
         row.payrollDue += Math.max(0, payroll - paidAmount)
-        row.hours += Number(item.hoursTotal) || 0
+        row.hours += invoiceItemHours(item)
       }
     }
 
@@ -556,7 +557,7 @@ export default function ReportsPage() {
                       .filter(inv => (inv.date || inv.billingEnd || '').startsWith(thisMonthStr))
                       .flatMap(inv => inv.items || [])
                       .filter(it => it.employeeName?.toLowerCase() === emp.name.toLowerCase())
-                      .reduce((s, it) => s + (Number(it.hoursTotal) || 0), 0)
+                      .reduce((s, it) => s + invoiceItemHours(it), 0)
                     return (
                       <tr key={emp.id}>
                         <td className="td-name">{emp.name}</td>
@@ -673,7 +674,7 @@ export default function ReportsPage() {
                         if (empInvs.length === 0) return null
                         const hours = empInvs.flatMap(inv => inv.items || [])
                           .filter(it => it.employeeName?.toLowerCase() === emp.name.toLowerCase())
-                          .reduce((s, it) => s + (Number(it.hoursTotal) || 0), 0)
+                          .reduce((s, it) => s + invoiceItemHours(it), 0)
                         const paidCount = empInvs.filter(inv => inv.employeePayments?.[emp.id]?.status === 'paid').length
                         const pendingCount = empInvs.length - paidCount
                         return (
@@ -1476,7 +1477,7 @@ export default function ReportsPage() {
             inv.projectName || '',
             inv.status || '',
             String(Number(inv.subtotal) || 0),
-            String((inv.items || []).reduce((s, it) => s + (Number(it.hoursTotal) || 0), 0)),
+            formatInvoiceHoursEntry((inv.items || []).reduce((s, it) => s + invoiceItemHours(it), 0)),
           ])
           downloadCSV('invoice-history.csv', [headers, ...rows])
         }
@@ -1489,7 +1490,7 @@ export default function ReportsPage() {
             for (const item of (inv.items || [])) {
               const emp = store.employees.find(e => e.name.toLowerCase() === item.employeeName.toLowerCase())
               const payRate = Number(emp?.payRate) || 0
-              const hrs = Number(item.hoursTotal) || 0
+              const hrs = invoiceItemHours(item)
               const usd = hrs * payRate
               const dop = dopRate > 0 ? String((usd * dopRate).toFixed(0)) : ''
               rowsOut.push([item.employeeName, String(hrs), String(payRate), String(usd.toFixed(2)), dop, inv.number || '', inv.date || ''])
@@ -1563,7 +1564,7 @@ export default function ReportsPage() {
                 </thead>
                 <tbody>
                   {histFiltered.slice(0, 200).map(inv => {
-                    const hrs = (inv.items || []).reduce((s, it) => s + (Number(it.hoursTotal) || 0), 0)
+                    const hrs = (inv.items || []).reduce((s, it) => s + invoiceItemHours(it), 0)
                     const statusBadge2: Record<string, string> = {
                       paid: '#22c55e', overdue: '#ef4444', sent: '#3b82f6', viewed: '#a855f7',
                     }

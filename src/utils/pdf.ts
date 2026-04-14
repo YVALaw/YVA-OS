@@ -1,6 +1,7 @@
 import html2canvas from 'html2canvas'
 import { jsPDF } from 'jspdf'
 import type { AppSettings, Employee, EmployeePaymentRecord, Invoice } from '../data/types'
+import { formatInvoiceHoursEntry, formatInvoiceHoursHM, invoiceItemAmount, invoiceItemHours, parseInvoiceHours } from './invoiceHours'
 import { payrollFromInvoiceItem } from './payroll'
 import { formatTimeEntrySummary } from './timesheet'
 
@@ -171,15 +172,15 @@ function buildInvoiceLines(inv: Invoice, settings: AppSettings): string[] {
       lines.push(`Amount Due: ${money(Number(inv.subtotal) || 0)}`)
     } else {
       for (const item of inv.items || []) {
-        const amount = Number(item.billAmount ?? ((Number(item.hoursTotal) || 0) * (Number(item.rate) || 0)))
+        const amount = invoiceItemAmount(item)
         lines.push(...wrapText(`${item.employeeName}${item.position ? ` - ${item.position}` : ''}`))
-        lines.push(`Hours: ${item.hoursTotal}   Rate: $${item.rate}/hr   Amount: ${money(amount)}`)
+        lines.push(`Hours: ${formatInvoiceHoursEntry(invoiceItemHours(item))}   Rate: $${item.rate}/hr   Amount: ${money(amount)}`)
         if (item.timeEntries?.length) {
           lines.push(...wrapText(`Time Log: ${formatTimeEntrySummary(item.timeEntries).replace(/\n/g, ' | ')}`))
         }
         if (item.daily && Object.keys(item.daily).length > 0) {
           const usedDates = Object.entries(item.daily)
-            .filter(([, value]) => (parseFloat(value) || 0) > 0)
+            .filter(([, value]) => parseInvoiceHours(value) > 0)
             .map(([date, value]) => `${date}: ${value}h`)
         if (usedDates.length) lines.push(...wrapText(`Daily Hours: ${usedDates.join(' | ')}`))
       }
@@ -210,7 +211,7 @@ function buildStatementLines(
   const totalHours = empInvoices.reduce((sum, inv) => {
     return sum + (inv.items || [])
       .filter(item => item.employeeName?.toLowerCase() === emp.name.toLowerCase())
-      .reduce((hours, item) => hours + (Number(item.hoursTotal) || 0), 0)
+      .reduce((hours, item) => hours + invoiceItemHours(item), 0)
   }, 0)
   const totalUSD = totalHours * payRate
   const totalDOP = dopRate > 0 ? totalUSD * dopRate : 0
@@ -224,7 +225,7 @@ function buildStatementLines(
   lines.push(`Generated: ${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`)
   lines.push('')
   lines.push(`Invoices: ${empInvoices.length}`)
-  lines.push(`Total Hours: ${totalHours.toFixed(1)}h`)
+  lines.push(`Total Hours: ${formatInvoiceHoursHM(totalHours)}`)
   lines.push(`Pay Rate: ${payRate > 0 ? `$${payRate}/hr` : '-'}`)
   lines.push(`Total Earned (USD): ${payRate > 0 ? money(totalUSD) : '-'}`)
   if (totalDOP > 0) lines.push(`Total Earned (DOP): ${dop(totalDOP)} @ ${dopRate}`)
@@ -239,11 +240,11 @@ function buildStatementLines(
 
   for (const inv of empInvoices) {
     const items = (inv.items || []).filter(item => item.employeeName?.toLowerCase() === emp.name.toLowerCase())
-    const hours = items.reduce((sum, item) => sum + (Number(item.hoursTotal) || 0), 0)
+    const hours = items.reduce((sum, item) => sum + invoiceItemHours(item), 0)
     const earned = items.reduce((sum, item) => sum + payrollFromInvoiceItem(item, emp).totalPay, 0)
     const payment = getPaymentRecord?.(inv)
     lines.push(`${inv.number} | ${inv.projectName || 'No project'} | ${inv.billingStart || inv.date || '-'}${inv.billingEnd ? ` - ${inv.billingEnd}` : ''}`)
-    lines.push(`Hours: ${hours.toFixed(1)}h   Earned: ${payRate > 0 ? money(earned) : '-'}`)
+    lines.push(`Hours: ${formatInvoiceHoursHM(hours)}   Earned: ${payRate > 0 ? money(earned) : '-'}`)
     if (payment?.status === 'paid') {
       lines.push(`Status: Paid${payment.paidDate ? ` on ${payment.paidDate}` : ''}${payment.amount ? ` for ${money(payment.amount)}` : ''}`)
     } else {
@@ -252,7 +253,7 @@ function buildStatementLines(
     if (payment?.notes) lines.push(...wrapText(`Payment Notes: ${payment.notes}`))
     const usedDates = items.flatMap(item =>
       Object.entries(item.daily || {})
-        .filter(([, value]) => (parseFloat(value) || 0) > 0)
+        .filter(([, value]) => parseInvoiceHours(value) > 0)
         .map(([date, value]) => `${date}: ${value}h`),
     )
     if (usedDates.length) lines.push(...wrapText(`Daily Hours: ${usedDates.join(' | ')}`))
@@ -260,7 +261,7 @@ function buildStatementLines(
   }
 
   lines.push('----------------------------------------------------------------------------------------')
-  lines.push(`Total Hours: ${totalHours.toFixed(1)}h`)
+  lines.push(`Total Hours: ${formatInvoiceHoursHM(totalHours)}`)
   lines.push(`Total Earned: ${payRate > 0 ? money(totalUSD) : '-'}`)
   if (totalDOP > 0) lines.push(`Total Earned (DOP): ${dop(totalDOP)}`)
   return lines

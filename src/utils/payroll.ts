@@ -1,4 +1,5 @@
 import type { Employee, InvoiceItem } from '../data/types'
+import { parseInvoiceHours } from './invoiceHours'
 
 export type PayrollBreakdown = {
   totalHours: number
@@ -149,7 +150,7 @@ export function computePremiumAdjustedAmount(
 }
 
 export function payrollFromInvoiceItem(item: InvoiceItem, employee?: Employee | null): PayrollBreakdown {
-  const totalHours = toNumber(item.hoursTotal)
+  const totalHours = parseInvoiceHours(item.hoursTotal)
   const regularHours = toNumber(item.regularHours)
   const premiumHours = toNumber(item.premiumHours)
   const hasStoredSplit = regularHours > 0 || premiumHours > 0

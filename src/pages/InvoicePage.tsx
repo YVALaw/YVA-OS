@@ -10,6 +10,7 @@ import { formatMoney } from '../utils/money'
 import InvoiceBuilder from '../components/InvoiceBuilder'
 import { sendEmail, type SendEmailResult } from '../services/gmail'
 import { htmlToPdfAttachment } from '../utils/pdf'
+import { formatInvoiceHoursEntry, invoiceItemAmount, invoiceItemHours, parseInvoiceHours } from '../utils/invoiceHours'
 import { formatTimeEntrySummaryHtml } from '../utils/timesheet'
 
 type InvoiceStatus = 'draft' | 'sent' | 'viewed' | 'paid' | 'overdue' | 'partial'
@@ -62,13 +63,6 @@ function buildInvoiceHTML(inv: Invoice, settings: AppSettings, autoPrint = false
   const companyEmail   = settings.companyEmail   || 'Contact@yvastaffing.net'
   const companyPhone   = settings.companyPhone   || '+1 (717) 281-8676'
 
-  function parseH(v: string): number {
-    if (!v) return 0
-    const s = v.trim().replace(',', '.')
-    if (s.includes(':')) { const [h, m] = s.split(':'); return (parseInt(h)||0) + (parseInt(m)||0)/60 }
-    return parseFloat(s) || 0
-  }
-
   const dayAbbr = ['Su','Mo','Tu','We','Th','Fr','Sa']
   const hasDailyGrid = (inv.items || []).some(it => it.daily && Object.keys(it.daily).length > 0)
   const allDates: string[] = []
@@ -93,10 +87,10 @@ function buildInvoiceHTML(inv: Invoice, settings: AppSettings, autoPrint = false
     }).join('')
       const bodyRows = (inv.items || []).map(it => {
         const dayCells = allDates.map(d => {
-          const h = parseH(it.daily?.[d] || '')
-          return '<td style="text-align:center;font-size:11px;color:' + (h > 0 ? '#111' : '#ccc') + '">' + (h > 0 ? (h % 1 === 0 ? String(h) : h.toFixed(1)) : '—') + '</td>'
+          const h = parseInvoiceHours(it.daily?.[d] || '')
+          return '<td style="text-align:center;font-size:11px;color:' + (h > 0 ? '#111' : '#ccc') + '">' + (h > 0 ? formatInvoiceHoursEntry(h) : '—') + '</td>'
         }).join('')
-        return '<tr><td style="white-space:nowrap"><strong>' + it.employeeName + '</strong>' + (it.position ? '<br><span style="font-size:10px;color:#888">' + it.position + '</span>' : '') + (it.timeEntries?.length ? '<div style="font-size:10px;color:#6b7280;line-height:1.45;margin-top:4px;white-space:pre-line">' + formatTimeEntrySummaryHtml(it.timeEntries) + '</div>' : '') + '</td>' + dayCells + '<td style="text-align:right;font-weight:700;white-space:nowrap">' + it.hoursTotal + 'h</td><td style="text-align:right;white-space:nowrap">$' + it.rate + '/hr</td><td style="text-align:right;font-weight:700;white-space:nowrap">$' + Number(it.billAmount ?? (it.hoursTotal * it.rate)).toFixed(2) + '</td></tr>'
+        return '<tr><td style="white-space:nowrap"><strong>' + it.employeeName + '</strong>' + (it.position ? '<br><span style="font-size:10px;color:#888">' + it.position + '</span>' : '') + (it.timeEntries?.length ? '<div style="font-size:10px;color:#6b7280;line-height:1.45;margin-top:4px;white-space:pre-line">' + formatTimeEntrySummaryHtml(it.timeEntries) + '</div>' : '') + '</td>' + dayCells + '<td style="text-align:right;font-weight:700;white-space:nowrap">' + formatInvoiceHoursEntry(invoiceItemHours(it)) + 'h</td><td style="text-align:right;white-space:nowrap">$' + it.rate + '/hr</td><td style="text-align:right;font-weight:700;white-space:nowrap">$' + invoiceItemAmount(it).toFixed(2) + '</td></tr>'
       }).join('')
     const colSpan = allDates.length + 3
     itemsSection = `
@@ -110,7 +104,7 @@ function buildInvoiceHTML(inv: Invoice, settings: AppSettings, autoPrint = false
     </div>`
   } else {
     const bodyRows = (inv.items || []).map(it =>
-      '<tr><td><strong>' + it.employeeName + '</strong>' + (it.position ? '<br><span style="font-size:11px;color:#888">' + it.position + '</span>' : '') + (it.timeEntries?.length ? '<div style="font-size:10px;color:#6b7280;line-height:1.45;margin-top:4px;white-space:pre-line">' + formatTimeEntrySummaryHtml(it.timeEntries) + '</div>' : '') + '</td><td style="text-align:right">' + it.hoursTotal + 'h</td><td style="text-align:right">$' + it.rate + '/hr</td><td style="text-align:right"><strong>$' + Number(it.billAmount ?? (it.hoursTotal * it.rate)).toFixed(2) + '</strong></td></tr>'
+      '<tr><td><strong>' + it.employeeName + '</strong>' + (it.position ? '<br><span style="font-size:11px;color:#888">' + it.position + '</span>' : '') + (it.timeEntries?.length ? '<div style="font-size:10px;color:#6b7280;line-height:1.45;margin-top:4px;white-space:pre-line">' + formatTimeEntrySummaryHtml(it.timeEntries) + '</div>' : '') + '</td><td style="text-align:right">' + formatInvoiceHoursEntry(invoiceItemHours(it)) + 'h</td><td style="text-align:right">$' + it.rate + '/hr</td><td style="text-align:right"><strong>$' + invoiceItemAmount(it).toFixed(2) + '</strong></td></tr>'
       ).join('')
     itemsSection = `
     <table>
@@ -559,13 +553,13 @@ export default function InvoicePage() {
                   <div className="invoice-rows">
                     {groupInvs.map(inv => {
                       const overdue = inv.dueDate && new Date(inv.dueDate) < new Date() && !['paid'].includes((inv.status||'').toLowerCase())
-                      const hours = (inv.items || []).reduce((sum, item) => sum + (Number(item.hoursTotal) || 0), 0)
+                      const hours = (inv.items || []).reduce((sum, item) => sum + invoiceItemHours(item), 0)
                       return (
                         <div key={inv.id} className="invoice-row">
                           <div className="invoice-row-main">
                             <div className="invoice-row-number">{inv.number}</div>
                             <div className="invoice-row-client">{inv.clientName || '—'}</div>
-                            <div className="invoice-row-sub">{inv.projectName || 'Unassigned project'}{hours > 0 ? ` · ${hours.toFixed(1)}h` : ''}</div>
+                            <div className="invoice-row-sub">{inv.projectName || 'Unassigned project'}{hours > 0 ? ` · ${formatInvoiceHoursEntry(hours)}h` : ''}</div>
                           </div>
                           <div className="invoice-row-meta">
                             <div className="invoice-row-date"><strong>Issued</strong> {inv.date || '—'}</div>

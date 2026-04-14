@@ -6,6 +6,7 @@ import {
   loadProjects, saveProjects,
   loadInvoiceTemplates, saveInvoiceTemplates,
 } from '../services/storage'
+import { formatInvoiceHoursEntry, parseInvoiceHours } from '../utils/invoiceHours'
 import { computePayrollBreakdown, computePremiumAdjustedAmount, employeePremiumConfig, normalizeClockInput } from '../utils/payroll'
 
 function projectPrefix(name: string): string {
@@ -40,21 +41,9 @@ function dateLabel(d: string): string {
   return `${day}\n${dt.getMonth() + 1}/${dt.getDate()}`
 }
 
-/** Parse hours from various formats: "8", "8.5", "8,5", "8:30" → decimal */
+/** Parse hours from various formats: "8", "8.5", "8,5", "8:30", "8.55" -> decimal */
 function parseHours(val: string): number {
-  if (!val) return 0
-  const v = val.trim().replace(',', '.')
-  if (v.includes(':')) {
-    const [h, m] = v.split(':')
-    return (parseInt(h, 10) || 0) + (parseInt(m, 10) || 0) / 60
-  }
-  const minuteStyle = v.match(/^(\d+)\.(\d{2})$/)
-  if (minuteStyle) {
-    const hours = parseInt(minuteStyle[1], 10) || 0
-    const minutes = parseInt(minuteStyle[2], 10) || 0
-    if (minutes < 60) return hours + minutes / 60
-  }
-  return parseFloat(v) || 0
+  return parseInvoiceHours(val)
 }
 
 type BuilderRow = {
@@ -141,7 +130,7 @@ export default function InvoiceBuilder({ onCreated, onCancel, initialProjectId, 
         employeeName: it.employeeName,
         position: it.position || '',
         rate: String(it.rate),
-        hoursManual: String(it.hoursTotal),
+        hoursManual: formatInvoiceHoursEntry(it.hoursTotal),
         shiftStart: it.shiftStart || '',
         shiftEnd: it.shiftEnd || '',
         daily: it.daily ? { ...it.daily } : {},
@@ -391,7 +380,7 @@ export default function InvoiceBuilder({ onCreated, onCancel, initialProjectId, 
               employeeId: employee?.id,
               employeeName: r.employeeName,
               position:     r.position || undefined,
-              hoursTotal:   totals.hours,
+              hoursTotal:   formatInvoiceHoursEntry(totals.hours),
               rate:         parseFloat(r.rate) || 0,
               billAmount:   totals.billAmount,
               shiftStart:   shift.shiftStart || undefined,
@@ -602,7 +591,7 @@ export default function InvoiceBuilder({ onCreated, onCancel, initialProjectId, 
         )}
         {dates.length > 0 && (
           <div className="settings-notice settings-notice-success" style={{ marginTop: 8 }}>
-            {dates.length}-day billing period · Enter hours per day in the grid below. (Formats: 8, 8.5, 8:30)
+            {dates.length}-day billing period · Enter hours per day in the grid below. (Formats: 8, 8.5, 8.30, 8:30)
           </div>
         )}
       </div>
@@ -688,7 +677,7 @@ export default function InvoiceBuilder({ onCreated, onCancel, initialProjectId, 
                         </td>
                       ))}
                       <td style={{ textAlign: 'right', fontWeight: 700, fontSize: 13, paddingRight: 8 }}>
-                        {hrs > 0 ? hrs.toFixed(1) : '—'}
+                        {hrs > 0 ? formatInvoiceHoursEntry(hrs) : '—'}
                       </td>
                       <td style={{ textAlign: 'right', fontWeight: 700, color: 'var(--gold)', fontSize: 13, paddingRight: 8 }}>
                         {amt > 0 ? `$${amt.toFixed(2)}` : '—'}

@@ -410,7 +410,7 @@ Standalone component used inside the builder modal in InvoicePage. Handles:
 ## Key Constraints
 - No npm UI libraries — keep CSS self-contained
 - Logo at `/public/yva-logo.png`
-- Legacy builder at `/public/legacy/` — kept for reference but no longer used in app
+- Legacy builder removed; the React app is the only maintained invoicing UI
 - Netlify SPA routing: `public/_redirects` contains `/* /index.html 200`
 
 ## Recent Progress

@@ -83,7 +83,7 @@ export type InvoiceItem = {
   employeeId?: string
   employeeName: string
   position?: string
-  hoursTotal: number
+  hoursTotal: number | string
   rate: number
   billAmount?: number
   shiftStart?: string

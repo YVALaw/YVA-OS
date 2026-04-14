@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { Invoice } from '../data/types'
+import { formatInvoiceHoursEntry, invoiceItemAmount, invoiceItemHours } from '../utils/invoiceHours'
 import { formatTimeEntrySummary } from '../utils/timesheet'
 
 type Payload = { inv: Invoice }
@@ -108,9 +109,9 @@ export default function PortalPage() {
                         </div>
                       ) : null}
                     </td>
-                    <td style={{ padding: '12px', textAlign: 'right', fontSize: 14, color: '#555' }}>{it.hoursTotal}h</td>
+                    <td style={{ padding: '12px', textAlign: 'right', fontSize: 14, color: '#555' }}>{formatInvoiceHoursEntry(invoiceItemHours(it))}h</td>
                     <td style={{ padding: '12px', textAlign: 'right', fontSize: 14, color: '#555' }}>${it.rate}/hr</td>
-                    <td style={{ padding: '12px', textAlign: 'right', fontSize: 14, fontWeight: 700 }}>{fmtMoney(Number(it.billAmount ?? (it.hoursTotal * it.rate)))}</td>
+                    <td style={{ padding: '12px', textAlign: 'right', fontSize: 14, fontWeight: 700 }}>{fmtMoney(invoiceItemAmount(it))}</td>
                   </tr>
                 ))}
             </tbody>
