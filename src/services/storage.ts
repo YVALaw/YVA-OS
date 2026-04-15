@@ -26,10 +26,12 @@ function toCamel<T>(row: Record<string, unknown>): T {
 /** camelCase TS object → snake_case DB row */
 function toSnake(obj: Record<string, unknown>): Record<string, unknown> {
   return Object.fromEntries(
-    Object.entries(obj).map(([k, v]) => [
-      k.replace(/([A-Z])/g, c => `_${c.toLowerCase()}`),
-      v,
-    ])
+    Object.entries(obj)
+      .filter(([, v]) => v !== undefined)
+      .map(([k, v]) => [
+        k.replace(/([A-Z])/g, c => `_${c.toLowerCase()}`),
+        v,
+      ])
   )
 }
 
