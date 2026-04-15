@@ -61,6 +61,10 @@ export default function ProjectProfilePage() {
   const [newLinkLabel, setNewLinkLabel] = useState('')
   const [newLinkUrl,   setNewLinkUrl]   = useState('')
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const [empSearch, setEmpSearch] = useState('')
+  const [empDropOpen, setEmpDropOpen] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
+  const [saving, setSaving] = useState(false)
 
   // Sync form from project once data loads
   useEffect(() => {
@@ -109,14 +113,32 @@ export default function ProjectProfilePage() {
   const totalExpenses = expenses.reduce((s, e) => s + e.amount, 0)
   const assignedEmps = employees.filter(e => (projectNN.employeeIds||[]).includes(e.id))
 
-  function persistProject(updated: Project) {
+  async function persistProject(updated: Project): Promise<boolean> {
     const next = projects.map(p => p.id === updated.id ? updated : p)
+    const previous = projects
     setProjectsState(next)
-    void saveProjects(next)
+    setSaveError(null)
+    try {
+      await saveProjects(next)
+      return true
+    } catch (error) {
+      console.error('Project save failed', error)
+      setProjectsState(previous)
+      setSaveError(error instanceof Error ? error.message : 'Project could not be saved.')
+      return false
+    }
   }
 
-  function handleSave() {
+  function beginEditing() {
+    setEmpSearch('')
+    setEmpDropOpen(false)
+    setSaveError(null)
+    setEditing(true)
+  }
+
+  async function handleSave() {
     if (!form.name.trim()) return
+    setSaving(true)
     const updated: Project = {
       ...projectNN,
       name: form.name,
@@ -133,8 +155,13 @@ export default function ProjectProfilePage() {
       links: form.links.length > 0 ? form.links : undefined,
       employeeIds: form.employeeIds,
     }
-    persistProject(updated)
-    setEditing(false)
+    const saved = await persistProject(updated)
+    setSaving(false)
+    if (saved) {
+      setEmpSearch('')
+      setEmpDropOpen(false)
+      setEditing(false)
+    }
   }
 
   function handleCancel() {
@@ -153,14 +180,25 @@ export default function ProjectProfilePage() {
       links: projectNN.links ?? [],
       employeeIds: projectNN.employeeIds ?? [],
     })
+    setEmpSearch('')
+    setEmpDropOpen(false)
+    setSaveError(null)
     setEditing(false)
   }
 
-  function handleDelete() {
+  async function handleDelete() {
     const next = projects.filter(p => p.id !== projectNN.id)
+    const previous = projects
     setProjectsState(next)
-    void saveProjects(next)
-    navigate('/projects')
+    setSaveError(null)
+    try {
+      await saveProjects(next)
+      navigate('/projects')
+    } catch (error) {
+      console.error('Project delete failed', error)
+      setProjectsState(previous)
+      setSaveError(error instanceof Error ? error.message : 'Project could not be deleted.')
+    }
   }
 
   function addLink() {
@@ -172,13 +210,13 @@ export default function ProjectProfilePage() {
     setForm(f => ({ ...f, links: f.links.filter((_, idx) => idx !== i) }))
   }
 
-  function toggleEmployee(empId: string) {
-    setForm(f => ({
-      ...f,
-      employeeIds: f.employeeIds.includes(empId)
-        ? f.employeeIds.filter(id => id !== empId)
-        : [...f.employeeIds, empId],
-    }))
+  function addEmployee(empId: string) {
+    setForm(f => f.employeeIds.includes(empId) ? f : { ...f, employeeIds: [...f.employeeIds, empId] })
+    setEmpSearch('')
+    setEmpDropOpen(false)
+  }
+  function removeEmployee(empId: string) {
+    setForm(f => ({ ...f, employeeIds: f.employeeIds.filter(id => id !== empId) }))
   }
 
   // Tasks
@@ -251,18 +289,25 @@ export default function ProjectProfilePage() {
         <div className="profile-header-actions">
           {editing ? (
             <>
-              <button className="btn-primary btn-sm" onClick={handleSave} disabled={!form.name.trim()}>Save Changes</button>
+              <button className="btn-primary btn-sm" onClick={handleSave} disabled={!form.name.trim() || saving}>
+                {saving ? 'Saving...' : 'Save Changes'}
+              </button>
               <button className="btn-ghost btn-sm" onClick={handleCancel}>Cancel</button>
             </>
           ) : (
             <>
               <span className={`badge ${stageBadge(projectNN.status)}`} style={{ fontSize: 13 }}>{projectNN.status || 'Planning'}</span>
-              <button className="btn-ghost btn-sm" onClick={() => setEditing(true)}>Edit Project</button>
+              <button className="btn-ghost btn-sm" onClick={beginEditing}>Edit Project</button>
               <button className="btn-danger btn-sm" onClick={() => setConfirmDelete(true)}>Delete</button>
             </>
           )}
         </div>
       </div>
+      {saveError && (
+        <div className="settings-notice settings-notice-error" style={{ marginBottom: 16 }}>
+          {saveError}
+        </div>
+      )}
 
       {/* KPIs */}
       {!editing && (
@@ -356,14 +401,77 @@ export default function ProjectProfilePage() {
                   {/* Team assignment */}
                   <div className="profile-field profile-field-tall">
                     <span className="profile-field-label">Team</span>
-                    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 200, overflowY: 'auto' }}>
-                      {employees.map(e => (
-                        <label key={e.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: 'pointer' }}>
-                          <input type="checkbox" checked={form.employeeIds.includes(e.id)} onChange={() => toggleEmployee(e.id)} />
-                          {e.name}
-                          {e.role && <span style={{ color: 'var(--muted)', fontSize: 11 }}>{e.role}</span>}
-                        </label>
-                      ))}
+                    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                      {form.employeeIds.length > 0 && (
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                          {form.employeeIds.map(eid => {
+                            const emp = employees.find(e => e.id === eid)
+                            return emp ? (
+                              <span key={eid} style={{
+                                display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12,
+                                background: 'rgba(245,181,51,.15)', border: '1px solid var(--gold)',
+                                borderRadius: 6, padding: '3px 8px', color: 'var(--soft)',
+                              }}>
+                                {emp.name}
+                                <button
+                                  type="button"
+                                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted)', padding: 0, fontSize: 13, lineHeight: 1 }}
+                                  onClick={() => removeEmployee(eid)}
+                                >×</button>
+                              </span>
+                            ) : null
+                          })}
+                        </div>
+                      )}
+                      <div style={{ position: 'relative' }}>
+                        <input
+                          className="form-input form-input-sm"
+                          placeholder="Search and add team member..."
+                          value={empSearch}
+                          onChange={e => { setEmpSearch(e.target.value); setEmpDropOpen(true) }}
+                          onFocus={() => setEmpDropOpen(true)}
+                          onBlur={() => setTimeout(() => setEmpDropOpen(false), 150)}
+                          autoComplete="off"
+                        />
+                        {empDropOpen && (
+                          <div style={{
+                            position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50,
+                            background: 'var(--surface)', border: '1px solid var(--border)',
+                            borderRadius: 8, boxShadow: '0 8px 24px rgba(0,0,0,.4)', maxHeight: 220, overflowY: 'auto',
+                          }}>
+                            {employees
+                              .filter(e => {
+                                const q = empSearch.trim().toLowerCase()
+                                const haystack = `${e.name} ${e.role || ''} ${e.email || ''}`.toLowerCase()
+                                return !form.employeeIds.includes(e.id) && (!q || haystack.includes(q))
+                              })
+                              .slice(0, 10)
+                              .map(emp => (
+                                <div
+                                  key={emp.id}
+                                  onMouseDown={() => addEmployee(emp.id)}
+                                  style={{
+                                    padding: '9px 14px', cursor: 'pointer', fontSize: 13,
+                                    borderBottom: '1px solid var(--border)',
+                                    display: 'flex', alignItems: 'center', gap: 8,
+                                  }}
+                                  onMouseEnter={e => (e.currentTarget.style.background = 'var(--surf2)')}
+                                  onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+                                >
+                                  <span style={{ fontWeight: 600 }}>{emp.name}</span>
+                                  {emp.role && <span style={{ color: 'var(--muted)', fontSize: 11 }}>{emp.role}</span>}
+                                </div>
+                              ))}
+                            {employees.filter(e => {
+                              const q = empSearch.trim().toLowerCase()
+                              const haystack = `${e.name} ${e.role || ''} ${e.email || ''}`.toLowerCase()
+                              return !form.employeeIds.includes(e.id) && (!q || haystack.includes(q))
+                            }).length === 0 && (
+                              <div style={{ padding: '10px 14px', color: 'var(--muted)', fontSize: 12 }}>No matches</div>
+                            )}
+                          </div>
+                        )}
+                      </div>
                     </div>
                   </div>
                 </>

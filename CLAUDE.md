@@ -12,6 +12,7 @@
 - Dashboard financial follow-up is being refined locally: clearer `Collected` and `Payroll Due` visibility, direct status changes from invoice rows, and a project profitability view based on collected cash minus payroll due and project expenses.
 - Hour parsing accepts decimal hours, `h:mm`, and legacy minute-style values like `3.08` meaning `3h 08m`.
 - Candidate conversion now creates the employee record when moved to hired and removes the candidate card once conversion is complete.
+- Project employee assignment uses searchable add-member pickers; project saves now await Supabase before closing edit UI so failed or interrupted saves do not appear successful until refresh.
 - Gmail auth now uses a Netlify server function for token exchange and refresh; the Google client secret lives in `GMAIL_CLIENT_SECRET` on Netlify, not in the browser.
 - USD→DOP auto-fetch now comes from InfoDolar Banco BHD data via a Netlify function, with manual entry still available.
 - The experimental Logwork timesheet import flow remains in the codebase and database schema, but the UI is hidden in production because the source data was not reliable enough for safe invoice automation.
@@ -419,6 +420,10 @@ Standalone component used inside the builder modal in InvoicePage. Handles:
 - Gmail: OAuth token exchange/refresh now runs through a Netlify function using `GMAIL_CLIENT_SECRET`; subject lines are MIME-encoded correctly and fallback toasts report real Gmail failure reasons
 - Invoices: invoice groups sort newest-first, invoice HTML spacing was tightened, and project counters now advance only after a successful save
 - Invoices: project next numbers are derived from actual saved invoices to recover stale counters; one-off SQL repair may still be needed for already drifted `projects.next_invoice_seq`
+- Invoices: the legacy single-file app and `LegacyFrame` bridge were removed; the React app is the only maintained invoice UI
+- Invoices: builder-entered hours now normalize to `H.MM` clock-style values where `5.30` means 5 hours 30 minutes and `8.55` means 8 hours 55 minutes; billing, reports, payroll, PDF, portal, and automation paths parse through `src/utils/invoiceHours.ts`
+- Projects: project create/edit and project-profile edit wait for Supabase saves before closing; employee assignment failures now stay visible instead of disappearing after refresh
+- Projects: project-profile team assignment no longer renders every employee as checkboxes; it uses selected pills plus a searchable employee picker
 - Dashboard: `Net Earnings` KPI modal now shows invoice-by-invoice billed/payroll/net breakdown; `Unpaid` KPI uses all unpaid invoices system-wide instead of only the current filtered range
 - Currency: Settings auto-fetch now uses InfoDolar Banco BHD sell rate via Netlify function instead of the earlier bank API path
 - Dashboard: Revenue chart labels are rounded for display, avoiding long floating-point decimals
@@ -427,9 +432,20 @@ Standalone component used inside the builder modal in InvoicePage. Handles:
 - Any older mentions of `Lafise` or `Banco Popular` as the active exchange-rate auto-fetch source are stale; the current source is InfoDolar Banco BHD via `netlify/functions/infodolar-bhd.cjs`
 - Any older Gmail notes that imply browser-only PKCE token exchange are stale; current Gmail OAuth exchange/refresh is server-side through `netlify/functions/gmail-oauth.cjs` and requires Netlify env var `GMAIL_CLIENT_SECRET`
 - Any older candidate-flow note implying the hired candidate remains visible in the Candidates board is stale; current behavior removes the candidate card after employee creation
-## Session Update: 2026-04-07
+- Any older note saying `public/legacy` or `legacy/Index_employee_fix.html` is kept is stale; those files were removed in commit `4a4ea90`
+- Any older note saying invoice hours are raw decimal hours is stale for the new React invoice builder; `H.MM` is the client-facing/storage format for builder-created invoice items
 
-Current local-only work not yet pushed:
+## Session Update: 2026-04-14
+
+Changes pushed to `origin/master` in commit `4a4ea90`:
+
+- Removed the unused legacy invoice app files and the React `LegacyFrame` bridge.
+- Kept the React app as the sole maintained invoicing UI.
+- Added `src/utils/invoiceHours.ts` and routed invoice math/display paths through it so `H.MM` values do not produce long fractional hour totals.
+
+## Historical Session Update: 2026-04-07
+
+Historical local-only notes from that session; verify current git status before treating these as unpushed:
 
 - UI refinement pass across dashboard, invoices, team board, search, and modal layouts remains local-only and has been build-verified.
 - Employee premium/night-shift support is implemented locally.

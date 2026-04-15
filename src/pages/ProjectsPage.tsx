@@ -88,6 +88,8 @@ export default function ProjectsPage() {
   const [newLinkUrl,   setNewLinkUrl]   = useState('')
   const [empSearch, setEmpSearch] = useState('')
   const [empDropOpen, setEmpDropOpen] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
+  const [saving, setSaving] = useState(false)
 
   // Expenses
   const [expenseProject, setExpenseProject] = useState<Project | null>(null)
@@ -161,9 +163,22 @@ export default function ProjectsPage() {
     return tasks.filter(t => t.projectId === taskProject?.id && t.status === status)
   }
 
-  function persist(next: Project[]) { setProjects(next); void saveProjects(next) }
+  async function persist(next: Project[]): Promise<boolean> {
+    const previous = projects
+    setProjects(next)
+    setSaveError(null)
+    try {
+      await saveProjects(next)
+      return true
+    } catch (error) {
+      console.error('Project save failed', error)
+      setProjects(previous)
+      setSaveError(error instanceof Error ? error.message : 'Project could not be saved.')
+      return false
+    }
+  }
 
-  function openAdd() { setForm({ ...EMPTY }); setEditId(null); setModal('add'); setNewLinkLabel(''); setNewLinkUrl(''); setEmpSearch(''); setEmpDropOpen(false) }
+  function openAdd() { setForm({ ...EMPTY }); setEditId(null); setModal('add'); setNewLinkLabel(''); setNewLinkUrl(''); setEmpSearch(''); setEmpDropOpen(false); setSaveError(null) }
   function openEdit(p: Project) {
     setForm({
       name: p.name, rate: p.rate != null ? String(p.rate) : '',
@@ -173,10 +188,11 @@ export default function ProjectsPage() {
       startDate: p.startDate ?? '', endDate: p.endDate ?? '', notes: p.notes ?? '',
       links: p.links ?? [], employeeIds: p.employeeIds ?? [],
     })
-    setEditId(p.id); setModal('edit'); setNewLinkLabel(''); setNewLinkUrl(''); setEmpSearch(''); setEmpDropOpen(false)
+    setEditId(p.id); setModal('edit'); setNewLinkLabel(''); setNewLinkUrl(''); setEmpSearch(''); setEmpDropOpen(false); setSaveError(null)
   }
-  function saveForm() {
+  async function saveForm() {
     if (!form.name.trim()) return
+    setSaving(true)
     const partial: Partial<Project> = {
       name: form.name, rate: form.rate ? Number(form.rate) : undefined,
       budget: form.budget ? Number(form.budget) : undefined,
@@ -186,13 +202,20 @@ export default function ProjectsPage() {
       notes: form.notes || undefined, links: form.links.length > 0 ? form.links : undefined,
       employeeIds: form.employeeIds,
     }
-    if (modal === 'add') persist([...projects, { id: uid(), ...partial } as Project])
-    else if (editId) persist(projects.map((p) => p.id === editId ? { ...p, ...partial } : p))
-    setModal(null)
+    const saved = modal === 'add'
+      ? await persist([...projects, { id: uid(), ...partial } as Project])
+      : editId
+        ? await persist(projects.map((p) => p.id === editId ? { ...p, ...partial } : p))
+        : false
+    setSaving(false)
+    if (saved) setModal(null)
   }
-  function doDelete(id: string) { persist(projects.filter((p) => p.id !== id)); setConfirmDelete(null) }
+  async function doDelete(id: string) {
+    const saved = await persist(projects.filter((p) => p.id !== id))
+    if (saved) setConfirmDelete(null)
+  }
   function moveStage(id: string, stage: ProjectStage) {
-    persist(projects.map((p) => p.id === id ? { ...p, status: stage } : p))
+    void persist(projects.map((p) => p.id === id ? { ...p, status: stage } : p))
   }
   function clientName(id?: string | null) {
     if (!id) return null
@@ -491,6 +514,11 @@ export default function ProjectsPage() {
               <button className="modal-close btn-icon" onClick={() => setModal(null)}>✕</button>
             </div>
             <div className="sheet-body">
+              {saveError && (
+                <div className="settings-notice settings-notice-error" style={{ marginBottom: 12 }}>
+                  {saveError}
+                </div>
+              )}
               <div className="sheet-section">
                 <div className="sheet-section-title">Core Details</div>
                 <div className="form-grid-2">
@@ -649,8 +677,8 @@ export default function ProjectsPage() {
             </div>
             <div className="sheet-footer">
               <button className="btn-ghost" onClick={() => setModal(null)}>Cancel</button>
-              <button className="btn-primary" onClick={saveForm} disabled={!form.name.trim()}>
-                {modal === 'add' ? 'Add Project' : 'Save Changes'}
+              <button className="btn-primary" onClick={saveForm} disabled={!form.name.trim() || saving}>
+                {saving ? 'Saving...' : modal === 'add' ? 'Add Project' : 'Save Changes'}
               </button>
             </div>
           </aside>
