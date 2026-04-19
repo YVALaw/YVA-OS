@@ -16,6 +16,7 @@ type PaymentLookup = (invoice: Invoice) => EmployeePaymentRecord | undefined
 const LETTER_WIDTH = 612
 const LETTER_HEIGHT = 792
 const PAGE_MARGIN = 54
+const HTML_PDF_MARGIN = 36
 const MAX_LINE_LENGTH = 88
 const MAX_LINES_PER_PAGE = 46
 
@@ -347,7 +348,9 @@ export async function htmlToPdfAttachment(filename: string, html: string): Promi
     const pdf = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'letter' })
     const pageWidth = pdf.internal.pageSize.getWidth()
     const pageHeight = pdf.internal.pageSize.getHeight()
-    const sliceHeight = Math.floor(canvas.width * (pageHeight / pageWidth))
+    const imageWidth = pageWidth - HTML_PDF_MARGIN * 2
+    const imagePageHeight = pageHeight - HTML_PDF_MARGIN * 2
+    const sliceHeight = Math.floor(canvas.width * (imagePageHeight / imageWidth))
 
     let offset = 0
     let first = true
@@ -363,7 +366,16 @@ export async function htmlToPdfAttachment(filename: string, html: string): Promi
       ctx.drawImage(canvas, 0, offset, canvas.width, height, 0, 0, canvas.width, height)
       const img = pageCanvas.toDataURL('image/png')
       if (!first) pdf.addPage()
-      pdf.addImage(img, 'PNG', 0, 0, pageWidth, (height * pageWidth) / canvas.width, undefined, 'FAST')
+      pdf.addImage(
+        img,
+        'PNG',
+        HTML_PDF_MARGIN,
+        HTML_PDF_MARGIN,
+        imageWidth,
+        (height * imageWidth) / canvas.width,
+        undefined,
+        'FAST',
+      )
       offset += height
       first = false
     }
