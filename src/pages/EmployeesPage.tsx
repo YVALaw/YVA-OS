@@ -167,7 +167,9 @@ function buildPayslipHTML(emp: Employee, empInvoices: Invoice[], dateFrom: strin
   <title>Statement — ${emp.name}</title>
   <style>
     @page{size:Letter;margin:.5in}
-    body{font-family:Arial,sans-serif;width:7.5in;min-height:10in;margin:0 auto;color:#111}
+    html,body{margin:0;padding:0;background:#fff}
+    body{font-family:Arial,sans-serif;color:#111}
+    .statement-page{width:8.5in;min-height:11in;margin:0 auto;padding:.6in;box-sizing:border-box;background:#fff}
     .header{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:28px;border-bottom:2px solid #f5b533;padding-bottom:16px}
     .logo{height:48px}
     h2{margin:0;font-size:22px;color:#f5b533}
@@ -180,8 +182,8 @@ function buildPayslipHTML(emp: Employee, empInvoices: Invoice[], dateFrom: strin
     th{text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:#999;padding:8px 8px;border-bottom:2px solid #eee}
     td{padding:8px;border-bottom:1px solid #eee}
     .footer{margin-top:32px;font-size:11px;color:#999;border-top:1px solid #eee;padding-top:12px;text-align:center}
-    @media print{body{margin:0 auto}}
-  </style></head><body>
+    @media print{body{margin:0}.statement-page{margin:0}}
+  </style></head><body><div class="statement-page" data-pdf-page>
   <div class="header">
     <img src="${window.location.origin}/yva-logo.png" class="logo" onerror="this.style.display='none'" />
     <div style="text-align:right">
@@ -201,7 +203,7 @@ function buildPayslipHTML(emp: Employee, empInvoices: Invoice[], dateFrom: strin
   </div>
   ${sections?sections+'<div style="text-align:right;font-weight:800;font-size:13px;padding:10px 0;border-top:2px solid #111;margin-top:4px">Total &nbsp;&nbsp; '+totalHours.toFixed(1)+'h &nbsp;&nbsp; '+(payRate>0?'$'+totalUSD.toFixed(2):'—')+'</div>' + (summary.premiumHours > 0 ? '<div style="text-align:right;font-size:11px;color:#666">Regular: '+summary.regularHours.toFixed(2)+'h · Premium: '+summary.premiumHours.toFixed(2)+'h at +'+premiumConfig.percent+'%</div>' : ''):'<p style="color:#999;text-align:center;padding:24px">No invoice data for this period.</p>'}
   <div class="footer">YVA Staffing · Bilingual Virtual Professionals · yvastaffing.net</div>
-  </body></html>`
+  </div></body></html>`
 }
 
 async function printPayslip(emp: Employee, empInvoices: Invoice[], dateFrom: string, dateTo: string) {

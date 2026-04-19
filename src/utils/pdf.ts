@@ -16,7 +16,7 @@ type PaymentLookup = (invoice: Invoice) => EmployeePaymentRecord | undefined
 const LETTER_WIDTH = 612
 const LETTER_HEIGHT = 792
 const PAGE_MARGIN = 54
-const HTML_PDF_MARGIN = 36
+const HTML_PDF_MARGIN = 0
 const MAX_LINE_LENGTH = 88
 const MAX_LINES_PER_PAGE = 46
 
@@ -330,10 +330,10 @@ export async function htmlToPdfAttachment(filename: string, html: string): Promi
 
   try {
     const doc = await waitForIframeReady(iframe, html)
-    const body = doc.body
-    const contentWidth = Math.ceil(body.scrollWidth || 816)
-    const contentHeight = Math.ceil(body.scrollHeight || 1056)
-    const canvas = await html2canvas(body, {
+    const target = doc.querySelector<HTMLElement>('[data-pdf-page]') || doc.body
+    const contentWidth = Math.ceil(target.scrollWidth || 816)
+    const contentHeight = Math.ceil(target.scrollHeight || 1056)
+    const canvas = await html2canvas(target, {
       backgroundColor: '#ffffff',
       scale: 2,
       useCORS: true,
