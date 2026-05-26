@@ -150,13 +150,21 @@ function CommandPalette({ open, onClose }: { open: boolean; onClose: () => void 
       const [snapshot, candidates] = await Promise.all([loadSnapshot(), loadCandidates()])
       const commands: SearchResult[] = [
         { kind: 'Command', label: 'Open Dashboard', sub: 'Go to the reporting overview', run: () => navigate('/') },
-        { kind: 'Command', label: 'Open Invoices', sub: 'Review invoices and billing pipeline', run: () => navigate('/invoice') },
-        { kind: 'Command', label: 'Open Clients', sub: 'Browse client accounts', run: () => navigate('/clients') },
-        { kind: 'Command', label: 'Open Team', sub: 'Browse employee profiles', run: () => navigate('/employees') },
-        { kind: 'Command', label: 'Open Projects', sub: 'Review active projects', run: () => navigate('/projects') },
         { kind: 'Command', label: 'Open Settings', sub: 'Manage workspace settings', run: () => navigate('/settings') },
       ]
 
+      if (can.viewInvoices(role)) {
+        commands.push({ kind: 'Command', label: 'Open Invoices', sub: 'Review invoices and billing pipeline', run: () => navigate('/invoice') })
+      }
+      if (can.viewClients(role)) {
+        commands.push({ kind: 'Command', label: 'Open Clients', sub: 'Browse client accounts', run: () => navigate('/clients') })
+      }
+      if (can.viewEmployees(role)) {
+        commands.push({ kind: 'Command', label: 'Open Team', sub: 'Browse employee profiles', run: () => navigate('/employees') })
+      }
+      if (can.viewProjects(role)) {
+        commands.push({ kind: 'Command', label: 'Open Projects', sub: 'Review active projects', run: () => navigate('/projects') })
+      }
       if (can.viewExpenses(role)) {
         commands.push({ kind: 'Command', label: 'Open Expenses', sub: 'Review operating expenses', run: () => navigate('/expenses') })
       }
@@ -164,40 +172,45 @@ function CommandPalette({ open, onClose }: { open: boolean; onClose: () => void 
         commands.push({ kind: 'Command', label: 'Open Candidates', sub: 'Review recruiting pipeline', run: () => navigate('/candidates') })
       }
 
-      const clientResults = snapshot.clients.map<SearchResult>(client => ({
+      const clientResults = can.viewClients(role) ? snapshot.clients.map<SearchResult>(client => ({
         kind: 'Client',
         label: client.name,
         sub: client.company || client.email || client.status || '',
         run: () => navigate(`/clients/${client.id}`),
-      }))
+      })) : []
 
-      const employeeResults = snapshot.employees.map<SearchResult>(employee => ({
+      const employeeResults = can.viewEmployees(role) ? snapshot.employees.map<SearchResult>(employee => ({
         kind: 'Employee',
         label: employee.name,
         sub: employee.role || employee.email || employee.status || '',
         run: () => navigate(`/employees/${employee.id}`),
-      }))
+      })) : []
 
-      const projectResults = snapshot.projects.map<SearchResult>(project => ({
+      const projectResults = can.viewProjects(role) ? snapshot.projects.map<SearchResult>(project => ({
         kind: 'Project',
         label: project.name,
         sub: project.status || project.billingModel || '',
         run: () => navigate(`/projects/${project.id}`),
-      }))
+      })) : []
 
-      const candidateResults = candidates.map<SearchResult>(candidate => ({
+      const visibleCandidates = can.viewAllCandidates(role)
+        ? candidates
+        : can.viewHiredOnly(role)
+          ? candidates.filter(candidate => candidate.stage === 'hired')
+          : []
+      const candidateResults = visibleCandidates.map<SearchResult>(candidate => ({
         kind: 'Candidate',
         label: candidate.name,
         sub: candidate.role || candidate.stage,
         run: () => navigate(`/candidates/${candidate.id}`),
       }))
 
-      const invoiceResults = snapshot.invoices.map<SearchResult>(invoice => ({
+      const invoiceResults = can.viewInvoices(role) ? snapshot.invoices.map<SearchResult>(invoice => ({
         kind: 'Invoice',
         label: invoice.number,
         sub: `${invoice.clientName || 'No client'} · ${invoice.status || 'draft'}`,
         run: () => navigate(`/invoice?q=${encodeURIComponent(invoice.number || '')}`),
-      }))
+      })) : []
 
       setItems([
         ...commands,
@@ -336,6 +349,7 @@ export default function Shell({ children }: Props) {
     if (item.to === '/clients') return can.viewClients(role)
     if (item.to === '/employees') return can.viewEmployees(role)
     if (item.to === '/candidates') return can.viewAllCandidates(role) || can.viewHiredOnly(role)
+    if (item.to === '/projects') return can.viewProjects(role)
     if (item.to === '/expenses') return can.viewExpenses(role)
     return true
   })

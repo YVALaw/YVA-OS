@@ -96,8 +96,8 @@ export default function App() {
                 <Route path="/employees/:id" element={<RoleGuard allow={can.viewEmployees}><EmployeeProfilePage /></RoleGuard>} />
                 <Route path="/clients" element={<RoleGuard allow={can.viewClients}><ClientsPage /></RoleGuard>} />
                 <Route path="/clients/:id" element={<RoleGuard allow={can.viewClients}><ClientProfilePage /></RoleGuard>} />
-                <Route path="/projects" element={<ProjectsPage />} />
-                <Route path="/projects/:id" element={<ProjectProfilePage />} />
+                <Route path="/projects" element={<RoleGuard allow={can.viewProjects}><ProjectsPage /></RoleGuard>} />
+                <Route path="/projects/:id" element={<RoleGuard allow={can.viewProjects}><ProjectProfilePage /></RoleGuard>} />
                 <Route path="/candidates" element={<RoleGuard allow={r => can.viewAllCandidates(r) || can.viewHiredOnly(r)}><CandidatesPage /></RoleGuard>} />
                 <Route path="/candidates/:id" element={<RoleGuard allow={r => can.viewAllCandidates(r) || can.viewHiredOnly(r)}><CandidateProfilePage /></RoleGuard>} />
                 <Route path="/expenses" element={<RoleGuard allow={can.viewExpenses}><GeneralExpensesPage /></RoleGuard>} />

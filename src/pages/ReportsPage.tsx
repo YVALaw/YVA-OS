@@ -498,15 +498,17 @@ export default function ReportsPage() {
     downloadCSV(`yva-dashboard-export-${new Date().toISOString().slice(0, 10)}.csv`, rows)
   }
 
-  return (
-    <PrototypeDashboard
-      store={store}
-      candidates={candidates}
-      generalExpenses={generalExpenses}
-      onNavigate={(path) => navigate(path)}
-      onExport={exportOverviewCsv}
-    />
-  )
+  if (can.viewOwnerStats(role)) {
+    return (
+      <PrototypeDashboard
+        store={store}
+        candidates={candidates}
+        generalExpenses={generalExpenses}
+        onNavigate={(path) => navigate(path)}
+        onExport={exportOverviewCsv}
+      />
+    )
+  }
 
   // ── Admin dashboard ─────────────────────────────────────────────────────────
   if (role === 'admin') {

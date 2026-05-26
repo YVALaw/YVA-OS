@@ -20,6 +20,7 @@ export const can = {
   viewExpenses:      (r: UserRole) => r === 'ceo' || r === 'admin' || r === 'accounting',
   viewReports:       (r: UserRole) => r === 'ceo' || r === 'admin' || r === 'accounting',
   viewEmployees:     (r: UserRole) => r !== 'lead_gen',
+  viewProjects:      (r: UserRole) => r === 'ceo' || r === 'admin' || r === 'accounting',
   manageRoles:       (r: UserRole) => r === 'ceo',
   // CEO-only: revenue totals, payroll, net earnings
   viewOwnerStats:    (r: UserRole) => r === 'ceo',
