@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useLocation } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import type { AppSettings, Client, Invoice, Project } from '../data/types'
 import {
   loadInvoices, saveInvoices,
@@ -12,6 +12,20 @@ import { sendEmail, type SendEmailResult } from '../services/gmail'
 import { htmlToPdfAttachment } from '../utils/pdf'
 import { formatInvoiceHoursEntry, invoiceItemAmount, invoiceItemHours, parseInvoiceHours } from '../utils/invoiceHours'
 import { formatTimeEntrySummaryHtml } from '../utils/timesheet'
+import {
+  Avatar,
+  Drawer,
+  FilterChips,
+  ProtoIcon,
+  StatusChip,
+  ToggleGroup,
+  colorFromString,
+  daysFromToday,
+  dueLabel,
+  protoCurrency,
+  protoDate,
+  protoDateShort,
+} from '../components/PrototypeKit'
 
 type InvoiceStatus = 'draft' | 'sent' | 'viewed' | 'paid' | 'overdue' | 'partial'
 
@@ -54,6 +68,17 @@ function statusBadge(s?: string): string {
     case 'partial': return 'badge-orange'
     default:        return 'badge-gray'
   }
+}
+
+function projectPrefix(name?: string): string {
+  if (!name) return 'INV'
+  const compact = name
+    .split(/[\s-]+/)
+    .filter(Boolean)
+    .slice(0, 4)
+    .map(part => part[0]?.toUpperCase() || '')
+    .join('')
+  return compact || name.replace(/[^a-z0-9]/gi, '').slice(0, 4).toUpperCase() || 'INV'
 }
 
 // ── Shared invoice HTML builder ─────────────────────────────
@@ -231,6 +256,9 @@ type QuickForm = {
   clientName: string; date: string; dueDate: string
   subtotal: string; notes: string; status: InvoiceStatus
 }
+
+type InvoiceFilter = 'all' | InvoiceStatus
+
 const EMPTY_FORM: QuickForm = {
   clientName: '', date: new Date().toISOString().slice(0, 10),
   dueDate: '', subtotal: '', notes: '', status: 'draft',
@@ -238,6 +266,7 @@ const EMPTY_FORM: QuickForm = {
 
 export default function InvoicePage() {
   const location = useLocation()
+  const navigate = useNavigate()
   const [invoices,    setInvoices]    = useState<Invoice[]>([])
   const [clients,     setClients]     = useState<Client[]>([])
   const [allProjects, setAllProjects] = useState<Project[]>([])
@@ -249,12 +278,23 @@ export default function InvoicePage() {
   const [quickModal, setQuickModal] = useState(false)
   const [quickProjectId, setQuickProjectId] = useState<string | undefined>()
   const [editId, setEditId] = useState<string | null>(null)
+  const [statusMenuOpenId, setStatusMenuOpenId] = useState<string | null>(null)
   const [newStatus, setNewStatus] = useState<InvoiceStatus>('draft')
   const [newAmountPaid, setNewAmountPaid] = useState('')
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
   const [form, setForm] = useState<QuickForm>(EMPTY_FORM)
-  const urlQ = new URLSearchParams(location.search).get('q') || ''
+  const initialParams = new URLSearchParams(location.search)
+  const urlQ = initialParams.get('q') || ''
+  const initialStatus = initialParams.get('status')
   const [search, setSearch] = useState(urlQ)
+  const [statusFilter, setStatusFilter] = useState<InvoiceFilter>(
+    initialStatus && STATUSES.some(status => status.key === initialStatus)
+      ? initialStatus as InvoiceStatus
+      : 'all',
+  )
+  const [view, setView] = useState<'projects' | 'flat'>('projects')
+  const [selectedIds, setSelectedIds] = useState<string[]>([])
+  const [openInvId, setOpenInvId] = useState<string | null>(null)
   const [toast, setToast] = useState<string | null>(null)
   const [previewInv, setPreviewInv] = useState<Invoice | null>(null)
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
@@ -273,6 +313,25 @@ export default function InvoicePage() {
     })
     loadSettings().then(setSettings)
   }, [])
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.search)
+    const nextQuery = params.get('q') || ''
+    const nextStatus = params.get('status')
+    setSearch(nextQuery)
+    setStatusFilter(
+      nextStatus && STATUSES.some(status => status.key === nextStatus)
+        ? nextStatus as InvoiceStatus
+        : 'all',
+    )
+    if (params.get('new') === '1') setBuilderOpen(true)
+  }, [location.search])
+
+  useEffect(() => {
+    if (!urlQ || !invoices.length) return
+    const match = invoices.find(inv => (inv.number || '').toLowerCase() === urlQ.toLowerCase())
+    if (match) setOpenInvId(match.id)
+  }, [invoices, urlQ])
 
   async function persist(next: Invoice[]): Promise<boolean> {
     try {
@@ -394,9 +453,11 @@ export default function InvoicePage() {
   function openStatusEdit(inv: Invoice) {
     if (editId === inv.id) {
       setEditId(null)
+      setStatusMenuOpenId(null)
       return
     }
     setEditId(inv.id)
+    setStatusMenuOpenId(inv.id)
     setNewStatus((inv.status as InvoiceStatus) || 'draft')
     setNewAmountPaid(inv.amountPaid != null ? String(inv.amountPaid) : '')
   }
@@ -411,10 +472,12 @@ export default function InvoicePage() {
       }
     }))
     setEditId(null)
+    setStatusMenuOpenId(null)
   }
 
   function handleInlineStatusSelect(inv: Invoice, nextStatus: InvoiceStatus) {
     setEditId(inv.id)
+    setStatusMenuOpenId(null)
     setNewStatus(nextStatus)
     if (nextStatus !== 'partial') {
       applyStatusChange(inv.id, nextStatus)
@@ -448,9 +511,11 @@ export default function InvoicePage() {
   }
   function doDelete(id: string) { void persist(invoices.filter((inv) => inv.id !== id)); setConfirmDelete(null) }
 
-  const filtered = invoices.filter((inv) =>
-    `${inv.number} ${inv.clientName} ${inv.projectName}`.toLowerCase().includes(search.toLowerCase()),
-  )
+  const filtered = invoices.filter((inv) => {
+    const matchesSearch = `${inv.number} ${inv.clientName} ${inv.projectName}`.toLowerCase().includes(search.toLowerCase())
+    const matchesStatus = statusFilter === 'all' || (inv.status || 'draft').toLowerCase() === statusFilter
+    return matchesSearch && matchesStatus
+  })
 
   const groups = useMemo(() => {
     const map = new Map<string, { label: string; projectId: string | null; invoices: Invoice[] }>()
@@ -480,156 +545,513 @@ export default function InvoicePage() {
   const totalBilled = invoices.reduce((s, i) => s + (Number(i.subtotal) || 0), 0)
   const unpaidCount = invoices.filter(i => ['sent', 'overdue', 'partial'].includes((i.status || '').toLowerCase())).length
   const draftCount = invoices.filter(i => (i.status || '').toLowerCase() === 'draft').length
+  const overdueCount = invoices.filter(i => (i.status || '').toLowerCase() === 'overdue').length
+  const outstandingBalance = invoices
+    .filter(i => !['paid', 'draft'].includes((i.status || 'draft').toLowerCase()))
+    .reduce((sum, inv) => sum + Math.max(0, (Number(inv.subtotal) || 0) - (Number(inv.amountPaid) || 0)), 0)
+  const overdueBalance = invoices
+    .filter(i => (i.status || '').toLowerCase() === 'overdue')
+    .reduce((sum, inv) => sum + Math.max(0, (Number(inv.subtotal) || 0) - (Number(inv.amountPaid) || 0)), 0)
+  const paidCount = invoices.filter(i => (i.status || '').toLowerCase() === 'paid').length
+  const statusCounts: Record<InvoiceFilter, number> = {
+    all: invoices.length,
+    draft: draftCount,
+    sent: invoices.filter(i => (i.status || '').toLowerCase() === 'sent').length,
+    viewed: invoices.filter(i => (i.status || '').toLowerCase() === 'viewed').length,
+    partial: invoices.filter(i => (i.status || '').toLowerCase() === 'partial').length,
+    overdue: overdueCount,
+    paid: paidCount,
+  }
+  const totalFiltered = filtered.reduce((sum, invoice) => sum + (Number(invoice.subtotal) || 0), 0)
+  const openInvoice = openInvId ? invoices.find(invoice => invoice.id === openInvId) || null : null
+  const toggleSelected = (id: string) => {
+    setSelectedIds(current => current.includes(id) ? current.filter(entry => entry !== id) : [...current, id])
+  }
+
+  function exportFilteredCsv() {
+    const rows = [
+      ['invoice_number', 'client', 'project', 'date', 'due_date', 'status', 'subtotal', 'amount_paid'],
+      ...filtered.map(invoice => [
+        invoice.number,
+        invoice.clientName || '',
+        invoice.projectName || '',
+        invoice.date || '',
+        invoice.dueDate || '',
+        invoice.status || 'draft',
+        String(Number(invoice.subtotal) || 0),
+        String(Number(invoice.amountPaid) || 0),
+      ]),
+    ]
+    const csv = rows.map(row => row.map(value => `"${String(value).replace(/"/g, '""')}"`).join(',')).join('\r\n')
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = `invoices-${new Date().toISOString().slice(0, 10)}.csv`
+    anchor.click()
+    URL.revokeObjectURL(url)
+  }
+
+  async function sendSelectedInvoices() {
+    const selected = invoices.filter(invoice => selectedIds.includes(invoice.id) && invoice.clientEmail)
+    for (const invoice of selected) await handleInvoiceEmail(invoice)
+    if (!selected.length) showToast('No selected invoices with client email')
+  }
+
+  async function downloadSelectedInvoices() {
+    const selected = invoices.filter(invoice => selectedIds.includes(invoice.id))
+    if (!selected.length) {
+      showToast('No invoices selected')
+      return
+    }
+    selected.forEach(invoice => printInvoice(invoice, settings))
+    showToast(`Opened ${selected.length} invoice PDF${selected.length === 1 ? '' : 's'}`)
+  }
+
+  async function deleteSelectedInvoices() {
+    if (!selectedIds.length) return
+    const ok = await persist(invoices.filter(invoice => !selectedIds.includes(invoice.id)))
+    if (!ok) return
+    showToast(`Deleted ${selectedIds.length} invoice${selectedIds.length === 1 ? '' : 's'}`)
+    setSelectedIds([])
+  }
 
   return (
-    <div className="page-wrap">
-      <div className="page-header">
-        <div className="page-header-left">
-          <h1 className="page-title">Invoices</h1>
-          <p className="page-sub">{invoices.length} total · {formatMoney(totalBilled)}</p>
+    <div className="proto-page">
+      <div className="proto-page-head">
+        <div className="proto-page-head-row">
+          <div>
+            <div className="proto-eyebrow" style={{ color: 'var(--gold)', marginBottom: 8 }}>Operate · Billing</div>
+            <h1 className="page-title">Invoices</h1>
+            <div style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: 6, fontWeight: 500 }}>
+              <span style={{ color: 'var(--text)', fontWeight: 700 }}>{unpaidCount}</span> unpaid · {protoCurrency(outstandingBalance)} outstanding · {overdueCount} overdue
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <button type="button" className="proto-btn" onClick={exportFilteredCsv}>
+              <ProtoIcon name="download" size={13} />
+              Export CSV
+            </button>
+            <button type="button" className="proto-btn" onClick={() => openQuickForProject(undefined)}>
+              <ProtoIcon name="plus" size={13} />
+              QUICK INVOICE
+            </button>
+            <button type="button" className="proto-btn proto-btn-primary" onClick={() => openBuilder()}>
+              <ProtoIcon name="plus" size={13} />
+              NEW INVOICE
+            </button>
+          </div>
         </div>
-        <div className="page-header-actions">
-          {invoices.some(i => ['overdue','sent','partial'].includes((i.status||'').toLowerCase()) && i.clientEmail) && (
-            <button className="btn-ghost btn-sm" title="Send reminder to all clients with unpaid invoices" onClick={() => { void (async () => {
-              const seen = new Set<string>()
-              let gmailSent = 0
-              let fallbackCount = 0
-              for (const inv of invoices.filter(i => ['overdue','sent','partial'].includes((i.status||'').toLowerCase()) && i.clientEmail)) {
-                if (!seen.has(inv.clientEmail!)) {
-                  seen.add(inv.clientEmail!)
-                  const result = await reminderEmail(inv, settings)
-                  if (result.mode === 'gmail') gmailSent += 1
-                  else fallbackCount += 1
-                }
-              }
-              if (fallbackCount > 0) {
-                showToast(`Reminders sent to ${gmailSent} client${gmailSent !== 1 ? 's' : ''}; ${fallbackCount} opened as drafts with PDF download`)
-              } else {
-                showToast(`Reminders sent to ${gmailSent} client${gmailSent !== 1 ? 's' : ''}`)
-              }
-            })() }}>✉ Remind All</button>
-          )}
-          <button className="btn-ghost btn-sm" onClick={() => openQuickForProject(undefined)}>Quick Invoice</button>
-          <button className="btn-primary" onClick={() => openBuilder()}>+ New Invoice</button>
+
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
+          <FilterChips
+            value={statusFilter}
+            onChange={setStatusFilter}
+            options={[{ id: 'all', label: 'All', count: statusCounts.all }, ...STATUSES.map(status => ({
+              id: status.key,
+              label: status.label === 'Draft' ? 'Drafts' : status.label,
+              count: statusCounts[status.key],
+            }))]}
+          />
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: '#11141d', border: '1px solid var(--border)', borderRadius: 6, padding: '4px 10px', minWidth: 240 }}>
+              <ProtoIcon name="search" size={13} style={{ color: 'var(--muted)' }} />
+              <input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Filter…"
+                style={{ flex: 1, background: 'transparent', border: 'none', outline: 'none', color: 'var(--text)', fontSize: 12, padding: '4px 0' }}
+              />
+              {search ? (
+                <button type="button" className="proto-btn proto-btn-ghost proto-btn-icon" onClick={() => setSearch('')}>
+                  <ProtoIcon name="close" size={11} />
+                </button>
+              ) : null}
+            </div>
+            <ToggleGroup
+              value={view}
+              onChange={setView}
+              options={[
+                { id: 'projects', label: 'By Project' },
+                { id: 'flat', label: 'List' },
+              ]}
+            />
+          </div>
         </div>
+
+        {selectedIds.length > 0 ? (
+          <div style={{ marginTop: 14, padding: '10px 14px', background: 'rgba(34,211,238,0.16)', border: '1px solid var(--gold)', borderRadius: 8, display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--goldl)' }}>{selectedIds.length} selected</span>
+            <span style={{ flex: 1 }} />
+            <button type="button" className="proto-btn" onClick={() => { void sendSelectedInvoices() }}>
+              <ProtoIcon name="send" size={12} />
+              Send selected
+            </button>
+            <button type="button" className="proto-btn" onClick={() => { void downloadSelectedInvoices() }}>
+              <ProtoIcon name="download" size={12} />
+              Download PDFs
+            </button>
+            <button type="button" className="proto-btn proto-btn-danger" onClick={() => { void deleteSelectedInvoices() }}>
+              <ProtoIcon name="trash" size={12} />
+              Delete
+            </button>
+            <button type="button" className="proto-btn proto-btn-ghost proto-btn-icon" onClick={() => setSelectedIds([])}>
+              <ProtoIcon name="close" size={12} />
+            </button>
+          </div>
+        ) : null}
       </div>
 
-      <div className="filter-bar">
-        <input className="form-input filter-input-sm" placeholder="Search invoices..." value={search} onChange={(e) => setSearch(e.target.value)} />
-        <span className="pill-meta">{draftCount} draft</span>
-        <span className="pill-meta">{unpaidCount} unpaid</span>
-        <span className="toolbar-spacer pill-meta">{groups.length} project group{groups.length !== 1 ? 's' : ''}</span>
-      </div>
-
-      {/* PROJECT-GROUPED INVOICE LIST */}
-      {groups.length === 0 ? (
-        <div className="empty-state">
-          <div className="empty-state-title">{search ? 'No invoices match your search.' : 'No invoices yet.'}</div>
-          <div className="empty-state-copy">{search ? 'Try a different client, project, or invoice number.' : 'Create your first invoice to start tracking billing, reminders, and project totals here.'}</div>
-        </div>
-      ) : (
-        <div className="invoice-groups">
-          {groups.map(({ key, label, projectId: pId, invoices: groupInvs }) => {
-            const groupTotal = groupInvs.reduce((s, i) => s + (Number(i.subtotal)||0), 0)
-            const unpaid = groupInvs.filter(i => ['sent','overdue','partial'].includes((i.status||'').toLowerCase())).length
-            const isOpen = expanded.has(key)
-            return (
-              <div key={key} className="invoice-group">
-                <div className="invoice-group-header" onClick={() => toggleCollapse(key)}>
-                  <div className="invoice-group-summary">
-                    <span style={{ fontSize: 12, color: 'var(--muted)', width: 12 }}>{isOpen ? '▼' : '▶'}</span>
-                    <span className="invoice-group-name">{label}</span>
-                    <span className="invoice-group-meta">
-                      {groupInvs.length} invoice{groupInvs.length !== 1 ? 's' : ''} · {formatMoney(groupTotal)}
-                    </span>
-                    {unpaid > 0 && <span className="pill-meta" style={{ color: '#f87171' }}>{unpaid} unpaid</span>}
+      <div className="proto-page-body">
+        {view === 'projects' ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            {groups.length === 0 ? (
+              <div className="proto-empty">No invoices match this filter.</div>
+            ) : groups.map(({ key, label, projectId: pId, invoices: groupInvs }) => {
+              const isOpen = expanded.has(key)
+              const groupProject = allProjects.find(project => project.id === pId || project.name === label)
+              const client = clients.find(entry => entry.id === groupProject?.clientId) || clients.find(entry => entry.name === groupInvs[0]?.clientName)
+              const groupTotal = groupInvs.reduce((sum, invoice) => sum + (Number(invoice.subtotal) || 0), 0)
+              const groupOutstanding = groupInvs
+                .filter(invoice => (invoice.status || '').toLowerCase() !== 'paid')
+                .reduce((sum, invoice) => sum + Math.max(0, (Number(invoice.subtotal) || 0) - (Number(invoice.amountPaid) || 0)), 0)
+              return (
+                <div key={key} className="card" style={{ overflow: 'hidden' }}>
+                  <div style={{ padding: '12px 14px', borderBottom: isOpen ? '1px solid var(--border)' : 'none', display: 'grid', gridTemplateColumns: '20px 36px minmax(0, 1fr) auto auto auto', alignItems: 'center', gap: 14 }}>
+                    <button type="button" className="proto-btn proto-btn-icon proto-btn-ghost" onClick={() => toggleCollapse(key)} style={{ width: 20, height: 20, padding: 0 }}>
+                      <ProtoIcon name={isOpen ? 'chevronD' : 'chevronR'} size={12} />
+                    </button>
+                    <Avatar name={client?.name || groupInvs[0]?.clientName} color={colorFromString(client?.name || groupInvs[0]?.clientName || label)} size="md" />
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <button type="button" className="proto-link-button" onClick={() => setOpenInvId(groupInvs[0]?.id || null)} style={{ fontSize: 14, fontWeight: 800, color: 'var(--text)', letterSpacing: '-0.005em' }}>
+                          {label}
+                        </button>
+                        <span className="proto-mono" style={{ fontSize: 10, padding: '2px 6px', background: '#181c28', color: 'var(--gold)', borderRadius: 3, fontWeight: 700 }}>{projectPrefix(label)}</span>
+                      </div>
+                      <div style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 2 }}>
+                        {client?.company || client?.name || groupInvs[0]?.clientName || 'Unassigned'} · {groupInvs.length} invoice{groupInvs.length === 1 ? '' : 's'}
+                      </div>
+                    </div>
+                    <div style={{ textAlign: 'right' }}>
+                      <div className="proto-eyebrow">Outstanding</div>
+                      <div className="proto-mono" style={{ fontSize: 14, fontWeight: 800, color: groupOutstanding > 0 ? '#f87171' : 'var(--dim)' }}>{protoCurrency(groupOutstanding)}</div>
+                    </div>
+                    <div style={{ textAlign: 'right' }}>
+                      <div className="proto-eyebrow">Total</div>
+                      <div className="proto-mono" style={{ fontSize: 14, fontWeight: 800, color: 'var(--text)' }}>{protoCurrency(groupTotal)}</div>
+                    </div>
+                    <div style={{ display: 'flex', gap: 6 }}>
+                      <button type="button" className="proto-btn proto-btn-ghost" onClick={() => openQuickForProject(pId || undefined)}>+ Quick</button>
+                      <button type="button" className="proto-btn proto-btn-ghost" onClick={() => openBuilder(pId || undefined)}>+ Invoice</button>
+                    </div>
                   </div>
-                  <div className="invoice-group-actions" onClick={e => e.stopPropagation()}>
-                    <button className="btn-xs btn-ghost" onClick={() => openQuickForProject(pId || undefined)}>+ Quick</button>
-                    <button className="btn-xs btn-ghost" onClick={() => openBuilder(pId || undefined)}>+ Invoice</button>
+                  {isOpen ? (
+                    <table className="proto-table proto-mono" style={{ fontSize: 12 }}>
+                      <thead>
+                        <tr>
+                          <th style={{ width: 36 }} />
+                          <th>Invoice</th>
+                          <th>Issued</th>
+                          <th>Due</th>
+                          <th>Hours</th>
+                          <th style={{ textAlign: 'right' }}>Amount</th>
+                          <th>Status</th>
+                          <th style={{ width: 32 }} />
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {groupInvs.map(invoice => {
+                          const hours = (invoice.items || []).reduce((sum, item) => sum + invoiceItemHours(item), 0)
+                          return (
+                            <tr key={invoice.id} onClick={() => setOpenInvId(invoice.id)}>
+                              <td style={{ width: 36 }}>
+                                <input
+                                  type="checkbox"
+                                  checked={selectedIds.includes(invoice.id)}
+                                  onChange={() => toggleSelected(invoice.id)}
+                                  onClick={(event) => event.stopPropagation()}
+                                  style={{ accentColor: 'var(--gold)' }}
+                                />
+                              </td>
+                              <td style={{ color: 'var(--gold)', fontWeight: 700 }}>{invoice.number}</td>
+                              <td style={{ color: 'var(--muted)' }}>{protoDateShort(invoice.date)}</td>
+                              <td style={{ color: daysFromToday(invoice.dueDate) < 0 && invoice.status !== 'paid' ? '#f87171' : 'var(--muted)' }}>{dueLabel(invoice.dueDate)}</td>
+                              <td style={{ color: 'var(--muted)' }}>{hours > 0 ? `${hours}h` : '—'}</td>
+                              <td style={{ color: 'var(--text)', textAlign: 'right', fontWeight: 700 }}>{protoCurrency(Number(invoice.subtotal) || 0)}</td>
+                              <td>
+                                {editId === invoice.id ? (
+                                  <div className="invoice-status-edit" onClick={event => event.stopPropagation()}>
+                                    <div className="invoice-status-menu">
+                                      <button
+                                        type="button"
+                                        className="invoice-status-trigger invoice-status-button"
+                                        onClick={() => setStatusMenuOpenId(current => current === invoice.id ? null : invoice.id)}
+                                      >
+                                        <StatusChip status={newStatus} />
+                                        <ProtoIcon name="chevronD" size={11} />
+                                      </button>
+                                      {statusMenuOpenId === invoice.id ? (
+                                        <div className="invoice-status-menu-list">
+                                          {STATUSES.map(status => (
+                                            <button
+                                              key={status.key}
+                                              type="button"
+                                              className={`invoice-status-option${newStatus === status.key ? ' active' : ''}`}
+                                              onClick={() => handleInlineStatusSelect(invoice, status.key)}
+                                            >
+                                              <StatusChip status={status.key} />
+                                              <span>{status.label}</span>
+                                            </button>
+                                          ))}
+                                        </div>
+                                      ) : null}
+                                    </div>
+                                    {newStatus === 'partial' ? (
+                                      <>
+                                        <input
+                                          className="proto-input"
+                                          type="number"
+                                          placeholder="Amount paid"
+                                          value={newAmountPaid}
+                                          onChange={event => setNewAmountPaid(event.target.value)}
+                                        />
+                                        <div style={{ display: 'flex', gap: 6 }}>
+                                          <button type="button" className="proto-btn proto-btn-ghost" onClick={() => { setEditId(null); setStatusMenuOpenId(null) }}>Cancel</button>
+                                          <button type="button" className="proto-btn proto-btn-primary" onClick={() => applyStatusChange(invoice.id, 'partial', newAmountPaid)}>Save</button>
+                                        </div>
+                                      </>
+                                    ) : null}
+                                  </div>
+                                ) : (
+                                  <button type="button" className="invoice-status-button" onClick={(event) => { event.stopPropagation(); openStatusEdit(invoice) }}>
+                                    <StatusChip status={invoice.status} />
+                                  </button>
+                                )}
+                              </td>
+                              <td style={{ textAlign: 'right', color: 'var(--dim)' }}><ProtoIcon name="chevronR" size={12} /></td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    </table>
+                  ) : null}
+                </div>
+              )
+            })}
+          </div>
+        ) : (
+          <div className="card" style={{ overflow: 'hidden' }}>
+            <table className="proto-table proto-mono">
+              <thead>
+                <tr>
+                  <th style={{ width: 36 }} />
+                  <th>Invoice</th>
+                  <th>Client</th>
+                  <th>Project</th>
+                  <th>Issued</th>
+                  <th>Due</th>
+                  <th>Hours</th>
+                  <th style={{ textAlign: 'right' }}>Amount</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map(invoice => {
+                  const hours = (invoice.items || []).reduce((sum, item) => sum + invoiceItemHours(item), 0)
+                  return (
+                    <tr key={invoice.id} onClick={() => setOpenInvId(invoice.id)}>
+                      <td>
+                        <input
+                          type="checkbox"
+                          checked={selectedIds.includes(invoice.id)}
+                          onChange={() => toggleSelected(invoice.id)}
+                          onClick={(event) => event.stopPropagation()}
+                          style={{ accentColor: 'var(--gold)' }}
+                        />
+                      </td>
+                      <td style={{ color: 'var(--gold)', fontWeight: 700 }}>{invoice.number}</td>
+                      <td style={{ color: 'var(--text)', fontFamily: 'Inter, sans-serif', fontWeight: 600 }}>{invoice.clientName || '—'}</td>
+                      <td style={{ color: 'var(--muted)', fontFamily: 'Inter, sans-serif' }}>{invoice.projectName || '—'}</td>
+                      <td style={{ color: 'var(--muted)' }}>{protoDateShort(invoice.date)}</td>
+                      <td style={{ color: daysFromToday(invoice.dueDate) < 0 && invoice.status !== 'paid' ? '#f87171' : 'var(--muted)' }}>{dueLabel(invoice.dueDate)}</td>
+                      <td style={{ color: 'var(--muted)' }}>{hours > 0 ? `${hours}h` : '—'}</td>
+                      <td style={{ color: 'var(--text)', textAlign: 'right', fontWeight: 700 }}>{protoCurrency(Number(invoice.subtotal) || 0)}</td>
+                      <td><StatusChip status={invoice.status} /></td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        <div style={{ marginTop: 18, padding: '12px 16px', background: '#11141d', border: '1px solid var(--border)', borderRadius: 10, display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 11.5 }} className="proto-mono">
+          <span style={{ color: 'var(--muted)' }}>Showing <span style={{ color: 'var(--text)', fontWeight: 700 }}>{filtered.length}</span> of {invoices.length} invoices</span>
+          <span style={{ color: 'var(--muted)' }}>Total: <span style={{ color: 'var(--gold)', fontWeight: 700 }}>{protoCurrency(totalFiltered)}</span></span>
+        </div>
+      </div>
+
+      <Drawer open={Boolean(openInvoice)} onClose={() => setOpenInvId(null)} width={680}>
+        {openInvoice ? (() => {
+          const client = clients.find(entry => entry.name === openInvoice.clientName)
+          const project = allProjects.find(entry => entry.id === openInvoice.projectId || entry.name === openInvoice.projectName)
+          const lineItems = (openInvoice.items || []).map(item => {
+            return {
+              employeeId: item.employeeId,
+              name: item.employeeName,
+              role: item.position || '',
+              color: colorFromString(item.employeeName),
+              hours: invoiceItemHours(item),
+              rate: item.rate,
+              amount: invoiceItemAmount(item),
+              paid: item.employeeId ? openInvoice.employeePayments?.[item.employeeId]?.status === 'paid' : false,
+            }
+          })
+          const subtotal = Number(openInvoice.subtotal) || 0
+          const outstanding = Math.max(0, subtotal - (Number(openInvoice.amountPaid) || 0))
+          const actions = [
+            {
+              label: openInvoice.status === 'draft' ? 'Send to client' : openInvoice.status === 'overdue' ? 'Send reminder' : 'Record payment',
+              icon: openInvoice.status === 'draft' ? 'send' : openInvoice.status === 'overdue' ? 'mail' : 'check',
+              onClick: () => {
+                if (openInvoice.status === 'draft') {
+                  if (openInvoice.clientEmail) void handleInvoiceEmail(openInvoice)
+                } else if (openInvoice.status === 'overdue') {
+                  if (openInvoice.clientEmail) void handleReminderEmail(openInvoice)
+                } else {
+                  openStatusEdit(openInvoice)
+                }
+              },
+            },
+          ] as const
+          return (
+            <>
+              <div style={{ padding: '18px 22px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <span className="proto-mono" style={{ fontSize: 18, fontWeight: 800, color: 'var(--gold)', letterSpacing: '-0.01em' }}>{openInvoice.number}</span>
+                    <StatusChip status={openInvoice.status} filled />
+                  </div>
+                  <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 4 }}>{client?.company || client?.name || openInvoice.clientName} · {project?.name || openInvoice.projectName || 'Unassigned'}</div>
+                </div>
+                <button type="button" className="proto-btn proto-btn-icon proto-btn-ghost" onClick={() => setOpenInvId(null)}>
+                  <ProtoIcon name="close" size={14} />
+                </button>
+              </div>
+              <div style={{ padding: 22, overflow: 'auto', flex: 1 }}>
+                <div style={{ background: '#181c28', border: '1px solid var(--border)', borderRadius: 10, padding: 18, marginBottom: 14 }}>
+                  <div className="proto-eyebrow" style={{ marginBottom: 8 }}>Amount Due</div>
+                  <div className="proto-mono" style={{ fontSize: 38, fontWeight: 700, color: 'var(--text)', letterSpacing: '-0.02em', lineHeight: 1 }}>
+                    {protoCurrency(outstanding)}<span style={{ fontSize: 14, color: 'var(--dim)', marginLeft: 8, fontWeight: 600 }}>USD</span>
+                  </div>
+                  {Number(openInvoice.amountPaid) > 0 ? (
+                    <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 6 }}>Of {protoCurrency(subtotal)} total · {protoCurrency(Number(openInvoice.amountPaid) || 0)} paid</div>
+                  ) : null}
+                  <div style={{ display: 'flex', gap: 8, marginTop: 14, flexWrap: 'wrap' }}>
+                    <button type="button" className="proto-btn proto-btn-primary" style={{ flex: 1 }} onClick={actions[0].onClick}>
+                      <ProtoIcon name={actions[0].icon} size={13} />
+                      {actions[0].label}
+                    </button>
+                    <button type="button" className="proto-btn" onClick={() => setPreviewInv(openInvoice)}>
+                      <ProtoIcon name="eye" size={13} />
+                      Preview
+                    </button>
+                    <button type="button" className="proto-btn" onClick={() => printInvoice(openInvoice, settings)}>
+                      <ProtoIcon name="download" size={13} />
+                      PDF
+                    </button>
                   </div>
                 </div>
-                {isOpen && (
-                  <div className="invoice-rows">
-                    {groupInvs.map(inv => {
-                      const overdue = inv.dueDate && new Date(inv.dueDate) < new Date() && !['paid'].includes((inv.status||'').toLowerCase())
-                      const hours = (inv.items || []).reduce((sum, item) => sum + invoiceItemHours(item), 0)
-                      return (
-                        <div key={inv.id} className="invoice-row">
-                          <div className="invoice-row-main">
-                            <div className="invoice-row-number">{inv.number}</div>
-                            <div className="invoice-row-client">{inv.clientName || '—'}</div>
-                            <div className="invoice-row-sub">{inv.projectName || 'Unassigned project'}{hours > 0 ? ` · ${formatInvoiceHoursEntry(hours)}h` : ''}</div>
-                          </div>
-                          <div className="invoice-row-meta">
-                            <div className="invoice-row-date"><strong>Issued</strong> {inv.date || '—'}</div>
-                            <div className={`invoice-row-due${overdue ? ' overdue' : ''}`}><strong>Due</strong> {inv.dueDate || '—'}</div>
-                          </div>
-                          <div className="invoice-row-amount">
-                            {editId === inv.id ? (
-                              <div onClick={e => e.stopPropagation()} style={{ display: 'grid', gap: 6, justifyItems: 'end', width: '100%' }}>
-                                <select
-                                  className="form-select"
-                                  style={{ minWidth: 118, fontSize: 12, padding: '4px 8px' }}
-                                  value={newStatus}
-                                  onChange={(e) => handleInlineStatusSelect(inv, e.target.value as InvoiceStatus)}
-                                >
-                                  {STATUSES.map((s) => <option key={s.key} value={s.key}>{s.label}</option>)}
-                                </select>
-                                {newStatus === 'partial' && (
-                                  <>
-                                    <input
-                                      className="form-input"
-                                      type="number"
-                                      placeholder="Amount paid"
-                                      style={{ width: 118, fontSize: 12, padding: '5px 8px' }}
-                                      value={newAmountPaid}
-                                      onChange={e => setNewAmountPaid(e.target.value)}
-                                    />
-                                    <div style={{ display: 'flex', gap: 6 }}>
-                                      <button className="btn-xs btn-ghost" onClick={() => setEditId(null)}>Cancel</button>
-                                      <button className="btn-xs btn-primary" onClick={() => applyStatusChange(inv.id, 'partial', newAmountPaid)}>Save</button>
-                                    </div>
-                                  </>
-                                )}
-                              </div>
-                            ) : (
-                              <button
-                                className={`badge ${statusBadge(inv.status)}`}
-                                style={{ fontSize: 10, border: 0, cursor: 'pointer' }}
-                                title="Change status"
-                                onClick={() => openStatusEdit(inv)}
-                              >
-                                {inv.status || 'draft'}
-                              </button>
-                            )}
-                            <div className="invoice-row-total">{formatMoney(Number(inv.subtotal)||0)}</div>
-                            {inv.status === 'partial' && inv.amountPaid != null && (
-                              <div className="invoice-row-paid-note">{formatMoney(inv.amountPaid)} paid so far</div>
-                            )}
-                          </div>
-                          <div className="invoice-row-actions">
-                            {inv.clientEmail && <button className="btn-xs btn-ghost" title="Email invoice" onClick={() => { void handleInvoiceEmail(inv) }}>✉</button>}
-                            {inv.clientEmail && ['overdue','sent','partial'].includes((inv.status||'').toLowerCase()) && (
-                              <button className="btn-xs btn-ghost" title="Payment reminder" onClick={() => { void handleReminderEmail(inv) }}>⚠</button>
-                            )}
-                            <button className="btn-xs btn-ghost" title="Preview" onClick={() => setPreviewInv(inv)}>👁</button>
-                            <button className="btn-xs btn-ghost" title="PDF" onClick={() => printInvoice(inv, settings)}>⎙</button>
-                            <button className="btn-xs btn-ghost" title="Share portal" onClick={() => shareInvoice(inv)}>🔗</button>
-                            <button className="btn-xs btn-ghost" title="Duplicate" onClick={() => duplicateInvoice(inv)}>⧉</button>
-                            <button className="btn-xs btn-ghost" title="Edit invoice" onClick={() => openEditInvoice(inv)}>✏</button>
-                            <button className="btn-xs btn-danger" onClick={() => setConfirmDelete(inv.id)}>×</button>
-                          </div>
-                        </div>
-                      )
-                    })}
+
+                <div className="proto-detail-grid" style={{ marginBottom: 14 }}>
+                  {[
+                    { label: 'Bill to', value: client?.company || client?.name || openInvoice.clientName || '—', sub: client?.email || openInvoice.clientEmail || '—' },
+                    { label: 'Project', value: project?.name || openInvoice.projectName || 'Unassigned', sub: `${projectPrefix(project?.name || openInvoice.projectName)} · ${project?.rate ? protoCurrency(Number(project.rate), 0) : 'Rate TBD'}/hr` },
+                    { label: 'Issued', value: protoDate(openInvoice.date), sub: openInvoice.date || 'No issue date' },
+                    { label: 'Due', value: protoDate(openInvoice.dueDate), sub: dueLabel(openInvoice.dueDate) },
+                  ].map(meta => (
+                    <div key={meta.label} className="proto-detail-cell">
+                      <div className="proto-eyebrow" style={{ marginBottom: 4 }}>{meta.label}</div>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text)' }}>{meta.value}</div>
+                      <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2 }}>{meta.sub}</div>
+                    </div>
+                  ))}
+                </div>
+
+                <div style={{ marginBottom: 14 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 10 }}>
+                    <div className="proto-eyebrow">Line Items · {formatInvoiceHoursEntry(lineItems.reduce((sum, line) => sum + line.hours, 0))} billed · {lineItems.length} statements</div>
+                    <span style={{ fontSize: 10.5, color: 'var(--dim)' }} className="proto-mono">Each line = 1 statement</span>
                   </div>
-                )}
+                  <div className="card" style={{ overflow: 'hidden' }}>
+                    <table className="proto-table proto-mono" style={{ fontSize: 11.5 }}>
+                      <thead>
+                        <tr>
+                          <th>Employee</th>
+                          <th style={{ textAlign: 'right' }}>Hrs</th>
+                          <th style={{ textAlign: 'right' }}>Rate</th>
+                          <th style={{ textAlign: 'right' }}>Amount</th>
+                          <th>Statement</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {lineItems.map(line => (
+                          <tr key={`${line.employeeId || line.name}-${line.rate}`} onClick={() => line.employeeId ? navigate(`/employees/${line.employeeId}`) : undefined}>
+                            <td style={{ fontFamily: 'Inter, sans-serif' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                <Avatar name={line.name} color={line.color} size="sm" />
+                                <div>
+                                  <div style={{ fontWeight: 700, color: 'var(--text)' }}>{line.name}</div>
+                                  <div style={{ fontSize: 10, color: 'var(--muted)' }}>{line.role}</div>
+                                </div>
+                              </div>
+                            </td>
+                            <td style={{ textAlign: 'right' }}>{line.hours}</td>
+                            <td style={{ textAlign: 'right' }}>{protoCurrency(line.rate)}</td>
+                            <td style={{ textAlign: 'right', color: 'var(--text)', fontWeight: 700 }}>{protoCurrency(line.amount)}</td>
+                            <td><StatusChip status={line.paid ? 'paid' : 'draft'} /></td>
+                          </tr>
+                        ))}
+                      </tbody>
+                      <tfoot>
+                        <tr style={{ background: '#181c28' }}>
+                          <td colSpan={3} style={{ textAlign: 'right', color: 'var(--muted)', fontWeight: 700 }}>SUBTOTAL</td>
+                          <td style={{ textAlign: 'right', color: 'var(--text)', fontWeight: 800 }}>{protoCurrency(subtotal)}</td>
+                          <td />
+                        </tr>
+                        <tr style={{ background: '#181c28', borderTop: '1px solid var(--border)' }}>
+                          <td colSpan={3} style={{ textAlign: 'right', color: 'var(--gold)', fontWeight: 800 }}>TOTAL DUE</td>
+                          <td style={{ textAlign: 'right', color: 'var(--gold)', fontWeight: 800, fontSize: 14 }}>{protoCurrency(outstanding)}</td>
+                          <td />
+                        </tr>
+                      </tfoot>
+                    </table>
+                  </div>
+                </div>
+
+                <div>
+                  <div className="proto-eyebrow" style={{ marginBottom: 10 }}>Activity</div>
+                  <div className="proto-activity-list">
+                    {[
+                      { text: `Invoice created · ${(openInvoice.items || []).length} employee statements generated`, when: protoDate(openInvoice.date), icon: 'plus', color: 'var(--gold)' },
+                      ...(openInvoice.statusHistory || []).map(entry => ({ text: `Status changed to ${entry.status}`, when: new Date(entry.changedAt).toLocaleString(), icon: entry.status === 'paid' ? 'check' : entry.status === 'overdue' ? 'mail' : 'edit', color: entry.status === 'paid' ? '#10b981' : entry.status === 'overdue' ? '#f87171' : '#60a5fa' })),
+                    ].map((entry, index) => (
+                      <div key={`${entry.text}-${index}`} className="proto-activity-item">
+                        <span className="proto-activity-icon" style={{ color: entry.color }}>
+                          <ProtoIcon name={entry.icon as 'plus' | 'check' | 'mail' | 'edit'} size={11} />
+                        </span>
+                        <span style={{ fontSize: 12.5, color: 'var(--soft)' }}>{entry.text}</span>
+                        <span style={{ fontSize: 11, color: 'var(--muted)' }} className="proto-mono">{entry.when}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
               </div>
-            )
-          })}
-        </div>
-      )}
+            </>
+          )
+        })() : null}
+      </Drawer>
 
       {/* React Invoice Builder */}
       {builderOpen && (

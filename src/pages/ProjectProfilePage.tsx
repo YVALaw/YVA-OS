@@ -1,147 +1,195 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import type { Client, Employee, Expense, Invoice, Project, Task, TaskStatus } from '../data/types'
-import { loadSnapshot, saveProjects, loadTasks, saveTasks, loadExpenses, saveExpenses } from '../services/storage'
+import { loadExpenses, loadSnapshot, loadTasks, saveExpenses, saveProjects, saveTasks as saveTasksToStorage } from '../services/storage'
 import { formatMoney } from '../utils/money'
+import {
+  Avatar,
+  Modal,
+  ProtoIcon,
+  SearchField,
+  StatusChip,
+  colorFromString,
+  protoCurrency,
+  protoDate,
+  protoDateShort,
+} from '../components/PrototypeKit'
 
-function uid() { return crypto.randomUUID() }
-
-function stageBadge(s?: string): string {
-  switch ((s || 'planning').toLowerCase()) {
-    case 'active':    return 'badge-green'
-    case 'review':    return 'badge-purple'
-    case 'completed': return 'badge-teal'
-    case 'on-hold':   return 'badge-yellow'
-    default:          return 'badge-blue'
-  }
+function uid() {
+  return crypto.randomUUID()
 }
 
-const STAGES = ['planning','active','hiring','review','completed','on-hold']
-const BILLING_MODELS = ['hourly','fixed','retainer']
-const TASK_COLS: { key: TaskStatus; label: string }[] = [
-  { key: 'todo', label: 'To Do' },
-  { key: 'in-progress', label: 'In Progress' },
-  { key: 'done', label: 'Done' },
-]
-const EXPENSE_CATS = ['', 'Software', 'Hardware', 'Contractor', 'Travel', 'Marketing', 'Other']
+const STAGES = ['planning', 'active', 'hiring', 'review', 'on-hold', 'completed'] as const
 
-type LinkEntry = { label: string; url: string }
+function projectPrefix(project: Project) {
+  const words = project.name.trim().split(/\s+/).filter(Boolean)
+  const value = words.length > 1
+    ? words.map(word => word[0]).join('')
+    : (project.name.trim().slice(0, 4) || 'PRJ')
+  return value.toUpperCase().slice(0, 4)
+}
+
+function projectClientName(project: Project, clients: Client[]) {
+  if (!project.clientId) return null
+  return clients.find(client => client.id === project.clientId)?.company || clients.find(client => client.id === project.clientId)?.name || null
+}
+
+function currentMonthKey(date?: string) {
+  return date ? date.slice(0, 7) === new Date().toISOString().slice(0, 7) : false
+}
+
+function invoiceHours(invoice: Invoice, projectRate?: string | number) {
+  const explicit = invoice.items?.reduce((sum, item) => sum + Number(item.hoursTotal || 0), 0) || 0
+  if (explicit > 0) return explicit
+  const rate = Number(projectRate || 0)
+  const subtotal = Number(invoice.subtotal || 0)
+  return rate > 0 && subtotal > 0 ? subtotal / rate : 0
+}
 
 export default function ProjectProfilePage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
+  const [projects, setProjects] = useState<Project[]>([])
+  const [clients, setClients] = useState<Client[]>([])
+  const [employees, setEmployees] = useState<Employee[]>([])
+  const [invoices, setInvoices] = useState<Invoice[]>([])
+  const [allTasks, setAllTasks] = useState<Task[]>([])
+  const [allExpenses, setAllExpenses] = useState<Expense[]>([])
+  const [editing, setEditing] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [empSearch, setEmpSearch] = useState('')
+  const [newLinkLabel, setNewLinkLabel] = useState('')
+  const [newLinkUrl, setNewLinkUrl] = useState('')
+  const [taskForm, setTaskForm] = useState({ title: '', assigneeName: '', dueDate: '' })
+  const [expForm, setExpForm] = useState({ description: '', amount: '', date: new Date().toISOString().slice(0, 10), category: '' })
 
-  const [projects,  setProjectsState] = useState<Project[]>([])
-  const [clients,   setClients]       = useState<Client[]>([])
-  const [employees, setEmployees]     = useState<Employee[]>([])
-  const [invoices,  setInvoices]      = useState<Invoice[]>([])
-  const [tasks,     setTasks]         = useState<Task[]>([])
-  const [expenses,  setExpenses]      = useState<Expense[]>([])
+  const [form, setForm] = useState({
+    name: '',
+    rate: '',
+    budget: '',
+    clientId: '',
+    status: 'planning' as (typeof STAGES)[number],
+    billingModel: 'hourly',
+    startDate: '',
+    endDate: '',
+    description: '',
+    projectNeeds: '',
+    notes: '',
+    links: [] as { label: string; url: string }[],
+    employeeIds: [] as string[],
+  })
 
   useEffect(() => {
     loadSnapshot().then(snap => {
-      setProjectsState(snap.projects)
+      setProjects(snap.projects)
       setClients(snap.clients)
       setEmployees(snap.employees)
       setInvoices(snap.invoices)
     })
-    loadTasks().then(all => setTasks(all.filter(t => t.projectId === id)))
-    loadExpenses().then(all => setExpenses(all.filter(e => e.projectId === id)))
+    loadTasks().then(setAllTasks)
+    loadExpenses().then(setAllExpenses)
   }, [id])
 
-  const project = projects.find(p => p.id === id)
+  const project = projects.find(item => item.id === id) as Project
 
-  const [editing, setEditing] = useState(false)
-  const [form, setForm] = useState({
-    name: '', rate: '', budget: '', clientId: '', status: 'planning',
-    billingModel: 'hourly', startDate: '', endDate: '', notes: '',
-    description: '', projectNeeds: '',
-    links: [] as LinkEntry[], employeeIds: [] as string[],
-  })
-  const [newLinkLabel, setNewLinkLabel] = useState('')
-  const [newLinkUrl,   setNewLinkUrl]   = useState('')
-  const [confirmDelete, setConfirmDelete] = useState(false)
-  const [empSearch, setEmpSearch] = useState('')
-  const [empDropOpen, setEmpDropOpen] = useState(false)
-  const [saveError, setSaveError] = useState<string | null>(null)
-  const [saving, setSaving] = useState(false)
-
-  // Sync form from project once data loads
   useEffect(() => {
-    if (project && !editing) {
-      setForm({
-        name:         project.name ?? '',
-        rate:         project.rate != null ? String(project.rate) : '',
-        budget:       project.budget != null ? String(project.budget) : '',
-        clientId:     project.clientId ?? '',
-        status:       project.status ?? 'planning',
-        billingModel: project.billingModel ?? 'hourly',
-        startDate:    project.startDate ?? '',
-        endDate:      project.endDate ?? '',
-        notes:        project.notes ?? '',
-        description:  project.description ?? '',
-        projectNeeds: project.projectNeeds ?? '',
-        links:        (project.links ?? []) as LinkEntry[],
-        employeeIds:  project.employeeIds ?? [],
-      })
+    if (!project || editing) return
+    setForm({
+      name: project.name || '',
+      rate: project.rate != null ? String(project.rate) : '',
+      budget: project.budget != null ? String(project.budget) : '',
+      clientId: project.clientId || '',
+      status: (project.status || 'planning') as (typeof STAGES)[number],
+      billingModel: project.billingModel || 'hourly',
+      startDate: project.startDate || '',
+      endDate: project.endDate || '',
+      description: project.description || '',
+      projectNeeds: project.projectNeeds || '',
+      notes: project.notes || '',
+      links: project.links || [],
+      employeeIds: project.employeeIds || [],
+    })
+  }, [editing, project])
+
+  const projectTasks = useMemo(() => allTasks.filter(task => task.projectId === project?.id), [allTasks, project?.id])
+  const projectExpenses = useMemo(() => allExpenses.filter(expense => expense.projectId === project?.id), [allExpenses, project?.id])
+  const projectInvoices = useMemo(() => invoices.filter(invoice => invoice.projectId === project?.id || invoice.projectName === project?.name), [invoices, project?.id, project?.name])
+
+  const stats = useMemo(() => {
+    const mtdInvoices = projectInvoices.filter(invoice => currentMonthKey(invoice.date))
+    return {
+      billedLifetime: projectInvoices.reduce((sum, invoice) => sum + Number(invoice.subtotal || 0), 0),
+      billedMtd: mtdInvoices.reduce((sum, invoice) => sum + Number(invoice.subtotal || 0), 0),
+      hoursMtd: mtdInvoices.reduce((sum, invoice) => sum + invoiceHours(invoice, project?.rate), 0),
+      expenseTotal: projectExpenses.reduce((sum, expense) => sum + expense.amount, 0),
+      teamSize: project?.employeeIds?.length || 0,
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [project?.id])
+  }, [project?.rate, project?.employeeIds?.length, projectExpenses, projectInvoices])
 
-  const [taskForm, setTaskForm] = useState({ title: '', assigneeName: '', dueDate: '' })
-  const [taskAddCol, setTaskAddCol] = useState<TaskStatus | null>(null)
-  const taskDragId = { current: null as string | null }
-
-  const [expForm, setExpForm] = useState({ description: '', amount: '', date: new Date().toISOString().slice(0,10), category: '' })
+  const assignedEmployees = useMemo(
+    () => employees.filter(employee => (project?.employeeIds || []).includes(employee.id)),
+    [employees, project?.employeeIds],
+  )
 
   if (!project) {
     return (
-      <div className="page-wrap">
-        <div style={{ textAlign: 'center', padding: '60px 20px', color: 'var(--muted)' }}>
-          Project not found.
-          <br /><button className="btn-ghost btn-sm" style={{ marginTop: 12 }} onClick={() => navigate('/projects')}>← Back to Projects</button>
+      <div className="proto-page">
+        <div className="proto-page-body">
+          <div className="proto-empty" style={{ padding: 60 }}>Project not found.</div>
         </div>
       </div>
     )
   }
 
-  // project is guaranteed non-null here (early return above handles null case)
-  const projectNN = project!
-  const clientName = clients.find(c => c.id === projectNN.clientId)?.name || null
-  const projectInvoices = invoices.filter(inv => inv.projectId === projectNN.id || inv.projectName === projectNN.name)
-  const totalBilled = projectInvoices.reduce((s, inv) => s + (Number(inv.subtotal)||0), 0)
-  const totalExpenses = expenses.reduce((s, e) => s + e.amount, 0)
-  const assignedEmps = employees.filter(e => (projectNN.employeeIds||[]).includes(e.id))
-
-  async function persistProject(updated: Project): Promise<boolean> {
-    const next = projects.map(p => p.id === updated.id ? updated : p)
+  async function persistProject(next: Project) {
+    const updated = projects.map(item => item.id === next.id ? next : item)
     const previous = projects
-    setProjectsState(next)
+    setProjects(updated)
     setSaveError(null)
     try {
-      await saveProjects(next)
-      return true
+      await saveProjects(updated)
     } catch (error) {
-      console.error('Project save failed', error)
-      setProjectsState(previous)
+      setProjects(previous)
       setSaveError(error instanceof Error ? error.message : 'Project could not be saved.')
-      return false
     }
   }
 
   function beginEditing() {
-    setEmpSearch('')
-    setEmpDropOpen(false)
     setSaveError(null)
     setEditing(true)
+  }
+
+  function cancelEditing() {
+    setForm({
+      name: project.name || '',
+      rate: project.rate != null ? String(project.rate) : '',
+      budget: project.budget != null ? String(project.budget) : '',
+      clientId: project.clientId || '',
+      status: (project.status || 'planning') as (typeof STAGES)[number],
+      billingModel: project.billingModel || 'hourly',
+      startDate: project.startDate || '',
+      endDate: project.endDate || '',
+      description: project.description || '',
+      projectNeeds: project.projectNeeds || '',
+      notes: project.notes || '',
+      links: project.links || [],
+      employeeIds: project.employeeIds || [],
+    })
+    setEditing(false)
+    setEmpSearch('')
+    setNewLinkLabel('')
+    setNewLinkUrl('')
+    setSaveError(null)
   }
 
   async function handleSave() {
     if (!form.name.trim()) return
     setSaving(true)
-    const updated: Project = {
-      ...projectNN,
-      name: form.name,
+    const next: Project = {
+      ...project,
+      name: form.name.trim(),
       rate: form.rate ? Number(form.rate) : undefined,
       budget: form.budget ? Number(form.budget) : undefined,
       clientId: form.clientId || null,
@@ -152,517 +200,489 @@ export default function ProjectProfilePage() {
       description: form.description || undefined,
       projectNeeds: form.projectNeeds || undefined,
       notes: form.notes || undefined,
-      links: form.links.length > 0 ? form.links : undefined,
+      links: form.links.length ? form.links : undefined,
       employeeIds: form.employeeIds,
     }
-    const saved = await persistProject(updated)
+    await persistProject(next)
     setSaving(false)
-    if (saved) {
-      setEmpSearch('')
-      setEmpDropOpen(false)
-      setEditing(false)
-    }
-  }
-
-  function handleCancel() {
-    setForm({
-      name: projectNN.name,
-      rate: projectNN.rate != null ? String(projectNN.rate) : '',
-      budget: projectNN.budget != null ? String(projectNN.budget) : '',
-      clientId: projectNN.clientId ?? '',
-      status: projectNN.status ?? 'planning',
-      billingModel: projectNN.billingModel ?? 'hourly',
-      startDate: projectNN.startDate ?? '',
-      endDate: projectNN.endDate ?? '',
-      notes: projectNN.notes ?? '',
-      description: projectNN.description ?? '',
-      projectNeeds: projectNN.projectNeeds ?? '',
-      links: projectNN.links ?? [],
-      employeeIds: projectNN.employeeIds ?? [],
-    })
-    setEmpSearch('')
-    setEmpDropOpen(false)
-    setSaveError(null)
     setEditing(false)
   }
 
   async function handleDelete() {
-    const next = projects.filter(p => p.id !== projectNN.id)
+    const next = projects.filter(item => item.id !== project.id)
     const previous = projects
-    setProjectsState(next)
+    setProjects(next)
     setSaveError(null)
     try {
       await saveProjects(next)
       navigate('/projects')
     } catch (error) {
-      console.error('Project delete failed', error)
-      setProjectsState(previous)
+      setProjects(previous)
       setSaveError(error instanceof Error ? error.message : 'Project could not be deleted.')
     }
   }
 
   function addLink() {
     if (!newLinkLabel.trim() || !newLinkUrl.trim()) return
-    setForm(f => ({ ...f, links: [...f.links, { label: newLinkLabel.trim(), url: newLinkUrl.trim() }] }))
-    setNewLinkLabel(''); setNewLinkUrl('')
-  }
-  function removeLink(i: number) {
-    setForm(f => ({ ...f, links: f.links.filter((_, idx) => idx !== i) }))
+    setForm(prev => ({ ...prev, links: [...prev.links, { label: newLinkLabel.trim(), url: newLinkUrl.trim() }] }))
+    setNewLinkLabel('')
+    setNewLinkUrl('')
   }
 
-  function addEmployee(empId: string) {
-    setForm(f => f.employeeIds.includes(empId) ? f : { ...f, employeeIds: [...f.employeeIds, empId] })
-    setEmpSearch('')
-    setEmpDropOpen(false)
-  }
-  function removeEmployee(empId: string) {
-    setForm(f => ({ ...f, employeeIds: f.employeeIds.filter(id => id !== empId) }))
+  function removeLink(index: number) {
+    setForm(prev => ({ ...prev, links: prev.links.filter((_, idx) => idx !== index) }))
   }
 
-  // Tasks
-  function persistTasks(next: Task[]) {
-    setTasks(next)
-    loadTasks().then(all => {
-      void saveTasks([...all.filter(t => t.projectId !== id), ...next])
-    })
+  function addEmployee(employeeId: string) {
+    setForm(prev => prev.employeeIds.includes(employeeId) ? prev : { ...prev, employeeIds: [...prev.employeeIds, employeeId] })
   }
-  function addTask(status: TaskStatus) {
+
+  function removeEmployee(employeeId: string) {
+    setForm(prev => ({ ...prev, employeeIds: prev.employeeIds.filter(id => id !== employeeId) }))
+  }
+
+  async function persistTasks(next: Task[]) {
+    setAllTasks(next)
+    await saveTasksToStorage(next)
+  }
+
+  async function addTask() {
     if (!taskForm.title.trim()) return
-    const t: Task = {
-      id: uid(), projectId: projectNN.id, title: taskForm.title.trim(),
+    const nextTask: Task = {
+      id: uid(),
+      projectId: project.id,
+      title: taskForm.title.trim(),
       assigneeName: taskForm.assigneeName || undefined,
       dueDate: taskForm.dueDate || undefined,
-      status, createdAt: Date.now(),
+      status: 'todo',
+      createdAt: Date.now(),
     }
-    persistTasks([...tasks, t])
+    await persistTasks([...allTasks, nextTask])
     setTaskForm({ title: '', assigneeName: '', dueDate: '' })
-    setTaskAddCol(null)
   }
-  function moveTask(taskId: string, status: TaskStatus) {
-    persistTasks(tasks.map(t => t.id === taskId ? { ...t, status } : t))
-  }
-  function deleteTask(taskId: string) { persistTasks(tasks.filter(t => t.id !== taskId)) }
-  function colTasks(status: TaskStatus) { return tasks.filter(t => t.status === status) }
 
-  // Expenses
-  function addExpense() {
+  async function moveTask(taskId: string, status: TaskStatus) {
+    await persistTasks(allTasks.map(task => task.id === taskId ? { ...task, status } : task))
+  }
+
+  async function deleteTask(taskId: string) {
+    await persistTasks(allTasks.filter(task => task.id !== taskId))
+  }
+
+  async function addExpense() {
     if (!expForm.description.trim() || !expForm.amount) return
     const entry: Expense = {
-      id: uid(), projectId: projectNN.id,
+      id: uid(),
+      projectId: project.id,
       description: expForm.description.trim(),
-      amount: parseFloat(expForm.amount) || 0,
+      amount: Number(expForm.amount) || 0,
       date: expForm.date,
       category: expForm.category || undefined,
       createdAt: Date.now(),
     }
-    loadExpenses().then(all => { void saveExpenses([entry, ...all]) })
-    setExpenses([entry, ...expenses])
-    setExpForm({ description: '', amount: '', date: new Date().toISOString().slice(0,10), category: '' })
+    const next = [entry, ...allExpenses]
+    setAllExpenses(next)
+    await saveExpenses(next)
+    setExpForm({ description: '', amount: '', date: new Date().toISOString().slice(0, 10), category: '' })
   }
-  function deleteExpense(expId: string) {
-    loadExpenses().then(all => { void saveExpenses(all.filter(e => e.id !== expId)) })
-    setExpenses(expenses.filter(e => e.id !== expId))
+
+  async function deleteExpense(expenseId: string) {
+    const next = allExpenses.filter(expense => expense.id !== expenseId)
+    setAllExpenses(next)
+    await saveExpenses(next)
   }
+
+  const filteredSearchEmployees = employees.filter(employee => {
+    const query = empSearch.trim().toLowerCase()
+    if (!query) return true
+    return `${employee.name} ${employee.role || ''} ${employee.email || ''}`.toLowerCase().includes(query)
+  })
+  const totalHoursLifetime = projectInvoices.reduce((sum, invoice) => sum + invoiceHours(invoice, project.rate), 0)
 
   return (
-    <div className="page-wrap" style={{ maxWidth: 1100 }}>
-      <button className="btn-ghost btn-sm" style={{ marginBottom: 16 }} onClick={() => navigate('/projects')}>
-        ← Back to Projects
-      </button>
-
-      {/* Header */}
-      <div className="profile-header">
-        <div className="profile-header-left">
-          <div className="avatar profile-avatar" style={{ background: '#3b82f6', fontSize: 20, fontWeight: 800 }}>
-            {projectNN.name.split(' ').map((w: string) => w[0]).slice(0, 2).join('').toUpperCase()}
+    <div className="proto-page project-profile-page">
+      <div className="project-detail-head">
+        <div style={{ minWidth: 0 }}>
+          <button type="button" className="proto-back-link" onClick={() => navigate('/projects')} style={{ marginBottom: 12 }}>
+            <ProtoIcon name="chevronL" size={12} />
+            All projects
+          </button>
+          <div className="project-detail-title-row">
+            <span className="project-prefix-chip">{projectPrefix(project)}</span>
+            {editing ? (
+              <input className="proto-input" value={form.name} onChange={e => setForm(prev => ({ ...prev, name: e.target.value }))} style={{ maxWidth: 360 }} />
+            ) : (
+              <div className="project-detail-title">{project.name}</div>
+            )}
+            <StatusChip status={project.status} filled />
           </div>
-          <div>
-            {editing
-              ? <input className="form-input profile-name-input" value={form.name} onChange={e => setForm(f => ({...f, name: e.target.value}))} />
-              : <h1 className="profile-name">{projectNN.name}</h1>
-            }
-            <div className="profile-sub">
-              {clientName && <span style={{ color: 'var(--muted)' }}>Client: {clientName}</span>}
-            </div>
+          <div className="project-detail-sub">
+            {projectClientName(project, clients) || 'No client assigned'} · {project.billingModel || 'hourly'} · {projectTasks.length} tasks · {assignedEmployees.length} people
           </div>
         </div>
-        <div className="profile-header-actions">
-          {editing ? (
-            <>
-              <button className="btn-primary btn-sm" onClick={handleSave} disabled={!form.name.trim() || saving}>
-                {saving ? 'Saving...' : 'Save Changes'}
-              </button>
-              <button className="btn-ghost btn-sm" onClick={handleCancel}>Cancel</button>
-            </>
-          ) : (
-            <>
-              <span className={`badge ${stageBadge(projectNN.status)}`} style={{ fontSize: 13 }}>{projectNN.status || 'Planning'}</span>
-              <button className="btn-ghost btn-sm" onClick={beginEditing}>Edit Project</button>
-              <button className="btn-danger btn-sm" onClick={() => setConfirmDelete(true)}>Delete</button>
-            </>
-          )}
-        </div>
-      </div>
-      {saveError && (
-        <div className="settings-notice settings-notice-error" style={{ marginBottom: 16 }}>
-          {saveError}
-        </div>
-      )}
-
-      {/* KPIs */}
-      {!editing && (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 10, marginBottom: 20 }}>
-          {[
-            { label: 'Total Billed', value: formatMoney(totalBilled), color: 'var(--gold)' },
-            { label: 'Budget', value: projectNN.budget ? formatMoney(projectNN.budget) : '—', color: 'var(--text)' },
-            { label: 'Expenses', value: totalExpenses > 0 ? formatMoney(totalExpenses) : '$0', color: '#f87171' },
-            { label: 'Team Size', value: String(assignedEmps.length), color: '#c084fc' },
-          ].map(({ label, value, color }) => (
-            <div key={label} className="settings-stat-card">
-              <div className="settings-stat-count" style={{ color, fontSize: 18 }}>{value}</div>
-              <div className="settings-stat-label">{label}</div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      <div style={{ display: 'grid', gridTemplateColumns: '340px 1fr', gap: 16, alignItems: 'start' }}>
-        {/* Left - details */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-          <div className="data-card">
-            <div className="data-card-title">Project Details</div>
-            <div className="profile-fields">
+        <div className="project-detail-actions">
               {editing ? (
                 <>
-                  <div className="profile-field">
-                    <span className="profile-field-label">Client</span>
-                    <select className="form-select form-input-sm" value={form.clientId} onChange={e => setForm(f => ({...f, clientId: e.target.value}))}>
-                      <option value="">— No client —</option>
-                      {clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                    </select>
-                  </div>
-                  <div className="profile-field">
-                    <span className="profile-field-label">Status</span>
-                    <select className="form-select form-input-sm" value={form.status} onChange={e => setForm(f => ({...f, status: e.target.value}))}>
-                      {STAGES.map(s => <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>)}
-                    </select>
-                  </div>
-                  <div className="profile-field">
-                    <span className="profile-field-label">Billing Model</span>
-                    <select className="form-select form-input-sm" value={form.billingModel} onChange={e => setForm(f => ({...f, billingModel: e.target.value}))}>
-                      {BILLING_MODELS.map(m => <option key={m}>{m}</option>)}
-                    </select>
-                  </div>
-                  <div className="profile-field">
-                    <span className="profile-field-label">Rate ($/hr)</span>
-                    <input className="form-input form-input-sm" type="number" value={form.rate} onChange={e => setForm(f => ({...f, rate: e.target.value}))} placeholder="8.50" />
-                  </div>
-                  <div className="profile-field">
-                    <span className="profile-field-label">Budget ($)</span>
-                    <input className="form-input form-input-sm" type="number" value={form.budget} onChange={e => setForm(f => ({...f, budget: e.target.value}))} placeholder="5000" />
-                  </div>
-                  <div className="profile-field">
-                    <span className="profile-field-label">Start Date</span>
-                    <input className="form-input form-input-sm" type="date" value={form.startDate} onChange={e => setForm(f => ({...f, startDate: e.target.value}))} />
-                  </div>
-                  <div className="profile-field">
-                    <span className="profile-field-label">End Date</span>
-                    <input className="form-input form-input-sm" type="date" value={form.endDate} onChange={e => setForm(f => ({...f, endDate: e.target.value}))} />
-                  </div>
-                  <div className="profile-field profile-field-tall">
-                    <span className="profile-field-label">Description</span>
-                    <textarea className="form-textarea" rows={3} value={form.description} onChange={e => setForm(f => ({...f, description: e.target.value}))} placeholder="Overview of the project..." />
-                  </div>
-                  <div className="profile-field profile-field-tall">
-                    <span className="profile-field-label">Project Needs</span>
-                    <textarea className="form-textarea" rows={3} value={form.projectNeeds} onChange={e => setForm(f => ({...f, projectNeeds: e.target.value}))} placeholder="Skills, roles, or requirements needed..." />
-                  </div>
-                  <div className="profile-field profile-field-tall">
-                    <span className="profile-field-label">Notes</span>
-                    <textarea className="form-textarea" rows={3} value={form.notes} onChange={e => setForm(f => ({...f, notes: e.target.value}))} />
-                  </div>
-                  {/* Links */}
-                  <div className="profile-field profile-field-tall">
-                    <span className="profile-field-label">Links</span>
-                    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 6 }}>
-                      {form.links.map((lk, i) => (
-                        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                          <a href={lk.url} target="_blank" rel="noopener noreferrer" style={{ flex: 1, fontSize: 12, color: 'var(--gold)' }}>{lk.label}</a>
-                          <button className="btn-icon btn-danger" style={{ padding: '2px 6px', fontSize: 11 }} onClick={() => removeLink(i)}>×</button>
-                        </div>
-                      ))}
-                      <div style={{ display: 'flex', gap: 6 }}>
-                        <input className="form-input form-input-sm" value={newLinkLabel} onChange={e => setNewLinkLabel(e.target.value)} placeholder="Label" style={{ flex: 1 }} />
-                        <input className="form-input form-input-sm" value={newLinkUrl} onChange={e => setNewLinkUrl(e.target.value)} placeholder="https://..." style={{ flex: 2 }} />
-                        <button className="btn-ghost btn-sm" onClick={addLink} disabled={!newLinkLabel.trim() || !newLinkUrl.trim()}>+</button>
-                      </div>
-                    </div>
-                  </div>
-                  {/* Team assignment */}
-                  <div className="profile-field profile-field-tall">
-                    <span className="profile-field-label">Team</span>
-                    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 8 }}>
-                      {form.employeeIds.length > 0 && (
-                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-                          {form.employeeIds.map(eid => {
-                            const emp = employees.find(e => e.id === eid)
-                            return emp ? (
-                              <span key={eid} style={{
-                                display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12,
-                                background: 'rgba(245,181,51,.15)', border: '1px solid var(--gold)',
-                                borderRadius: 6, padding: '3px 8px', color: 'var(--soft)',
-                              }}>
-                                {emp.name}
-                                <button
-                                  type="button"
-                                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted)', padding: 0, fontSize: 13, lineHeight: 1 }}
-                                  onClick={() => removeEmployee(eid)}
-                                >×</button>
-                              </span>
-                            ) : null
-                          })}
-                        </div>
-                      )}
-                      <div style={{ position: 'relative' }}>
-                        <input
-                          className="form-input form-input-sm"
-                          placeholder="Search and add team member..."
-                          value={empSearch}
-                          onChange={e => { setEmpSearch(e.target.value); setEmpDropOpen(true) }}
-                          onFocus={() => setEmpDropOpen(true)}
-                          onBlur={() => setTimeout(() => setEmpDropOpen(false), 150)}
-                          autoComplete="off"
-                        />
-                        {empDropOpen && (
-                          <div style={{
-                            position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50,
-                            background: 'var(--surface)', border: '1px solid var(--border)',
-                            borderRadius: 8, boxShadow: '0 8px 24px rgba(0,0,0,.4)', maxHeight: 220, overflowY: 'auto',
-                          }}>
-                            {employees
-                              .filter(e => {
-                                const q = empSearch.trim().toLowerCase()
-                                const haystack = `${e.name} ${e.role || ''} ${e.email || ''}`.toLowerCase()
-                                return !form.employeeIds.includes(e.id) && (!q || haystack.includes(q))
-                              })
-                              .slice(0, 10)
-                              .map(emp => (
-                                <div
-                                  key={emp.id}
-                                  onMouseDown={() => addEmployee(emp.id)}
-                                  style={{
-                                    padding: '9px 14px', cursor: 'pointer', fontSize: 13,
-                                    borderBottom: '1px solid var(--border)',
-                                    display: 'flex', alignItems: 'center', gap: 8,
-                                  }}
-                                  onMouseEnter={e => (e.currentTarget.style.background = 'var(--surf2)')}
-                                  onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
-                                >
-                                  <span style={{ fontWeight: 600 }}>{emp.name}</span>
-                                  {emp.role && <span style={{ color: 'var(--muted)', fontSize: 11 }}>{emp.role}</span>}
-                                </div>
-                              ))}
-                            {employees.filter(e => {
-                              const q = empSearch.trim().toLowerCase()
-                              const haystack = `${e.name} ${e.role || ''} ${e.email || ''}`.toLowerCase()
-                              return !form.employeeIds.includes(e.id) && (!q || haystack.includes(q))
-                            }).length === 0 && (
-                              <div style={{ padding: '10px 14px', color: 'var(--muted)', fontSize: 12 }}>No matches</div>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </div>
+                  <button type="button" className="proto-btn proto-btn-primary" onClick={() => void handleSave()} disabled={!form.name.trim() || saving}>
+                    {saving ? 'Saving...' : 'Save Changes'}
+                  </button>
+                  <button type="button" className="proto-btn proto-btn-ghost" onClick={cancelEditing}>Cancel</button>
                 </>
               ) : (
                 <>
-                  {[
-                    { label: 'Client',         value: clientName },
-                    { label: 'Status',         value: projectNN.status || 'Planning' },
-                    { label: 'Billing Model',  value: projectNN.billingModel || 'hourly' },
-                    { label: 'Rate',           value: projectNN.rate ? `$${projectNN.rate}/hr` : undefined },
-                    { label: 'Budget',         value: projectNN.budget ? formatMoney(projectNN.budget) : undefined },
-                    { label: 'Start Date',     value: projectNN.startDate },
-                    { label: 'End Date',       value: projectNN.endDate },
-                  ].map(({ label, value }) => value ? (
-                    <div key={label} className="profile-field">
-                      <span className="profile-field-label">{label}</span>
-                      <span className="profile-field-value">{value}</span>
-                    </div>
-                  ) : null)}
-                  {projectNN.description && (
-                    <div className="profile-field profile-field-tall">
-                      <span className="profile-field-label">Description</span>
-                      <span className="profile-field-value" style={{ whiteSpace: 'pre-wrap' }}>{projectNN.description}</span>
-                    </div>
-                  )}
-                  {projectNN.projectNeeds && (
-                    <div className="profile-field profile-field-tall">
-                      <span className="profile-field-label">Project Needs</span>
-                      <span className="profile-field-value" style={{ whiteSpace: 'pre-wrap' }}>{projectNN.projectNeeds}</span>
-                    </div>
-                  )}
-                  {projectNN.notes && (
-                    <div className="profile-field profile-field-tall">
-                      <span className="profile-field-label">Notes</span>
-                      <span className="profile-field-value" style={{ whiteSpace: 'pre-wrap' }}>{projectNN.notes}</span>
-                    </div>
-                  )}
-                  {(projectNN.links ?? []).length > 0 && (
-                    <div className="profile-field profile-field-tall">
-                      <span className="profile-field-label">Links</span>
-                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                        {(projectNN.links ?? []).map((lk, i) => (
-                          <a key={i} href={lk.url} target="_blank" rel="noopener noreferrer" className="card-link-pill">{lk.label}</a>
-                        ))}
-                      </div>
-                    </div>
-                  )}
+                  <button type="button" className="proto-btn proto-btn-ghost" onClick={beginEditing}>
+                    <ProtoIcon name="edit" size={12} />
+                    Edit Project
+                  </button>
+                  <button type="button" className="proto-btn proto-btn-danger" onClick={() => setConfirmDelete(true)}>
+                    <ProtoIcon name="trash" size={12} />
+                    Delete
+                  </button>
                 </>
+              )}
+        </div>
+        {saveError ? <div className="settings-notice settings-notice-error">{saveError}</div> : null}
+      </div>
+
+      <div className="proto-page-body">
+        <div className="project-detail-metrics" style={{ marginBottom: 16 }}>
+          {[
+            { label: 'Hourly Rate', value: project.rate != null ? `${protoCurrency(Number(project.rate))}/hr` : '—', color: 'var(--accent)' },
+            { label: 'Hours · MTD', value: `${Math.round(stats.hoursMtd).toLocaleString()}h`, sub: `${assignedEmployees.length} people`, color: '#60a5fa' },
+            { label: 'Billed · lifetime', value: formatMoney(stats.billedLifetime), sub: `${Math.round(totalHoursLifetime).toLocaleString()}h total`, color: '#10b981' },
+          ].map(card => (
+            <div key={card.label} className="project-detail-metric">
+              <div className="proto-kpi-accent" style={{ background: card.color }} />
+              <div className="proto-kpi-label">{card.label}</div>
+              <div className="proto-kpi-value">{card.value}</div>
+              {'sub' in card ? <div className="project-detail-metric-sub">{card.sub}</div> : null}
+            </div>
+          ))}
+        </div>
+
+        <div className="proto-two-col">
+          <div className="proto-sidebar-stack">
+            <div className="proto-list-card">
+              <div className="proto-list-card-head">
+                <span>Project Details</span>
+              </div>
+              <div className="proto-profile-row">
+                <label className="proto-profile-label">Client</label>
+                {editing ? (
+                  <select className="proto-input" value={form.clientId} onChange={e => setForm(prev => ({ ...prev, clientId: e.target.value }))}>
+                    <option value="">No client</option>
+                    {clients.map(client => <option key={client.id} value={client.id}>{client.company || client.name}</option>)}
+                  </select>
+                ) : (
+                  <span className="proto-profile-value">{projectClientName(project, clients) || '—'}</span>
+                )}
+              </div>
+              <div className="proto-profile-row">
+                <label className="proto-profile-label">Status</label>
+                {editing ? (
+                  <select className="proto-input" value={form.status} onChange={e => setForm(prev => ({ ...prev, status: e.target.value as (typeof STAGES)[number] }))}>
+                    {STAGES.map(stage => <option key={stage} value={stage}>{stage}</option>)}
+                  </select>
+                ) : (
+                  <span className="proto-profile-value"><StatusChip status={project.status} /></span>
+                )}
+              </div>
+              <div className="proto-profile-row">
+                <label className="proto-profile-label">Billing model</label>
+                {editing ? (
+                  <select className="proto-input" value={form.billingModel} onChange={e => setForm(prev => ({ ...prev, billingModel: e.target.value }))}>
+                    <option value="hourly">Hourly</option>
+                    <option value="fixed">Fixed</option>
+                    <option value="retainer">Retainer</option>
+                  </select>
+                ) : (
+                  <span className="proto-profile-value">{project.billingModel || 'hourly'}</span>
+                )}
+              </div>
+              <div className="proto-profile-row">
+                <label className="proto-profile-label">Rate</label>
+                {editing ? (
+                  <input className="proto-input" type="number" value={form.rate} onChange={e => setForm(prev => ({ ...prev, rate: e.target.value }))} />
+                ) : (
+                  <span className="proto-profile-value">{project.rate != null ? `${protoCurrency(Number(project.rate))}/hr` : '—'}</span>
+                )}
+              </div>
+              <div className="proto-profile-row">
+                <label className="proto-profile-label">Budget</label>
+                {editing ? (
+                  <input className="proto-input" type="number" value={form.budget} onChange={e => setForm(prev => ({ ...prev, budget: e.target.value }))} />
+                ) : (
+                  <span className="proto-profile-value">{project.budget != null ? formatMoney(project.budget) : '—'}</span>
+                )}
+              </div>
+              <div className="proto-profile-row">
+                <label className="proto-profile-label">Start date</label>
+                {editing ? (
+                  <input className="proto-input" type="date" value={form.startDate} onChange={e => setForm(prev => ({ ...prev, startDate: e.target.value }))} />
+                ) : (
+                  <span className="proto-profile-value">{protoDate(project.startDate)}</span>
+                )}
+              </div>
+              <div className="proto-profile-row">
+                <label className="proto-profile-label">End date</label>
+                {editing ? (
+                  <input className="proto-input" type="date" value={form.endDate} onChange={e => setForm(prev => ({ ...prev, endDate: e.target.value }))} />
+                ) : (
+                  <span className="proto-profile-value">{protoDate(project.endDate)}</span>
+                )}
+              </div>
+              <div className="proto-profile-row" style={{ alignItems: 'flex-start' }}>
+                <label className="proto-profile-label">Description</label>
+                {editing ? (
+                  <textarea className="proto-input" rows={3} value={form.description} onChange={e => setForm(prev => ({ ...prev, description: e.target.value }))} />
+                ) : (
+                  <span className="proto-profile-value" style={{ whiteSpace: 'pre-wrap' }}>{project.description || '—'}</span>
+                )}
+              </div>
+              <div className="proto-profile-row" style={{ alignItems: 'flex-start' }}>
+                <label className="proto-profile-label">Project needs</label>
+                {editing ? (
+                  <textarea className="proto-input" rows={3} value={form.projectNeeds} onChange={e => setForm(prev => ({ ...prev, projectNeeds: e.target.value }))} />
+                ) : (
+                  <span className="proto-profile-value" style={{ whiteSpace: 'pre-wrap' }}>{project.projectNeeds || '—'}</span>
+                )}
+              </div>
+              <div className="proto-profile-row" style={{ alignItems: 'flex-start' }}>
+                <label className="proto-profile-label">Notes</label>
+                {editing ? (
+                  <textarea className="proto-input" rows={3} value={form.notes} onChange={e => setForm(prev => ({ ...prev, notes: e.target.value }))} />
+                ) : (
+                  <span className="proto-profile-value" style={{ whiteSpace: 'pre-wrap' }}>{project.notes || '—'}</span>
+                )}
+              </div>
+              <div className="proto-profile-row" style={{ alignItems: 'flex-start' }}>
+                <label className="proto-profile-label">Links</label>
+                {editing ? (
+                  <div style={{ display: 'grid', gap: 8, width: '100%' }}>
+                    {form.links.map((link, index) => (
+                      <div key={`${link.label}-${index}`} className="proto-list-row">
+                        <a href={link.url} target="_blank" rel="noreferrer" style={{ color: 'var(--accent)' }}>{link.label}</a>
+                        <button type="button" className="proto-btn proto-btn-ghost proto-btn-icon" onClick={() => removeLink(index)}>
+                          <ProtoIcon name="close" size={10} />
+                        </button>
+                      </div>
+                    ))}
+                    <div style={{ display: 'grid', gap: 8 }}>
+                      <input className="proto-input" value={newLinkLabel} onChange={e => setNewLinkLabel(e.target.value)} placeholder="Label" />
+                      <input className="proto-input" value={newLinkUrl} onChange={e => setNewLinkUrl(e.target.value)} placeholder="https://..." />
+                      <button type="button" className="proto-btn proto-btn-ghost" onClick={addLink} disabled={!newLinkLabel.trim() || !newLinkUrl.trim()}>Add link</button>
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                    {(project.links || []).length === 0 ? <span className="proto-profile-value">—</span> : (project.links || []).map(link => <a key={link.label} href={link.url} target="_blank" rel="noreferrer" className="proto-tag">{link.label}</a>)}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="proto-list-card">
+              <div className="proto-list-card-head">
+                <span>Team</span>
+              </div>
+              {editing ? (
+                <>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 10 }}>
+                    {form.employeeIds.length === 0 ? <span style={{ fontSize: 12, color: 'var(--muted)' }}>No team assigned.</span> : form.employeeIds.map(employeeId => {
+                      const employee = employees.find(item => item.id === employeeId)
+                      return employee ? (
+                        <span key={employee.id} className="proto-tag">
+                          {employee.name}
+                          <button type="button" className="proto-btn proto-btn-ghost proto-btn-icon" style={{ width: 18, height: 18, minWidth: 18 }} onClick={() => removeEmployee(employeeId)}>
+                            <ProtoIcon name="close" size={10} />
+                          </button>
+                        </span>
+                      ) : null
+                    })}
+                  </div>
+                  <SearchField value={empSearch} onChange={setEmpSearch} placeholder="Search team member..." minWidth={0} />
+                  <div style={{ display: 'grid', gap: 6, marginTop: 10, maxHeight: 220, overflow: 'auto' }}>
+                    {filteredSearchEmployees
+                      .filter(employee => !form.employeeIds.includes(employee.id))
+                      .slice(0, 8)
+                      .map(employee => (
+                        <button
+                          key={employee.id}
+                          type="button"
+                          className="proto-plain-button"
+                          style={{ justifyContent: 'space-between' }}
+                          onClick={() => addEmployee(employee.id)}
+                        >
+                          <span>{employee.name}</span>
+                          <span style={{ color: 'var(--muted)', fontSize: 11 }}>{employee.role || 'Team'}</span>
+                        </button>
+                      ))}
+                  </div>
+                </>
+              ) : (
+                <div style={{ display: 'grid', gap: 8 }}>
+                  {assignedEmployees.length === 0 ? (
+                    <div className="proto-empty">No team assigned yet</div>
+                  ) : assignedEmployees.map(employee => (
+                    <button key={employee.id} type="button" className="proto-list-row" onClick={() => navigate('/employees/' + employee.id)}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                        <Avatar name={employee.name} color={colorFromString(employee.name)} size="sm" />
+                        <div>
+                          <div style={{ fontSize: 12.5, fontWeight: 700 }}>{employee.name}</div>
+                          <div style={{ fontSize: 11, color: 'var(--muted)' }}>{employee.role || 'Team member'}{employee.payRate ? ` · ${protoCurrency(Number(employee.payRate))}/hr` : ''}</div>
+                        </div>
+                      </div>
+                      <span className="proto-mono" style={{ fontSize: 10, color: 'var(--muted)' }}>{employee.status || 'Active'}</span>
+                    </button>
+                  ))}
+                </div>
               )}
             </div>
           </div>
 
-          {/* Team */}
-          {assignedEmps.length > 0 && !editing && (
-            <div className="data-card">
-              <div className="data-card-title">Team</div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, paddingTop: 4 }}>
-                {assignedEmps.map(e => (
-                  <button key={e.id} className="btn-ghost btn-sm" style={{ justifyContent: 'flex-start', fontSize: 13 }}
-                    onClick={() => navigate('/employees/' + e.id)}>
-                    {e.name}
-                    {e.role && <span style={{ marginLeft: 6, color: 'var(--muted)', fontSize: 11 }}>{e.role}</span>}
-                  </button>
+          <div className="proto-sidebar-stack">
+            <div className="proto-list-card">
+              <div className="proto-list-card-head">
+                <span>Tasks</span>
+                <span className="proto-mono" style={{ fontSize: 10, color: 'var(--muted)' }}>{projectTasks.length}</span>
+              </div>
+              <div style={{ display: 'grid', gap: 8 }}>
+                {editing ? (
+                  <div style={{ display: 'grid', gap: 8, marginBottom: 10 }}>
+                    <input className="proto-input" value={taskForm.title} onChange={e => setTaskForm(prev => ({ ...prev, title: e.target.value }))} placeholder="Task title" />
+                    <input className="proto-input" value={taskForm.assigneeName} onChange={e => setTaskForm(prev => ({ ...prev, assigneeName: e.target.value }))} placeholder="Assignee" />
+                    <input className="proto-input" type="date" value={taskForm.dueDate} onChange={e => setTaskForm(prev => ({ ...prev, dueDate: e.target.value }))} />
+                    <button type="button" className="proto-btn proto-btn-ghost" onClick={() => void addTask()} disabled={!taskForm.title.trim()}>
+                      <ProtoIcon name="plus" size={12} />
+                      Add task
+                    </button>
+                  </div>
+                ) : null}
+                {projectTasks.length === 0 ? (
+                  <div className="proto-empty">No tasks yet</div>
+                ) : projectTasks.map(task => (
+                  <div key={task.id} className="proto-list-row" style={{ alignItems: 'flex-start' }}>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontSize: 12.5, fontWeight: 700 }}>{task.title}</div>
+                      <div style={{ fontSize: 11, color: 'var(--muted)' }}>
+                        {task.assigneeName || 'Unassigned'}
+                        {task.dueDate ? ` · Due ${task.dueDate}` : ''}
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                      <StatusChip status={task.status} />
+                      {editing ? (
+                        <button type="button" className="proto-btn proto-btn-ghost proto-btn-icon" onClick={() => void deleteTask(task.id)}>
+                          <ProtoIcon name="close" size={10} />
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
                 ))}
               </div>
             </div>
-          )}
 
-          {/* Invoice history */}
-          {projectInvoices.length > 0 && (
-            <div className="data-card">
-              <div className="data-card-title">Invoices</div>
-              <div className="table-wrap">
-                <table className="data-table">
-                  <thead><tr><th>Invoice</th><th>Date</th><th>Status</th><th>Amount</th></tr></thead>
+            <div className="proto-list-card">
+              <div className="proto-list-card-head">
+                <span>Invoices</span>
+                <span className="proto-mono" style={{ fontSize: 10, color: 'var(--muted)' }}>{projectInvoices.length}</span>
+              </div>
+              {projectInvoices.length === 0 ? (
+                <div className="proto-empty">No invoices yet</div>
+              ) : (
+                <table className="proto-table">
+                  <thead>
+                    <tr>
+                      <th>Invoice</th>
+                      <th>Date</th>
+                      <th style={{ textAlign: 'right' }}>Hours</th>
+                      <th style={{ textAlign: 'right' }}>Amount</th>
+                    </tr>
+                  </thead>
                   <tbody>
-                    {projectInvoices.slice(0, 8).map(inv => (
-                      <tr key={inv.id}>
-                        <td className="td-name">{inv.number}</td>
-                        <td className="td-muted">{inv.date || '—'}</td>
-                        <td><span className="badge badge-gray" style={{ fontSize: 11 }}>{inv.status || 'draft'}</span></td>
-                        <td style={{ color: 'var(--gold)', fontWeight: 700 }}>${(Number(inv.subtotal)||0).toFixed(2)}</td>
+                    {projectInvoices.slice(0, 8).map(invoice => (
+                      <tr key={invoice.id}>
+                        <td style={{ color: 'var(--accent)', fontWeight: 700 }}>{invoice.number}</td>
+                        <td style={{ color: 'var(--muted)' }}>{protoDateShort(invoice.date)}</td>
+                        <td style={{ textAlign: 'right' }}>{Math.round(invoiceHours(invoice, project.rate)).toLocaleString()}h</td>
+                        <td style={{ textAlign: 'right', color: 'var(--text)', fontWeight: 700 }}>{formatMoney(Number(invoice.subtotal || 0))}</td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
-              </div>
+              )}
             </div>
-          )}
-        </div>
 
-        {/* Right - Tasks + Expenses */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-          {/* Task Board */}
-          <div className="data-card">
-            <div className="data-card-title">Task Board ({tasks.length})</div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 10 }}>
-              {TASK_COLS.map(({ key, label }) => (
-                <div key={key} style={{ background: 'var(--surf3)', borderRadius: 8, padding: 10 }}>
-                  <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.07em', color: 'var(--muted)', marginBottom: 8 }}>
-                    {label} <span style={{ color: 'var(--gold)' }}>({colTasks(key).length})</span>
-                  </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6, minHeight: 40 }}
-                    onDragOver={e => e.preventDefault()}
-                    onDrop={() => { if (taskDragId.current) { moveTask(taskDragId.current, key); taskDragId.current = null } }}>
-                    {colTasks(key).map(t => (
-                      <div key={t.id} draggable
-                        onDragStart={() => { taskDragId.current = t.id }}
-                        style={{ background: 'var(--surf2)', borderRadius: 6, padding: '8px 10px', border: '1px solid var(--border)', cursor: 'grab' }}>
-                        <div style={{ fontSize: 13, fontWeight: 600 }}>{t.title}</div>
-                        {t.assigneeName && <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2 }}>{t.assigneeName}</div>}
-                        {t.dueDate && <div style={{ fontSize: 11, color: '#f5b533', marginTop: 2 }}>Due: {t.dueDate}</div>}
-                        <button className="btn-icon btn-danger" style={{ fontSize: 10, padding: '1px 5px', marginTop: 4, opacity: .6 }} onClick={() => deleteTask(t.id)}>×</button>
-                      </div>
-                    ))}
-                  </div>
-                  {taskAddCol === key ? (
-                    <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 4 }}>
-                      <input className="form-input form-input-sm" placeholder="Task title" value={taskForm.title}
-                        onChange={e => setTaskForm(f => ({...f, title: e.target.value}))}
-                        onKeyDown={e => { if (e.key === 'Enter') addTask(key) }}
-                        autoFocus />
-                      <input className="form-input form-input-sm" placeholder="Assignee" value={taskForm.assigneeName}
-                        onChange={e => setTaskForm(f => ({...f, assigneeName: e.target.value}))} />
-                      <input className="form-input form-input-sm" type="date" value={taskForm.dueDate}
-                        onChange={e => setTaskForm(f => ({...f, dueDate: e.target.value}))} />
-                      <div style={{ display: 'flex', gap: 6 }}>
-                        <button className="btn-primary btn-sm" onClick={() => addTask(key)} disabled={!taskForm.title.trim()}>Add</button>
-                        <button className="btn-ghost btn-sm" onClick={() => setTaskAddCol(null)}>Cancel</button>
-                      </div>
-                    </div>
-                  ) : (
-                    <button className="btn-ghost btn-sm" style={{ width: '100%', marginTop: 6, fontSize: 12 }} onClick={() => { setTaskAddCol(key); setTaskForm({ title: '', assigneeName: '', dueDate: '' }) }}>
-                      + Add task
-                    </button>
-                  )}
+            <div className="proto-list-card">
+              <div className="proto-list-card-head">
+                <span>Expenses</span>
+                <span className="proto-mono" style={{ fontSize: 10, color: 'var(--muted)' }}>{projectExpenses.length}</span>
+              </div>
+              {editing ? (
+                <div style={{ display: 'grid', gap: 8, marginBottom: 10 }}>
+                  <input className="proto-input" value={expForm.description} onChange={e => setExpForm(prev => ({ ...prev, description: e.target.value }))} placeholder="Description" />
+                  <input className="proto-input" type="number" value={expForm.amount} onChange={e => setExpForm(prev => ({ ...prev, amount: e.target.value }))} placeholder="Amount" />
+                  <input className="proto-input" type="date" value={expForm.date} onChange={e => setExpForm(prev => ({ ...prev, date: e.target.value }))} />
+                  <input className="proto-input" value={expForm.category} onChange={e => setExpForm(prev => ({ ...prev, category: e.target.value }))} placeholder="Category" />
+                  <button type="button" className="proto-btn proto-btn-ghost" onClick={() => void addExpense()} disabled={!expForm.description.trim() || !expForm.amount}>
+                    <ProtoIcon name="plus" size={12} />
+                    Add expense
+                  </button>
                 </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Expenses */}
-          <div className="data-card">
-            <div className="data-card-title">Expenses — {formatMoney(totalExpenses)} total</div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr auto auto auto', gap: 8, marginBottom: 12, alignItems: 'center' }}>
-              <input className="form-input form-input-sm" placeholder="Description" value={expForm.description}
-                onChange={e => setExpForm(f => ({...f, description: e.target.value}))} />
-              <input className="form-input form-input-sm" type="number" placeholder="Amount" style={{ width: 90 }}
-                value={expForm.amount} onChange={e => setExpForm(f => ({...f, amount: e.target.value}))} />
-              <select className="form-select form-input-sm" style={{ width: 110 }} value={expForm.category}
-                onChange={e => setExpForm(f => ({...f, category: e.target.value}))}>
-                {EXPENSE_CATS.map(c => <option key={c} value={c}>{c || 'Category'}</option>)}
-              </select>
-              <button className="btn-primary btn-sm" onClick={addExpense} disabled={!expForm.description.trim() || !expForm.amount}>Add</button>
-            </div>
-            {expenses.length === 0 ? (
-              <div style={{ color: 'var(--muted)', fontSize: 13, textAlign: 'center', padding: '12px 0' }}>No expenses yet.</div>
-            ) : (
-              <div className="table-wrap">
-                <table className="data-table">
-                  <thead><tr><th>Description</th><th>Category</th><th>Date</th><th>Amount</th><th></th></tr></thead>
+              ) : null}
+              {projectExpenses.length === 0 ? (
+                <div className="proto-empty">No expenses yet</div>
+              ) : (
+                <table className="proto-table">
+                  <thead>
+                    <tr>
+                      <th>Description</th>
+                      <th>Category</th>
+                      <th>Date</th>
+                      <th style={{ textAlign: 'right' }}>Amount</th>
+                    </tr>
+                  </thead>
                   <tbody>
-                    {expenses.map(exp => (
-                      <tr key={exp.id}>
-                        <td className="td-name">{exp.description}</td>
-                        <td className="td-muted">{exp.category || '—'}</td>
-                        <td className="td-muted">{exp.date}</td>
-                        <td style={{ color: '#f87171', fontWeight: 700 }}>{formatMoney(exp.amount)}</td>
-                        <td><button className="btn-icon btn-danger" style={{ fontSize: 11, padding: '2px 5px' }} onClick={() => deleteExpense(exp.id)}>×</button></td>
+                    {projectExpenses.map(expense => (
+                      <tr key={expense.id}>
+                        <td>{expense.description}</td>
+                        <td style={{ color: 'var(--muted)' }}>{expense.category || '—'}</td>
+                        <td style={{ color: 'var(--muted)' }}>{protoDateShort(expense.date)}</td>
+                        <td style={{ textAlign: 'right', color: '#f87171', fontWeight: 700 }}>
+                          {formatMoney(expense.amount)}
+                          {editing ? (
+                            <button type="button" className="proto-btn proto-btn-ghost proto-btn-icon" style={{ marginLeft: 8 }} onClick={() => void deleteExpense(expense.id)}>
+                              <ProtoIcon name="close" size={10} />
+                            </button>
+                          ) : null}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
-              </div>
-            )}
+              )}
+            </div>
           </div>
         </div>
       </div>
 
-      {confirmDelete && (
-        <div className="modal-overlay" onClick={() => setConfirmDelete(false)}>
-          <div className="confirm-dialog" onClick={e => e.stopPropagation()}>
-            <div className="confirm-title">Delete {projectNN.name}?</div>
-            <div className="confirm-body">This cannot be undone.</div>
-            <div className="confirm-actions">
-              <button className="btn-ghost" onClick={() => setConfirmDelete(false)}>Cancel</button>
-              <button className="btn-danger" onClick={handleDelete}>Delete</button>
-            </div>
-          </div>
-        </div>
-      )}
+      {confirmDelete ? (
+        <Modal
+          open={confirmDelete}
+          onClose={() => setConfirmDelete(false)}
+          title={`Delete ${project.name}?`}
+          subtitle="This cannot be undone."
+          width={420}
+          footer={(
+            <>
+              <button type="button" className="proto-btn proto-btn-ghost" onClick={() => setConfirmDelete(false)}>Cancel</button>
+              <button type="button" className="proto-btn proto-btn-danger" onClick={() => void handleDelete()}>Delete</button>
+            </>
+          )}
+        >
+          <p style={{ fontSize: 13, color: 'var(--muted)', margin: 0 }}>Deleting the project removes it from the board and profile routes.</p>
+        </Modal>
+      ) : null}
     </div>
   )
 }

@@ -76,6 +76,9 @@ export type Expense = {
   date: string
   category?: string
   recurring?: boolean
+  recurrenceSourceId?: string
+  recurrenceAnchorDate?: string
+  recurrenceIntervalMonths?: number
   createdAt: number
 }
 

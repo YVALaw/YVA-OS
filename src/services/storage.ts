@@ -89,6 +89,80 @@ async function insertMany<T extends Record<string, unknown>>(table: string, item
   if (error) throw formatSupabaseError('Insert into', table, error)
 }
 
+function isMissingColumnError(error: { message?: string; details?: string; hint?: string; code?: string }): boolean {
+  const text = [error.message, error.details, error.hint, error.code].filter(Boolean).join(' ').toLowerCase()
+  return text.includes('recurrence_') || text.includes('column') && text.includes('schema cache')
+}
+
+function stripExpenseRecurrenceFields(expense: Expense): Expense {
+  const next = { ...expense }
+  delete next.recurrenceSourceId
+  delete next.recurrenceAnchorDate
+  delete next.recurrenceIntervalMonths
+  return next
+}
+
+function parseLocalDate(value?: string): Date | null {
+  if (!value) return null
+  const parsed = new Date(`${value}T12:00:00`)
+  return Number.isNaN(parsed.getTime()) ? null : parsed
+}
+
+function formatMonthKey(date: Date): string {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
+}
+
+function formatDateKey(date: Date): string {
+  return [
+    date.getFullYear(),
+    String(date.getMonth() + 1).padStart(2, '0'),
+    String(date.getDate()).padStart(2, '0'),
+  ].join('-')
+}
+
+function addMonthsClamped(base: Date, months: number): Date {
+  const next = new Date(base)
+  const day = next.getDate()
+  next.setMonth(next.getMonth() + months, 1)
+  const lastDay = new Date(next.getFullYear(), next.getMonth() + 1, 0).getDate()
+  next.setDate(Math.min(day, lastDay))
+  return next
+}
+
+function materializeRecurringExpenses(expenses: Expense[]): Expense[] {
+  const today = new Date()
+  const existingIds = new Set(expenses.map(expense => expense.id))
+  const generated: Expense[] = []
+
+  for (const template of expenses) {
+    if (!template.recurring || template.recurrenceSourceId) continue
+    const anchor = parseLocalDate(template.recurrenceAnchorDate || template.date)
+    if (!anchor) continue
+
+    const intervalMonths = Math.max(1, Number(template.recurrenceIntervalMonths) || 1)
+    let cursor = new Date(anchor)
+    while (cursor <= today) {
+      const occurrenceId = `${template.id}__${formatMonthKey(cursor)}`
+      if (cursor.getTime() !== anchor.getTime() && !existingIds.has(occurrenceId)) {
+        generated.push({
+          ...template,
+          id: occurrenceId,
+          date: formatDateKey(cursor),
+          recurring: false,
+          recurrenceSourceId: template.id,
+          recurrenceAnchorDate: template.recurrenceAnchorDate || template.date,
+          recurrenceIntervalMonths: intervalMonths,
+          createdAt: Date.now(),
+        })
+        existingIds.add(occurrenceId)
+      }
+      cursor = addMonthsClamped(cursor, intervalMonths)
+    }
+  }
+
+  return expenses.concat(generated)
+}
+
 // ─── Employees ────────────────────────────────────────────────────────────────
 
 export async function loadEmployees(): Promise<Employee[]> {
@@ -279,10 +353,22 @@ export async function loadGeneralExpenses(): Promise<Expense[]> {
   const { data, error } = await supabase
     .from('expenses')
     .select('*')
-    .is('project_id', null)
+    .or('project_id.is.null,project_id.eq.')
     .order('created_at')
   if (error) throw formatSupabaseError('Load from', 'expenses', error)
-  return (data || []).map(row => toCamel<Expense>(row as Record<string, unknown>))
+  const expenses = (data || []).map(row => toCamel<Expense>(row as Record<string, unknown>))
+  const materialized = materializeRecurringExpenses(expenses)
+  const generated = materialized.slice(expenses.length)
+  if (generated.length > 0) {
+    try {
+      await insertMany('expenses', generated as Record<string, unknown>[])
+    } catch (err) {
+      const errorObj = err as { message?: string; details?: string; hint?: string; code?: string }
+      if (!isMissingColumnError(errorObj)) throw err
+      await insertMany('expenses', generated.map(stripExpenseRecurrenceFields) as unknown as Record<string, unknown>[])
+    }
+  }
+  return materialized
 }
 export async function saveGeneralExpenses(expenses: Expense[]): Promise<void> {
   const normalized = expenses.map(expense => ({
@@ -293,7 +379,7 @@ export async function saveGeneralExpenses(expenses: Expense[]): Promise<void> {
   const { data: existing, error: existingError } = await supabase
     .from('expenses')
     .select('id')
-    .is('project_id', null)
+    .or('project_id.is.null,project_id.eq.')
 
   if (existingError) throw formatSupabaseError('Load existing rows from', 'expenses', existingError)
 
@@ -319,7 +405,20 @@ export async function saveGeneralExpenses(expenses: Expense[]): Promise<void> {
   })
 
   const { error } = await supabase.from('expenses').upsert(rows)
-  if (error) throw formatSupabaseError('Save to', 'expenses', error)
+  if (!error) return
+  if (!isMissingColumnError(error)) throw formatSupabaseError('Save to', 'expenses', error)
+
+  const fallbackRows = normalized.map(expense => {
+    const row = toSnake(stripExpenseRecurrenceFields(expense) as unknown as Record<string, unknown>)
+    delete row['created_at']
+    row['project_id'] = null
+    for (const key of Object.keys(row)) {
+      if (row[key] === '') row[key] = null
+    }
+    return row
+  })
+  const { error: fallbackError } = await supabase.from('expenses').upsert(fallbackRows)
+  if (fallbackError) throw formatSupabaseError('Save to', 'expenses', fallbackError)
 }
 
 // ─── Activity Log ─────────────────────────────────────────────────────────────

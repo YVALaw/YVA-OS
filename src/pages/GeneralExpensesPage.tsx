@@ -20,19 +20,33 @@ export default function GeneralExpensesPage() {
   function addExpense() {
     if (!form.description.trim() || !form.amount) return
     const entry: Expense = {
-      id: uid(), projectId: '',
+      id: uid(),
+      projectId: '',
       description: form.description.trim(),
       amount: parseFloat(form.amount) || 0,
       date: form.date,
       category: form.category || undefined,
       recurring: form.recurring || undefined,
+      recurrenceAnchorDate: form.recurring ? form.date : undefined,
+      recurrenceIntervalMonths: form.recurring ? 1 : undefined,
       createdAt: Date.now(),
     }
     persist([entry, ...expenses])
     setForm(f => ({ ...f, description: '', amount: '', recurring: false }))
   }
 
-  function doDelete(id: string) { persist(expenses.filter(e => e.id !== id)); setConfirmDelete(null) }
+  function doDelete(id: string) {
+    const target = expenses.find(expense => expense.id === id)
+    if (!target) {
+      setConfirmDelete(null)
+      return
+    }
+    const next = target.recurring && !target.recurrenceSourceId
+      ? expenses.filter(expense => expense.id !== id && expense.recurrenceSourceId !== id)
+      : expenses.filter(expense => expense.id !== id)
+    persist(next)
+    setConfirmDelete(null)
+  }
 
   const filtered = expenses.filter(e => {
     if (filterMonth && !e.date.startsWith(filterMonth)) return false
@@ -63,179 +77,167 @@ export default function GeneralExpensesPage() {
   const months = Array.from(new Set(expenses.map(e => e.date.slice(0, 7)))).sort((a, b) => b.localeCompare(a))
 
   return (
-    <div className="page-wrap">
-      <div className="page-header">
-        <div className="page-header-left">
-          <h1 className="page-title">General Expenses</h1>
-          <p className="page-sub">Agency operating costs not tied to any project or client</p>
+    <div className="proto-page">
+      <div className="proto-page-head">
+        <div className="proto-page-head-row">
+          <div>
+            <div className="proto-eyebrow" style={{ color: 'var(--gold)', marginBottom: 8 }}>Finance · Expenses</div>
+            <h1 className="page-title">Expenses</h1>
+            <div style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: 6 }}>{filtered.length} entries · {formatMoney(filteredTotal)} visible spend</div>
+          </div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button type="button" className="proto-btn proto-btn-primary" onClick={addExpense} disabled={!form.description.trim() || !form.amount}>ADD EXPENSE</button>
+          </div>
         </div>
       </div>
 
-      {/* Summary cards */}
-      <div className="kpi-grid" style={{ marginBottom: 20 }}>
-        <div className="kpi-card">
-          <div className="kpi-label">All-Time Total</div>
-          <div className="kpi-value" style={{ color: '#f87171' }}>{formatMoney(allTotal)}</div>
-          <div className="kpi-sub">{expenses.length} entries</div>
-        </div>
-        {monthlyArr.slice(0, 1).map(([m, amt]) => (
-          <div key={m} className="kpi-card">
-            <div className="kpi-label">This Month ({m})</div>
-            <div className="kpi-value" style={{ color: '#f87171' }}>{formatMoney(amt)}</div>
-          </div>
-        ))}
-        {catArr.slice(0, 1).map(([c, amt]) => (
-          <div key={c} className="kpi-card">
-            <div className="kpi-label">Top Category</div>
-            <div className="kpi-value" style={{ color: 'var(--gold)', fontSize: 18 }}>{c}</div>
-            <div className="kpi-sub">{formatMoney(amt)}</div>
-          </div>
-        ))}
-      </div>
-
-      {/* Add expense form */}
-      <div className="data-card" style={{ marginBottom: 20 }}>
-        <div className="data-card-title">Add Expense</div>
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'flex-end' }}>
-          <div className="form-group" style={{ flex: 3, minWidth: 180 }}>
-            <label className="form-label">Description *</label>
-            <input className="form-input" value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
-              placeholder="e.g. Zoom subscription, Office supplies..." onKeyDown={e => e.key === 'Enter' && addExpense()} />
-          </div>
-          <div className="form-group" style={{ flex: 1, minWidth: 110 }}>
-            <label className="form-label">Amount ($)</label>
-            <input className="form-input" type="number" step="0.01" value={form.amount} onChange={e => setForm(f => ({ ...f, amount: e.target.value }))} placeholder="0.00" />
-          </div>
-          <div className="form-group" style={{ flex: 1, minWidth: 130 }}>
-            <label className="form-label">Date</label>
-            <input className="form-input" type="date" value={form.date} onChange={e => setForm(f => ({ ...f, date: e.target.value }))} />
-          </div>
-          <div className="form-group" style={{ flex: 1, minWidth: 140 }}>
-            <label className="form-label">Category</label>
-            <select className="form-select" value={form.category} onChange={e => setForm(f => ({ ...f, category: e.target.value }))}>
-              {CATEGORIES.map(c => <option key={c} value={c}>{c || '— None —'}</option>)}
-            </select>
-          </div>
-          <div className="form-group" style={{ alignSelf: 'flex-end', marginBottom: 6 }}>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: 'var(--muted)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
-              <input type="checkbox" checked={form.recurring} onChange={e => setForm(f => ({ ...f, recurring: e.target.checked }))} />
-              Recurring
-            </label>
-          </div>
-          <button className="btn-primary btn-sm" style={{ alignSelf: 'flex-end', marginBottom: 2 }}
-            onClick={addExpense} disabled={!form.description.trim() || !form.amount}>Add</button>
-        </div>
-      </div>
-
-      {/* Filters + table */}
-      <div className="data-card">
-        <div style={{ display: 'flex', gap: 8, marginBottom: 14, flexWrap: 'wrap', alignItems: 'center' }}>
-          <div className="data-card-title" style={{ flex: 1, margin: 0 }}>
-            {filtered.length} expense{filtered.length !== 1 ? 's' : ''} · {formatMoney(filteredTotal)}
-          </div>
-          <select className="form-select" style={{ width: 150, fontSize: 12 }} value={filterMonth} onChange={e => setFilterMonth(e.target.value)}>
-            <option value="">All months</option>
-            {months.map(m => <option key={m} value={m}>{m}</option>)}
-          </select>
-          <select className="form-select" style={{ width: 150, fontSize: 12 }} value={filterCat} onChange={e => setFilterCat(e.target.value)}>
-            <option value="">All categories</option>
-            {CATEGORIES.slice(1).map(c => <option key={c} value={c}>{c}</option>)}
-          </select>
-          {(filterMonth || filterCat) && (
-            <button className="btn-ghost btn-sm" onClick={() => { setFilterMonth(''); setFilterCat('') }}>Clear</button>
-          )}
+      <div className="proto-page-body">
+        <div className="proto-kpi-grid-4" style={{ marginBottom: 14 }}>
+          {[
+            { label: 'All-time total', value: formatMoney(allTotal), sub: `${expenses.length} entries`, color: '#f87171' },
+            { label: 'Filtered total', value: formatMoney(filteredTotal), sub: filterMonth || filterCat ? 'Current filters' : 'All records', color: '#22d3ee' },
+            { label: 'Top category', value: catArr[0]?.[0] || '—', sub: catArr[0] ? formatMoney(catArr[0][1]) : 'No data', color: '#f5b533' },
+            { label: 'Latest month', value: monthlyArr[0]?.[0] || '—', sub: monthlyArr[0] ? formatMoney(monthlyArr[0][1]) : 'No data', color: '#60a5fa' },
+          ].map(metric => (
+            <div key={metric.label} className="proto-kpi">
+              <div className="proto-kpi-accent" style={{ background: metric.color }} />
+              <div className="proto-kpi-label">{metric.label}</div>
+              <div className="proto-kpi-value" style={{ marginTop: 8, fontSize: typeof metric.value === 'string' && metric.value.length > 10 ? 20 : 26 }}>{metric.value}</div>
+              <div style={{ fontSize: 10.5, color: 'var(--muted)', marginTop: 6 }}>{metric.sub}</div>
+            </div>
+          ))}
         </div>
 
-        {filtered.length === 0 ? (
-          <div style={{ textAlign: 'center', padding: '32px 0', color: 'var(--muted)', fontSize: 13 }}>
-            {expenses.length === 0 ? 'No expenses logged yet. Add your first above.' : 'No expenses match the current filters.'}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 280px', gap: 14 }}>
+          <div className="card" style={{ padding: 18 }}>
+            <div className="proto-section-title" style={{ marginBottom: 12 }}>Add Expense</div>
+            <div className="form-grid-2">
+              <div className="form-group form-group-full">
+                <label className="form-label">Description</label>
+                <input className="form-input" value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} placeholder="Zoom subscription, office supplies…" />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Amount ($)</label>
+                <input className="form-input" type="number" step="0.01" value={form.amount} onChange={e => setForm(f => ({ ...f, amount: e.target.value }))} />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Date</label>
+                <input className="form-input" type="date" value={form.date} onChange={e => setForm(f => ({ ...f, date: e.target.value }))} />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Category</label>
+                <select className="form-select" value={form.category} onChange={e => setForm(f => ({ ...f, category: e.target.value }))}>
+                  {CATEGORIES.map(category => <option key={category} value={category}>{category || '— None —'}</option>)}
+                </select>
+              </div>
+              <div className="form-group" style={{ justifyContent: 'flex-end' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: 'var(--muted)' }}>
+                  <input type="checkbox" checked={form.recurring} onChange={e => setForm(f => ({ ...f, recurring: e.target.checked }))} />
+                  Recurring
+                </label>
+              </div>
+            </div>
           </div>
-        ) : (
-          <div className="table-wrap">
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>Description</th>
-                  <th>Category</th>
-                  <th>Date</th>
-                  <th>Recurring</th>
-                  <th style={{ textAlign: 'right' }}>Amount</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody>
-                {filtered.map(ex => (
-                  <tr key={ex.id}>
-                    <td className="td-name">{ex.description}</td>
-                    <td className="td-muted">{ex.category || '—'}</td>
-                    <td className="td-muted">{ex.date}</td>
-                    <td className="td-muted">{ex.recurring ? <span style={{ color: '#4ade80', fontSize: 11 }}>● Yes</span> : '—'}</td>
-                    <td style={{ textAlign: 'right', color: '#f87171', fontWeight: 700 }}>{formatMoney(ex.amount)}</td>
-                    <td>
-                      <button className="btn-icon btn-danger" style={{ fontSize: 11, padding: '2px 6px' }}
-                        onClick={() => setConfirmDelete(ex.id)}>×</button>
-                    </td>
+
+          <div className="card" style={{ padding: 18 }}>
+            <div className="proto-section-title" style={{ marginBottom: 12 }}>Filters</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <select className="form-select" value={filterMonth} onChange={e => setFilterMonth(e.target.value)}>
+                <option value="">All months</option>
+                {months.map(month => <option key={month} value={month}>{month}</option>)}
+              </select>
+              <select className="form-select" value={filterCat} onChange={e => setFilterCat(e.target.value)}>
+                <option value="">All categories</option>
+                {CATEGORIES.slice(1).map(category => <option key={category} value={category}>{category}</option>)}
+              </select>
+              {(filterMonth || filterCat) ? <button type="button" className="proto-btn" onClick={() => { setFilterMonth(''); setFilterCat('') }}>Clear Filters</button> : null}
+            </div>
+          </div>
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 280px', gap: 14, marginTop: 14 }}>
+          <div className="card proto-list-card">
+            <div className="proto-list-card-head">
+              <div className="proto-section-title">Entries</div>
+              <div className="proto-mono" style={{ fontSize: 11, color: 'var(--muted)' }}>{filtered.length} visible</div>
+            </div>
+            {filtered.length === 0 ? (
+              <div className="proto-empty">{expenses.length === 0 ? 'No expenses logged yet.' : 'No expenses match the current filters.'}</div>
+            ) : (
+              <table className="proto-table">
+                <thead>
+                  <tr>
+                    <th>Description</th>
+                    <th>Category</th>
+                    <th>Date</th>
+                    <th>Recurring</th>
+                    <th style={{ textAlign: 'right' }}>Amount</th>
+                    <th />
                   </tr>
-                ))}
-                <tr>
-                  <td colSpan={4} style={{ textAlign: 'right', fontWeight: 700, paddingRight: 8, fontSize: 12, color: 'var(--muted)' }}>
-                    {filterMonth || filterCat ? 'Filtered Total' : 'Total'}
-                  </td>
-                  <td style={{ textAlign: 'right', color: '#f87171', fontWeight: 800 }}>{formatMoney(filteredTotal)}</td>
-                  <td></td>
-                </tr>
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {filtered.map(expense => (
+                    <tr key={expense.id}>
+                      <td style={{ fontWeight: 700, color: 'var(--text)' }}>{expense.description}</td>
+                      <td style={{ color: 'var(--muted)' }}>{expense.category || '—'}</td>
+                      <td className="proto-mono" style={{ color: 'var(--muted)' }}>{expense.date}</td>
+                      <td style={{ color: 'var(--muted)' }}>{expense.recurring ? 'Yes' : '—'}</td>
+                      <td className="proto-mono" style={{ textAlign: 'right', color: '#f87171', fontWeight: 700 }}>{formatMoney(expense.amount)}</td>
+                      <td style={{ textAlign: 'right' }}><button type="button" className="proto-btn proto-btn-danger" style={{ height: 28 }} onClick={() => setConfirmDelete(expense.id)}>Delete</button></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
           </div>
-        )}
-      </div>
 
-      {/* Monthly + category breakdown */}
-      {expenses.length > 0 && (
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginTop: 16 }}>
-          <div className="data-card">
-            <div className="data-card-title">By Month</div>
-            <div className="table-wrap">
-              <table className="data-table">
-                <thead><tr><th>Month</th><th style={{ textAlign: 'right' }}>Total</th></tr></thead>
-                <tbody>
-                  {monthlyArr.map(([m, amt]) => (
-                    <tr key={m}>
-                      <td className="td-name">{m}</td>
-                      <td style={{ textAlign: 'right', color: '#f87171', fontWeight: 700 }}>{formatMoney(amt)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+          <div className="proto-sidebar-stack">
+            <div className="card" style={{ padding: 18 }}>
+              <div className="proto-section-title" style={{ marginBottom: 12 }}>By Category</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {catArr.map(([category, amount]) => {
+                  const pct = allTotal > 0 ? amount / allTotal : 0
+                  return (
+                    <div key={category}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                        <span style={{ fontSize: 11.5, color: 'var(--text-soft)', fontWeight: 700 }}>{category}</span>
+                        <span className="proto-mono" style={{ fontSize: 11.5, color: 'var(--text)', fontWeight: 700 }}>{formatMoney(amount)}</span>
+                      </div>
+                      <div style={{ height: 4, background: 'var(--surf2)', borderRadius: 2, overflow: 'hidden' }}>
+                        <div style={{ width: `${pct * 100}%`, height: '100%', background: 'var(--gold)' }} />
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
             </div>
-          </div>
-          <div className="data-card">
-            <div className="data-card-title">By Category</div>
-            <div className="table-wrap">
-              <table className="data-table">
-                <thead><tr><th>Category</th><th style={{ textAlign: 'right' }}>Total</th></tr></thead>
-                <tbody>
-                  {catArr.map(([c, amt]) => (
-                    <tr key={c}>
-                      <td className="td-name">{c}</td>
-                      <td style={{ textAlign: 'right', color: '#f87171', fontWeight: 700 }}>{formatMoney(amt)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <div className="card" style={{ padding: 18 }}>
+              <div className="proto-section-title" style={{ marginBottom: 12 }}>By Month</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {monthlyArr.map(([month, amount]) => (
+                  <div key={month} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12.5 }}>
+                    <span style={{ color: 'var(--text)' }}>{month}</span>
+                    <span className="proto-mono" style={{ color: '#f87171', fontWeight: 700 }}>{formatMoney(amount)}</span>
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
         </div>
-      )}
+      </div>
 
       {confirmDelete && (
-        <div className="modal-overlay" onClick={() => setConfirmDelete(null)}>
-          <div className="confirm-dialog" onClick={e => e.stopPropagation()}>
-            <div className="confirm-title">Delete expense?</div>
-            <div className="confirm-body">This cannot be undone.</div>
-            <div className="confirm-actions">
-              <button className="btn-ghost" onClick={() => setConfirmDelete(null)}>Cancel</button>
-              <button className="btn-danger" onClick={() => doDelete(confirmDelete)}>Delete</button>
+        <div className="proto-modal-scrim" onClick={() => setConfirmDelete(null)}>
+          <div className="proto-modal-panel" style={{ width: 420 }} onClick={e => e.stopPropagation()}>
+            <div className="proto-modal-head">
+              <div>
+                <div className="proto-modal-title">Delete expense?</div>
+                <div className="proto-modal-subtitle">This removes the selected operating expense entry.</div>
+              </div>
+            </div>
+            <div className="proto-modal-foot">
+              <button className="proto-btn" onClick={() => setConfirmDelete(null)}>Cancel</button>
+              <button className="proto-btn proto-btn-danger" onClick={() => doDelete(confirmDelete)}>Delete</button>
             </div>
           </div>
         </div>

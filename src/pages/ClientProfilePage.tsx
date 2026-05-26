@@ -1,37 +1,18 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import type { ActivityLogEntry, Client, Invoice, Project } from '../data/types'
-import { loadSnapshot, saveClients, loadActivityLog, saveActivityLog, loadSettings } from '../services/storage'
+import { loadActivityLog, loadSettings, loadSnapshot, saveActivityLog, saveClients } from '../services/storage'
 import { sendEmail } from '../services/gmail'
+import { Avatar, ProtoIcon, StatusChip, colorFromString, dueLabel, protoCurrency, protoDateShort } from '../components/PrototypeKit'
 
 function uid() { return crypto.randomUUID() }
 
-const AVATAR_COLORS = ['#f5b533','#3b82f6','#22c55e','#a855f7','#14b8a6','#f97316','#ec4899']
-function avatarColor(name: string) {
-  let h = 0
-  for (const c of name) h = (h * 31 + c.charCodeAt(0)) % AVATAR_COLORS.length
-  return AVATAR_COLORS[Math.abs(h)]
-}
-function initials(name: string) {
-  return name.split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase()
-}
-function stageBadge(s?: string): string {
-  switch ((s || 'lead').toLowerCase()) {
-    case 'active':   return 'badge-green'
-    case 'prospect': return 'badge-yellow'
-    case 'paused':   return 'badge-gray'
-    case 'churned':  return 'badge-red'
-    default:         return 'badge-blue'
-  }
-}
-function statusBadge(s: string): string { return stageBadge(s) }
-function fmtTimestamp(ts: number): string {
-  return new Date(ts).toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' })
-}
-
 const STAGES = [
-  { key: 'lead', label: 'Lead' }, { key: 'prospect', label: 'Prospect' },
-  { key: 'active', label: 'Active' }, { key: 'paused', label: 'Paused' }, { key: 'churned', label: 'Churned' },
+  { key: 'lead', label: 'Lead' },
+  { key: 'prospect', label: 'Prospect' },
+  { key: 'active', label: 'Active' },
+  { key: 'paused', label: 'Paused' },
+  { key: 'churned', label: 'Churned' },
 ]
 
 type LinkEntry = { label: string; url: string }
@@ -40,92 +21,103 @@ export default function ClientProfilePage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
 
-  const [clients,  setClientsState] = useState<Client[]>([])
-  const [invoices, setInvoices]     = useState<Invoice[]>([])
-  const [projects, setProjects]     = useState<Project[]>([])
+  const [clients, setClientsState] = useState<Client[]>([])
+  const [invoices, setInvoices] = useState<Invoice[]>([])
+  const [projects, setProjects] = useState<Project[]>([])
+  const [activityLog, setActivityLog] = useState<ActivityLogEntry[]>([])
+  const [editing, setEditing] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  const [activityNote, setActivityNote] = useState('')
+  const [form, setForm] = useState({
+    name: '',
+    company: '',
+    email: '',
+    phone: '',
+    address: '',
+    timezone: '',
+    defaultRate: '',
+    paymentTerms: '',
+    tags: '',
+    notes: '',
+    status: 'active',
+    contractEnd: '',
+    links: [] as LinkEntry[],
+  })
+  const [newLinkLabel, setNewLinkLabel] = useState('')
+  const [newLinkUrl, setNewLinkUrl] = useState('')
+
   useEffect(() => {
-    loadSnapshot().then(snap => {
-      setClientsState(snap.clients)
-      setInvoices(snap.invoices)
-      setProjects(snap.projects)
+    loadSnapshot().then(snapshot => {
+      setClientsState(snapshot.clients)
+      setInvoices(snapshot.invoices)
+      setProjects(snapshot.projects)
     })
-    loadActivityLog().then(all => {
-      setActivityLog(all.filter(e => e.clientId === id).sort((a, b) => b.createdAt - a.createdAt))
+  }, [])
+
+  useEffect(() => {
+    if (!id) return
+    loadActivityLog().then(entries => {
+      setActivityLog(entries.filter(entry => entry.clientId === id).sort((a, b) => b.createdAt - a.createdAt))
     })
   }, [id])
 
-  const client = clients.find(c => c.id === id)
+  const client = clients.find(entry => entry.id === id)
 
-  const [editing, setEditing]     = useState(false)
-  const [form, setForm]           = useState({
-    name: '', company: '', email: '', phone: '', address: '',
-    timezone: '', defaultRate: '', paymentTerms: '', tags: '',
-    notes: '', status: 'active', contractEnd: '', links: [] as LinkEntry[],
-  })
-  const [newLinkLabel, setNewLinkLabel] = useState('')
-  const [newLinkUrl,   setNewLinkUrl]   = useState('')
-  const [photoUrl, setPhotoUrl] = useState<string | undefined>(undefined)
-  const photoInputRef = useRef<HTMLInputElement>(null)
-  const [confirmDelete, setConfirmDelete] = useState(false)
-
-  // Activity log
-  const [activityLog, setActivityLog] = useState<ActivityLogEntry[]>([])
-  const [activityNote, setActivityNote] = useState('')
-
-  // Sync form/photo from client once data loads
   useEffect(() => {
-    if (client && !editing) {
-      setForm({
-        name:         client.name ?? '',
-        company:      client.company ?? '',
-        email:        client.email ?? '',
-        phone:        client.phone ?? '',
-        address:      client.address ?? '',
-        timezone:     client.timezone ?? '',
-        defaultRate:  client.defaultRate != null ? String(client.defaultRate) : '',
-        paymentTerms: client.paymentTerms ?? '',
-        tags:         client.tags ?? '',
-        notes:        client.notes ?? '',
-        status:       client.status ?? 'active',
-        contractEnd:  client.contractEnd ?? '',
-        links:        (client.links ?? []) as LinkEntry[],
-      })
-      setPhotoUrl(client.photoUrl)
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [client?.id])
+    if (!client || editing) return
+    setForm({
+      name: client.name ?? '',
+      company: client.company ?? '',
+      email: client.email ?? '',
+      phone: client.phone ?? '',
+      address: client.address ?? '',
+      timezone: client.timezone ?? '',
+      defaultRate: client.defaultRate != null ? String(client.defaultRate) : '',
+      paymentTerms: client.paymentTerms ?? '',
+      tags: client.tags ?? '',
+      notes: client.notes ?? '',
+      status: client.status ?? 'active',
+      contractEnd: client.contractEnd ?? '',
+      links: client.links ?? [],
+    })
+  }, [client, editing])
 
   if (!client) {
     return (
-      <div className="page-wrap">
-        <div style={{ textAlign: 'center', padding: '60px 20px', color: 'var(--muted)' }}>
-          Client not found.
-          <br /><button className="btn-ghost btn-sm" style={{ marginTop: 12 }} onClick={() => navigate('/clients')}>← Back to Clients</button>
+      <div className="proto-page">
+        <div className="proto-page-body">
+          <div className="proto-empty">Client not found.</div>
         </div>
       </div>
     )
   }
 
-  // client is guaranteed non-null here (early return above handles null case)
-  const clientNN = client!
+  const clientNN = client
 
-  // Computed
-  const clientInvoices = invoices.filter(inv => inv.clientName === clientNN.name)
-  const totalRevenue   = clientInvoices.reduce((s, i) => s + (Number(i.subtotal) || 0), 0)
-  const outstanding    = clientInvoices
-    .filter(inv => new Set(['sent','viewed','overdue','partial']).has((inv.status||'').toLowerCase()))
-    .reduce((s, inv) => s + ((Number(inv.subtotal)||0) - (Number(inv.amountPaid)||0)), 0)
-  const clientProjects = projects.filter(p => p.clientId === clientNN.id)
+  const clientInvoices = invoices.filter(invoice => invoice.clientName === clientNN.name)
+  const clientProjects = projects.filter(project => project.clientId === clientNN.id)
+  const unpaidStatuses = new Set(['sent', 'viewed', 'overdue', 'partial'])
+  const totalRevenue = clientInvoices.reduce((sum, invoice) => sum + (Number(invoice.subtotal) || 0), 0)
+  const totalPaid = clientInvoices
+    .filter(invoice => (invoice.status || '').toLowerCase() === 'paid')
+    .reduce((sum, invoice) => sum + (Number(invoice.subtotal) || 0), 0)
+  const outstanding = clientInvoices
+    .filter(invoice => unpaidStatuses.has((invoice.status || '').toLowerCase()))
+    .reduce((sum, invoice) => sum + ((Number(invoice.subtotal) || 0) - (Number(invoice.amountPaid) || 0)), 0)
+  const billedMtd = clientInvoices
+    .filter(invoice => (invoice.date || '').slice(0, 7) === new Date().toISOString().slice(0, 7))
+    .reduce((sum, invoice) => sum + (Number(invoice.subtotal) || 0), 0)
+  const tagList = (clientNN.tags || '').split(',').map(tag => tag.trim()).filter(Boolean)
 
   function persistUpdate(updated: Client) {
-    const next = clients.map(c => c.id === updated.id ? updated : c)
+    const next = clients.map(entry => entry.id === updated.id ? updated : entry)
     setClientsState(next)
     void saveClients(next)
   }
 
   function handleSave() {
     if (!form.name.trim()) return
-    const updated: Client = {
+    persistUpdate({
       ...clientNN,
       name: form.name,
       company: form.company || undefined,
@@ -137,48 +129,19 @@ export default function ClientProfilePage() {
       paymentTerms: form.paymentTerms || undefined,
       tags: form.tags || undefined,
       notes: form.notes || undefined,
-      status: form.status,
+      status: form.status || undefined,
       contractEnd: form.contractEnd || undefined,
-      links: form.links.length > 0 ? form.links : undefined,
-      photoUrl,
-    }
-    persistUpdate(updated)
-    setEditing(false)
-  }
-
-  function handlePhotoUpload(file: File) {
-    if (!file.type.startsWith('image/')) { alert('Please select an image file.'); return }
-    if (file.size > 5 * 1024 * 1024) { alert('Image too large (max 5 MB).'); return }
-    const reader = new FileReader()
-    reader.onload = ev => {
-      const url = ev.target?.result as string
-      setPhotoUrl(url)
-      persistUpdate({ ...clientNN, photoUrl: url })
-    }
-    reader.readAsDataURL(file)
-  }
-
-  function handleCancel() {
-    setForm({
-      name: clientNN.name,
-      company: clientNN.company ?? '',
-      email: clientNN.email ?? '',
-      phone: clientNN.phone ?? '',
-      address: clientNN.address ?? '',
-      timezone: clientNN.timezone ?? '',
-      defaultRate: clientNN.defaultRate != null ? String(clientNN.defaultRate) : '',
-      paymentTerms: clientNN.paymentTerms ?? '',
-      tags: clientNN.tags ?? '',
-      notes: clientNN.notes ?? '',
-      status: clientNN.status ?? 'active',
-      contractEnd: clientNN.contractEnd ?? '',
-      links: clientNN.links ?? [],
+      links: form.links.length ? form.links : undefined,
     })
     setEditing(false)
   }
 
+  function handleCancel() {
+    setEditing(false)
+  }
+
   function handleDelete() {
-    const next = clients.filter(c => c.id !== clientNN.id)
+    const next = clients.filter(entry => entry.id !== clientNN.id)
     setClientsState(next)
     void saveClients(next)
     navigate('/clients')
@@ -186,11 +149,13 @@ export default function ClientProfilePage() {
 
   function addLink() {
     if (!newLinkLabel.trim() || !newLinkUrl.trim()) return
-    setForm(f => ({ ...f, links: [...f.links, { label: newLinkLabel.trim(), url: newLinkUrl.trim() }] }))
-    setNewLinkLabel(''); setNewLinkUrl('')
+    setForm(current => ({ ...current, links: [...current.links, { label: newLinkLabel.trim(), url: newLinkUrl.trim() }] }))
+    setNewLinkLabel('')
+    setNewLinkUrl('')
   }
-  function removeLink(i: number) {
-    setForm(f => ({ ...f, links: f.links.filter((_, idx) => idx !== i) }))
+
+  function removeLink(index: number) {
+    setForm(current => ({ ...current, links: current.links.filter((_, currentIndex) => currentIndex !== index) }))
   }
 
   function addActivity() {
@@ -198,25 +163,26 @@ export default function ClientProfilePage() {
     const entry: ActivityLogEntry = { id: uid(), clientId: clientNN.id, note: activityNote.trim(), createdAt: Date.now() }
     loadActivityLog().then(all => {
       void saveActivityLog([entry, ...all])
-      setActivityLog([entry, ...activityLog])
+      setActivityLog(current => [entry, ...current])
       setActivityNote('')
     })
   }
+
   function deleteActivity(entryId: string) {
     loadActivityLog().then(all => {
-      void saveActivityLog(all.filter(e => e.id !== entryId))
-      setActivityLog(activityLog.filter(e => e.id !== entryId))
+      const next = all.filter(entry => entry.id !== entryId)
+      void saveActivityLog(next)
+      setActivityLog(current => current.filter(entry => entry.id !== entryId))
     })
   }
 
   async function sendReminder() {
     const settings = await loadSettings()
-    const unpaidInvs = clientInvoices.filter(inv =>
-      new Set(['sent','viewed','overdue','partial']).has((inv.status||'').toLowerCase()))
+    const unpaidInvs = clientInvoices.filter(invoice => unpaidStatuses.has((invoice.status || '').toLowerCase()))
     if (unpaidInvs.length === 0) return
-    const totalOwed = unpaidInvs.reduce((s, inv) => s + ((Number(inv.subtotal)||0) - (Number(inv.amountPaid)||0)), 0)
+    const totalOwed = unpaidInvs.reduce((sum, invoice) => sum + ((Number(invoice.subtotal) || 0) - (Number(invoice.amountPaid) || 0)), 0)
     const companyName = settings.companyName || 'YVA Staffing'
-    const invoiceList = unpaidInvs.map(inv => `  • ${inv.number} — $${(Number(inv.subtotal)||0).toFixed(2)}`).join('\n')
+    const invoiceList = unpaidInvs.map(invoice => `  • ${invoice.number} — $${(Number(invoice.subtotal) || 0).toFixed(2)}`).join('\n')
     let bodyText: string
     if (settings.reminderEmailTemplate) {
       bodyText = settings.reminderEmailTemplate
@@ -228,275 +194,275 @@ export default function ClientProfilePage() {
     } else {
       bodyText = `Hi ${clientNN.name},\n\nThis is a friendly reminder that you have ${unpaidInvs.length === 1 ? 'an outstanding invoice' : `${unpaidInvs.length} outstanding invoices`} totaling $${totalOwed.toFixed(2)}:\n\n${invoiceList}\n\nPlease let us know when we can expect payment.\n\n${settings.emailSignature || companyName}`
     }
-    const subject = `Outstanding Balance Reminder — ${companyName}`
-    sendEmail(clientNN.email || '', subject, bodyText)
+    sendEmail(clientNN.email || '', `Outstanding Balance Reminder — ${companyName}`, bodyText)
   }
 
-  const color = avatarColor(clientNN.name)
+  const daysToRenew = clientNN.contractEnd ? dueLabel(clientNN.contractEnd) : null
 
   return (
-    <div className="page-wrap" style={{ maxWidth: 980 }}>
-      <input ref={photoInputRef} type="file" accept="image/*" style={{ display: 'none' }}
-        onChange={e => { const f = e.target.files?.[0]; if (f) handlePhotoUpload(f); e.target.value = '' }} />
-
-      <button className="btn-ghost btn-sm" style={{ marginBottom: 16 }} onClick={() => navigate('/clients')}>
-        ← Back to Clients
-      </button>
-
-      {/* Header */}
-      <div className="profile-header">
-        <div className="profile-header-left">
-          <div className="avatar-wrap" title="Click to change photo" onClick={() => photoInputRef.current?.click()}>
-            {photoUrl
-              ? <img className="avatar-photo" src={photoUrl} alt={clientNN.name} />
-              : <div className="avatar profile-avatar" style={{ background: color }}>{initials(clientNN.name)}</div>
-            }
-            <span className="avatar-cam">📷</span>
-          </div>
-          <div>
-            {editing
-              ? <input className="form-input profile-name-input" value={form.name} onChange={e => setForm(f => ({...f, name: e.target.value}))} />
-              : <h1 className="profile-name">{clientNN.name}</h1>
-            }
-            <div className="profile-sub">
-              {clientNN.company && <span style={{ color: 'var(--muted)' }}>{clientNN.company}</span>}
-              {clientNN.company && clientNN.email && <span style={{ color: 'var(--muted)' }}> · </span>}
-              {clientNN.email && <span style={{ color: 'var(--muted)' }}>{clientNN.email}</span>}
+    <div className="proto-page">
+      <div className="proto-profile-head">
+        <button type="button" className="proto-back-link proto-plain-button" onClick={() => navigate('/clients')}>
+          <ProtoIcon name="chevronL" size={12} />
+          All Clients
+        </button>
+        <div className="proto-profile-row">
+          <div className="proto-profile-main">
+            <Avatar name={clientNN.name} color={colorFromString(clientNN.name)} size="lg" />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                <h1 className="proto-profile-title">{clientNN.company || clientNN.name}</h1>
+                <StatusChip status={(clientNN.status || 'active').toLowerCase()} filled />
+              </div>
+              <div className="proto-profile-meta">
+                <span>{clientNN.name}</span>
+                {clientNN.email ? <span>{clientNN.email}</span> : null}
+                {clientNN.address ? <span>{clientNN.address.split(',')[0]}</span> : null}
+                {clientNN.paymentTerms ? <span>{clientNN.paymentTerms}</span> : null}
+                {daysToRenew ? <span>Contract: {daysToRenew}</span> : null}
+              </div>
+              {tagList.length ? (
+                <div className="proto-tag-row">
+                  {tagList.map(tag => <span key={tag} className="proto-tag">{tag}</span>)}
+                </div>
+              ) : null}
             </div>
           </div>
-        </div>
-        <div className="profile-header-actions">
-          {editing ? (
-            <>
-              <button className="btn-primary btn-sm" onClick={handleSave} disabled={!form.name.trim()}>Save Changes</button>
-              <button className="btn-ghost btn-sm" onClick={handleCancel}>Cancel</button>
-            </>
-          ) : (
-            <>
-              <span className={`badge ${statusBadge(clientNN.status || 'lead')}`} style={{ fontSize: 13 }}>{clientNN.status || 'Lead'}</span>
-              {outstanding > 0 && clientNN.email && (
-                <button className="btn-ghost btn-sm" style={{ color: '#fb923c' }} onClick={sendReminder}>✉ Remind</button>
-              )}
-              <button className="btn-ghost btn-sm" onClick={() => setEditing(true)}>Edit Profile</button>
-              <button className="btn-danger btn-sm" onClick={() => setConfirmDelete(true)}>Delete</button>
-            </>
-          )}
+          <div className="proto-profile-actions">
+            {clientNN.email ? <button type="button" className="proto-btn" onClick={() => window.location.href = `mailto:${clientNN.email}`}><ProtoIcon name="mail" size={13} /> Email</button> : null}
+            {clientNN.phone ? <button type="button" className="proto-btn" onClick={() => window.location.href = `tel:${clientNN.phone}`}><ProtoIcon name="phone" size={13} /> Call</button> : null}
+            <button type="button" className="proto-btn proto-btn-primary" onClick={() => navigate('/invoice?new=1')}><ProtoIcon name="plus" size={13} /> New Invoice</button>
+            <button type="button" className="proto-btn" onClick={() => setEditing(current => !current)}><ProtoIcon name="edit" size={13} /> {editing ? 'Close Edit' : 'Edit'}</button>
+            <button type="button" className="proto-btn proto-btn-danger" onClick={() => setConfirmDelete(true)}><ProtoIcon name="trash" size={13} /> Delete</button>
+          </div>
         </div>
       </div>
 
-      {/* KPI row */}
-      {!editing && (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 10, marginBottom: 20 }}>
+      <div className="proto-page-body">
+        <div className="proto-kpi-grid-4" style={{ marginBottom: 14 }}>
           {[
-            { label: 'Total Revenue', value: `$${(totalRevenue/1000).toFixed(1)}k`, color: 'var(--gold)' },
-            { label: 'Invoices', value: String(clientInvoices.length), color: 'var(--text)' },
-            { label: 'Outstanding', value: outstanding > 0 ? `$${outstanding.toFixed(2)}` : '$0', color: outstanding > 0 ? '#f87171' : 'var(--success)' },
-            { label: 'Projects', value: String(clientProjects.length), color: '#60a5fa' },
-          ].map(({ label, value, color: c }) => (
-            <div key={label} className="settings-stat-card">
-              <div className="settings-stat-count" style={{ color: c, fontSize: 18 }}>{value}</div>
-              <div className="settings-stat-label">{label}</div>
+            { label: 'Total billed', value: protoCurrency(totalRevenue), sub: `${clientInvoices.length} invoices`, color: '#22d3ee' },
+            { label: 'Collected', value: protoCurrency(totalPaid), sub: `${Math.round((totalPaid / Math.max(1, totalRevenue)) * 100)}% of total`, color: '#22c55e' },
+            { label: 'Outstanding', value: protoCurrency(outstanding), sub: `${clientInvoices.filter(invoice => unpaidStatuses.has((invoice.status || '').toLowerCase())).length} unpaid`, color: '#f87171' },
+            { label: 'MTD', value: protoCurrency(billedMtd), sub: new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' }), color: '#60a5fa' },
+          ].map(metric => (
+            <div key={metric.label} className="proto-kpi">
+              <div className="proto-kpi-accent" style={{ background: metric.color }} />
+              <div className="proto-kpi-label">{metric.label}</div>
+              <div className="proto-kpi-value" style={{ marginTop: 8 }}>{metric.value}</div>
+              <div style={{ fontSize: 10.5, color: 'var(--muted)', marginTop: 6 }}>{metric.sub}</div>
             </div>
           ))}
         </div>
-      )}
 
-      <div className="profile-grid">
-        {/* Left */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-
-          {/* Info */}
-          <div className="data-card">
-            <div className="data-card-title">Client Information</div>
-            <div className="profile-fields">
-              {editing ? (
-                <>
-                  <div className="profile-field">
-                    <span className="profile-field-label">Company</span>
-                    <input className="form-input form-input-sm" value={form.company} onChange={e => setForm(f => ({...f, company: e.target.value}))} placeholder="Legal entity name" />
-                  </div>
-                  <div className="profile-field">
-                    <span className="profile-field-label">Stage</span>
-                    <select className="form-select form-input-sm" value={form.status} onChange={e => setForm(f => ({...f, status: e.target.value}))}>
-                      {STAGES.map(s => <option key={s.key} value={s.key}>{s.label}</option>)}
-                    </select>
-                  </div>
-                  <div className="profile-field">
-                    <span className="profile-field-label">Email</span>
-                    <input className="form-input form-input-sm" type="email" value={form.email} onChange={e => setForm(f => ({...f, email: e.target.value}))} />
-                  </div>
-                  <div className="profile-field">
-                    <span className="profile-field-label">Phone</span>
-                    <input className="form-input form-input-sm" value={form.phone} onChange={e => setForm(f => ({...f, phone: e.target.value}))} />
-                  </div>
-                  <div className="profile-field">
-                    <span className="profile-field-label">Billing Address</span>
-                    <input className="form-input form-input-sm" value={form.address} onChange={e => setForm(f => ({...f, address: e.target.value}))} />
-                  </div>
-                  <div className="profile-field">
-                    <span className="profile-field-label">Timezone</span>
-                    <input className="form-input form-input-sm" value={form.timezone} onChange={e => setForm(f => ({...f, timezone: e.target.value}))} placeholder="EST / PST" />
-                  </div>
-                  <div className="profile-field">
-                    <span className="profile-field-label">Default Rate ($/hr)</span>
-                    <input className="form-input form-input-sm" type="number" value={form.defaultRate} onChange={e => setForm(f => ({...f, defaultRate: e.target.value}))} />
-                  </div>
-                  <div className="profile-field">
-                    <span className="profile-field-label">Payment Terms</span>
-                    <select className="form-select form-input-sm" value={form.paymentTerms} onChange={e => setForm(f => ({...f, paymentTerms: e.target.value}))}>
-                      <option value="">— Not set —</option>
-                      <option>On receipt</option><option>Net 7</option><option>Net 15</option><option>Net 30</option>
-                    </select>
-                  </div>
-                  <div className="profile-field">
-                    <span className="profile-field-label">Contract End</span>
-                    <input className="form-input form-input-sm" type="date" value={form.contractEnd} onChange={e => setForm(f => ({...f, contractEnd: e.target.value}))} />
-                  </div>
-                  <div className="profile-field">
-                    <span className="profile-field-label">Tags</span>
-                    <input className="form-input form-input-sm" value={form.tags} onChange={e => setForm(f => ({...f, tags: e.target.value}))} placeholder="Law firm, US, High priority" />
-                  </div>
-                  <div className="profile-field profile-field-tall">
-                    <span className="profile-field-label">Notes</span>
-                    <textarea className="form-textarea" rows={3} value={form.notes} onChange={e => setForm(f => ({...f, notes: e.target.value}))} />
-                  </div>
-                  {/* Links edit */}
-                  <div className="profile-field profile-field-tall">
-                    <span className="profile-field-label">Links</span>
-                    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 6 }}>
-                      {form.links.map((lk, i) => (
-                        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                          <a href={lk.url} target="_blank" rel="noopener noreferrer" style={{ flex: 1, fontSize: 12, color: 'var(--gold)' }}>{lk.label}</a>
-                          <button className="btn-icon btn-danger" style={{ padding: '2px 6px', fontSize: 11 }} onClick={() => removeLink(i)}>×</button>
-                        </div>
-                      ))}
-                      <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
-                        <input className="form-input form-input-sm" value={newLinkLabel} onChange={e => setNewLinkLabel(e.target.value)} placeholder="Label" style={{ flex: 1 }} />
-                        <input className="form-input form-input-sm" value={newLinkUrl} onChange={e => setNewLinkUrl(e.target.value)} placeholder="https://..." style={{ flex: 2 }} />
-                        <button className="btn-ghost btn-sm" onClick={addLink} disabled={!newLinkLabel.trim() || !newLinkUrl.trim()}>+ Add</button>
-                      </div>
-                    </div>
-                  </div>
-                </>
-              ) : (
-                <>
-                  {[
-                    { label: 'Company',         value: clientNN.company },
-                    { label: 'Stage',           value: clientNN.status || 'Lead' },
-                    { label: 'Email',           value: clientNN.email },
-                    { label: 'Phone',           value: clientNN.phone },
-                    { label: 'Address',         value: clientNN.address },
-                    { label: 'Timezone',        value: clientNN.timezone },
-                    { label: 'Default Rate',    value: clientNN.defaultRate ? `$${clientNN.defaultRate}/hr` : undefined },
-                    { label: 'Payment Terms',   value: clientNN.paymentTerms },
-                    { label: 'Contract End',    value: clientNN.contractEnd },
-                    { label: 'Tags',            value: clientNN.tags },
-                  ].map(({ label, value }) => value ? (
-                    <div key={label} className="profile-field">
-                      <span className="profile-field-label">{label}</span>
-                      <span className="profile-field-value">{value}</span>
-                    </div>
-                  ) : null)}
-                  {clientNN.notes && (
-                    <div className="profile-field profile-field-tall">
-                      <span className="profile-field-label">Notes</span>
-                      <span className="profile-field-value" style={{ whiteSpace: 'pre-wrap' }}>{clientNN.notes}</span>
-                    </div>
-                  )}
-                  {(clientNN.links ?? []).length > 0 && (
-                    <div className="profile-field profile-field-tall">
-                      <span className="profile-field-label">Links</span>
-                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                        {(clientNN.links ?? []).map((lk, i) => (
-                          <a key={i} href={lk.url} target="_blank" rel="noopener noreferrer" className="card-link-pill">{lk.label}</a>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </>
-              )}
-            </div>
-          </div>
-
-          {/* Projects */}
-          {clientProjects.length > 0 && (
-            <div className="data-card">
-              <div className="data-card-title">Projects</div>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, paddingTop: 4 }}>
-                {clientProjects.map(p => (
-                  <button key={p.id} className="btn-ghost btn-sm" onClick={() => navigate('/projects/' + p.id)} style={{ fontSize: 12 }}>
-                    {p.name}
-                    {p.status && <span style={{ marginLeft: 6, color: 'var(--muted)', fontSize: 11 }}>{p.status}</span>}
-                  </button>
-                ))}
+        {editing ? (
+          <div className="proto-two-col">
+            <div className="card" style={{ padding: 18 }}>
+              <div className="proto-section-title" style={{ marginBottom: 14 }}>Client Details</div>
+              <div className="form-grid-2">
+                <div className="form-group form-group-full">
+                  <label className="form-label">Display Name</label>
+                  <input className="form-input" value={form.name} onChange={(event) => setForm(current => ({ ...current, name: event.target.value }))} />
+                </div>
+                <div className="form-group form-group-full">
+                  <label className="form-label">Company</label>
+                  <input className="form-input" value={form.company} onChange={(event) => setForm(current => ({ ...current, company: event.target.value }))} />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Email</label>
+                  <input className="form-input" type="email" value={form.email} onChange={(event) => setForm(current => ({ ...current, email: event.target.value }))} />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Phone</label>
+                  <input className="form-input" value={form.phone} onChange={(event) => setForm(current => ({ ...current, phone: event.target.value }))} />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Timezone</label>
+                  <input className="form-input" value={form.timezone} onChange={(event) => setForm(current => ({ ...current, timezone: event.target.value }))} />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Stage</label>
+                  <select className="form-select" value={form.status} onChange={(event) => setForm(current => ({ ...current, status: event.target.value }))}>
+                    {STAGES.map(stage => <option key={stage.key} value={stage.key}>{stage.label}</option>)}
+                  </select>
+                </div>
+                <div className="form-group form-group-full">
+                  <label className="form-label">Address</label>
+                  <input className="form-input" value={form.address} onChange={(event) => setForm(current => ({ ...current, address: event.target.value }))} />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Default Rate</label>
+                  <input className="form-input" value={form.defaultRate} onChange={(event) => setForm(current => ({ ...current, defaultRate: event.target.value }))} />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Payment Terms</label>
+                  <input className="form-input" value={form.paymentTerms} onChange={(event) => setForm(current => ({ ...current, paymentTerms: event.target.value }))} />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Contract End</label>
+                  <input className="form-input" type="date" value={form.contractEnd} onChange={(event) => setForm(current => ({ ...current, contractEnd: event.target.value }))} />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Tags</label>
+                  <input className="form-input" value={form.tags} onChange={(event) => setForm(current => ({ ...current, tags: event.target.value }))} />
+                </div>
+                <div className="form-group form-group-full">
+                  <label className="form-label">Notes</label>
+                  <textarea className="form-textarea" rows={4} value={form.notes} onChange={(event) => setForm(current => ({ ...current, notes: event.target.value }))} />
+                </div>
               </div>
             </div>
-          )}
-
-          {/* Invoice history */}
-          {clientInvoices.length > 0 && (
-            <div className="data-card">
-              <div className="data-card-title">Invoice History</div>
-              <div className="table-wrap">
-                <table className="data-table">
-                  <thead><tr><th>Invoice</th><th>Date</th><th>Status</th><th>Amount</th></tr></thead>
+            <div className="proto-sidebar-stack">
+              <div className="card" style={{ padding: 18 }}>
+                <div className="proto-section-title" style={{ marginBottom: 14 }}>Links</div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {form.links.map((link, index) => (
+                    <div key={`${link.label}-${index}`} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                      <a href={link.url} target="_blank" rel="noreferrer" style={{ flex: 1, color: 'var(--gold)', fontSize: 12 }}>{link.label}</a>
+                      <button type="button" className="proto-btn proto-btn-danger" style={{ height: 28 }} onClick={() => removeLink(index)}>Remove</button>
+                    </div>
+                  ))}
+                  <input className="form-input" placeholder="Label" value={newLinkLabel} onChange={(event) => setNewLinkLabel(event.target.value)} />
+                  <input className="form-input" placeholder="https://..." value={newLinkUrl} onChange={(event) => setNewLinkUrl(event.target.value)} />
+                  <button type="button" className="proto-btn" onClick={addLink}>Add Link</button>
+                </div>
+              </div>
+              <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                <button type="button" className="proto-btn" onClick={handleCancel}>Cancel</button>
+                <button type="button" className="proto-btn proto-btn-primary" onClick={handleSave}>Save Changes</button>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="proto-two-col">
+            <div className="proto-sidebar-stack">
+              <div className="card proto-list-card">
+                <div className="proto-list-card-head">
+                  <div className="proto-section-title">Invoices</div>
+                  <button type="button" className="proto-btn proto-btn-ghost" onClick={() => navigate('/invoice')}>View All</button>
+                </div>
+                <table className="proto-table">
+                  <thead>
+                    <tr>
+                      <th>Invoice</th>
+                      <th>Project</th>
+                      <th>Date</th>
+                      <th style={{ textAlign: 'right' }}>Amount</th>
+                      <th>Status</th>
+                    </tr>
+                  </thead>
                   <tbody>
-                    {clientInvoices.slice(0, 10).map(inv => (
-                      <tr key={inv.id}>
-                        <td className="td-name">{inv.number}</td>
-                        <td className="td-muted">{inv.date || '—'}</td>
-                        <td><span className="badge badge-gray" style={{ fontSize: 11 }}>{inv.status || 'draft'}</span></td>
-                        <td style={{ color: 'var(--gold)', fontWeight: 700 }}>${(Number(inv.subtotal)||0).toFixed(2)}</td>
+                    {clientInvoices.slice(0, 8).map(invoice => (
+                      <tr key={invoice.id} onClick={() => navigate(`/invoice?q=${encodeURIComponent(invoice.number)}`)}>
+                        <td className="proto-mono" style={{ color: 'var(--gold)', fontWeight: 700 }}>{invoice.number}</td>
+                        <td style={{ color: 'var(--muted)' }}>{invoice.projectName || '—'}</td>
+                        <td className="proto-mono" style={{ color: 'var(--muted)' }}>{protoDateShort(invoice.date)}</td>
+                        <td className="proto-mono" style={{ textAlign: 'right', fontWeight: 700, color: 'var(--text)' }}>{protoCurrency(Number(invoice.subtotal) || 0)}</td>
+                        <td><StatusChip status={(invoice.status || 'draft').toLowerCase()} /></td>
                       </tr>
                     ))}
+                    {clientInvoices.length === 0 ? (
+                      <tr><td colSpan={5} style={{ textAlign: 'center', color: 'var(--muted)' }}>No invoices yet</td></tr>
+                    ) : null}
                   </tbody>
                 </table>
               </div>
-            </div>
-          )}
-        </div>
 
-        {/* Right — Activity Log */}
-        <div className="data-card" style={{ alignSelf: 'start' }}>
-          <div className="data-card-title">Activity Log</div>
-          <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
-            <input
-              className="form-input"
-              style={{ flex: 1 }}
-              value={activityNote}
-              onChange={e => setActivityNote(e.target.value)}
-              onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); addActivity() } }}
-              placeholder="Add a note, call summary, update..."
-            />
-            <button className="btn-primary btn-sm" onClick={addActivity} disabled={!activityNote.trim()}>Add</button>
-          </div>
-          {activityLog.length === 0 ? (
-            <div style={{ textAlign: 'center', padding: '24px 0', color: 'var(--muted)', fontSize: 13 }}>No activity yet.</div>
-          ) : (
-            <div className="activity-timeline">
-              {activityLog.map(entry => (
-                <div key={entry.id} className="activity-item">
-                  <div className="activity-dot" />
-                  <div className="activity-body">
-                    <div className="activity-note">{entry.note}</div>
-                    <div className="activity-time">{fmtTimestamp(entry.createdAt)}</div>
-                  </div>
-                  <button className="btn-icon btn-danger" style={{ fontSize: 11, padding: '2px 5px', opacity: .5 }} onClick={() => deleteActivity(entry.id)}>×</button>
+              <div className="card" style={{ padding: 18 }}>
+                <div className="proto-section-title" style={{ marginBottom: 12 }}>Client Details</div>
+                <div className="proto-detail-grid">
+                  {[
+                    { label: 'Email', value: client.email || '—' },
+                    { label: 'Phone', value: client.phone || '—' },
+                    { label: 'Address', value: client.address || '—' },
+                    { label: 'Timezone', value: client.timezone || '—' },
+                    { label: 'Default Rate', value: client.defaultRate ? `${protoCurrency(Number(client.defaultRate))}/h` : '—' },
+                    { label: 'Payment Terms', value: client.paymentTerms || '—' },
+                    { label: 'Contract End', value: client.contractEnd ? protoDateShort(client.contractEnd) : '—' },
+                    { label: 'Links', value: client.links?.length ? String(client.links.length) : '—' },
+                  ].map(detail => (
+                    <div key={detail.label} className="proto-detail-cell">
+                      <div className="proto-eyebrow">{detail.label}</div>
+                      <div style={{ fontSize: 12.5, color: 'var(--text)', marginTop: 4 }}>{detail.value}</div>
+                    </div>
+                  ))}
                 </div>
-              ))}
+              </div>
             </div>
-          )}
-        </div>
+
+            <div className="proto-sidebar-stack">
+              <div className="card proto-list-card">
+                <div className="proto-list-card-head">
+                  <div className="proto-section-title">Active Projects</div>
+                  <button type="button" className="proto-btn proto-btn-primary" onClick={() => navigate('/projects')}>Open Projects</button>
+                </div>
+                <div>
+                  {clientProjects.length === 0 ? (
+                    <div className="proto-empty" style={{ padding: 24 }}>No projects yet</div>
+                  ) : clientProjects.map(project => (
+                    <button key={project.id} type="button" className="proto-list-row proto-plain-button" onClick={() => navigate(`/projects/${project.id}`)}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                        <span className="proto-mono" style={{ fontSize: 9.5, padding: '2px 6px', borderRadius: 3, background: 'var(--surf2)', color: 'var(--gold)', fontWeight: 700 }}>{project.name.slice(0, 4).toUpperCase()}</span>
+                        <span style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--text)' }}>{project.name}</span>
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10.5, color: 'var(--muted)' }}>
+                        <span>{(project.employeeIds || []).length} people · {project.status || 'planning'}</span>
+                        <span className="proto-mono">{project.rate ? `${protoCurrency(Number(project.rate))}/h` : '—'}</span>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="card" style={{ padding: 18 }}>
+                <div className="proto-section-title" style={{ marginBottom: 12 }}>Recent Activity</div>
+                <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+                  <input className="form-input" value={activityNote} onChange={(event) => setActivityNote(event.target.value)} placeholder="Add activity note…" />
+                  <button type="button" className="proto-btn" onClick={addActivity}>Add</button>
+                </div>
+                <div className="proto-activity-list">
+                  {activityLog.slice(0, 8).map(entry => (
+                    <div key={entry.id} className="proto-activity-item">
+                      <span className="proto-activity-icon"><ProtoIcon name="mail" size={11} /></span>
+                      <div>
+                        <div style={{ fontSize: 11.5, color: 'var(--text-soft)' }}>{entry.note}</div>
+                        <div className="proto-mono" style={{ fontSize: 10, color: 'var(--dim)', marginTop: 3 }}>{new Date(entry.createdAt).toLocaleString()}</div>
+                      </div>
+                      <button type="button" className="proto-btn proto-btn-danger" style={{ height: 28 }} onClick={() => deleteActivity(entry.id)}>Delete</button>
+                    </div>
+                  ))}
+                  {activityLog.length === 0 ? <div style={{ fontSize: 12, color: 'var(--muted)' }}>No activity logged yet.</div> : null}
+                </div>
+              </div>
+
+              {outstanding > 0 ? (
+                <div className="card" style={{ padding: 18 }}>
+                  <div className="proto-section-title" style={{ marginBottom: 8 }}>Outstanding Balance</div>
+                  <div className="proto-mono" style={{ fontSize: 26, fontWeight: 700, color: '#f87171' }}>{protoCurrency(outstanding)}</div>
+                  <div style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 8 }}>Send a reminder to nudge collection from the profile directly.</div>
+                  <button type="button" className="proto-btn" style={{ marginTop: 12 }} onClick={() => void sendReminder()}><ProtoIcon name="send" size={12} /> Send Reminder</button>
+                </div>
+              ) : null}
+            </div>
+          </div>
+        )}
       </div>
 
       {confirmDelete && (
-        <div className="modal-overlay" onClick={() => setConfirmDelete(false)}>
-          <div className="confirm-dialog" onClick={e => e.stopPropagation()}>
-            <div className="confirm-title">Delete {clientNN.name}?</div>
-            <div className="confirm-body">This cannot be undone.</div>
-            <div className="confirm-actions">
-              <button className="btn-ghost" onClick={() => setConfirmDelete(false)}>Cancel</button>
-              <button className="btn-danger" onClick={handleDelete}>Delete</button>
+        <div className="proto-modal-scrim" onClick={() => setConfirmDelete(false)}>
+          <div className="proto-modal-panel" style={{ width: 420 }} onClick={(event) => event.stopPropagation()}>
+            <div className="proto-modal-head">
+              <div>
+                <div className="proto-modal-title">Delete client?</div>
+                <div className="proto-modal-subtitle">This removes the client profile from the workspace.</div>
+              </div>
+            </div>
+            <div className="proto-modal-body" style={{ fontSize: 13, color: 'var(--text-soft)', lineHeight: 1.6 }}>
+              This action cannot be undone.
+            </div>
+            <div className="proto-modal-foot">
+              <button type="button" className="proto-btn" onClick={() => setConfirmDelete(false)}>Cancel</button>
+              <button type="button" className="proto-btn proto-btn-danger" onClick={handleDelete}>Delete</button>
             </div>
           </div>
         </div>

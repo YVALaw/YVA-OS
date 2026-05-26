@@ -12,6 +12,7 @@ import { initiateGmailAuth, disconnectGmail, isGmailConnected, sendEmail } from 
 import { importTimesheetCsv } from '../services/timesheetAutomation'
 import { useRole } from '../context/RoleContext'
 import { can, ROLE_LABELS, ROLE_OPTIONS } from '../lib/roles'
+import { ProtoIcon, type ProtoIconName } from '../components/PrototypeKit'
 
 type InfoDolarBhdResponse = {
   provider: string
@@ -59,19 +60,69 @@ function formatMinuteOption(minute: number): string {
   return String(minute).padStart(2, '0')
 }
 
-type SettingsTab = 'company' | 'email' | 'integrations' | 'currency' | 'notifications' | 'data' | 'access'
+type SettingsTab = 'company' | 'billing' | 'email' | 'integrations' | 'currency' | 'notifications' | 'data' | 'api' | 'access'
 
-const SHOW_TIMESHEET_IMPORT_UI = false
+const SHOW_TIMESHEET_IMPORT_UI = true
 
-const ALL_TABS: { id: SettingsTab; label: string; adminOnly?: boolean }[] = [
-  { id: 'company',       label: 'Company' },
-  { id: 'email',         label: 'Email' },
-  { id: 'integrations',  label: 'Integrations' },
-  { id: 'currency',      label: 'Currency' },
-  { id: 'notifications', label: 'Notifications' },
-  { id: 'data',          label: 'Data' },
-  { id: 'access',        label: 'Team Access', adminOnly: true },
+const ALL_TABS: { id: SettingsTab; label: string; icon: ProtoIconName; adminOnly?: boolean }[] = [
+  { id: 'company',       label: 'Company',        icon: 'building' },
+  { id: 'billing',       label: 'Billing',        icon: 'invoice' },
+  { id: 'email',         label: 'Email',          icon: 'mail' },
+  { id: 'integrations',  label: 'Integrations',   icon: 'zap' },
+  { id: 'currency',      label: 'Currency',       icon: 'expense' },
+  { id: 'notifications', label: 'Notifications',  icon: 'bell' },
+  { id: 'data',          label: 'Data',           icon: 'database' },
+  { id: 'api',           label: 'API & Webhooks', icon: 'shield' },
+  { id: 'access',        label: 'Team Access',    icon: 'team', adminOnly: true },
 ]
+
+const TAB_META: Record<SettingsTab, { eyebrow: string; subtitle: string; comingSoon?: boolean }> = {
+  company: {
+    eyebrow: 'Workspace profile',
+    subtitle: 'Business identity and contact details shown across invoices, email, and client-facing exports.',
+  },
+  billing: {
+    eyebrow: 'Billing defaults',
+    subtitle: 'Invoice sequencing, monthly targets, and reminder behaviors that shape the billing pipeline.',
+  },
+  email: {
+    eyebrow: 'Outbound messaging',
+    subtitle: 'Templates and sender details used when invoices, reminders, and statements leave the app.',
+  },
+  integrations: {
+    eyebrow: 'Connected services',
+    subtitle: 'Gmail auth and operational links that support your live workflows today.',
+  },
+  currency: {
+    eyebrow: 'Exchange controls',
+    subtitle: 'Manage the USD to DOP rate used in pricing, reporting, and invoice calculations.',
+  },
+  notifications: {
+    eyebrow: 'Ops alerts',
+    subtitle: 'Configure browser and timesheet reminder behavior so draft billing does not get missed.',
+  },
+  data: {
+    eyebrow: 'Data operations',
+    subtitle: 'Import, export, audit, and restore the workspace without changing your deployment setup.',
+  },
+  api: {
+    eyebrow: 'Expansion roadmap',
+    subtitle: 'Future developer surfaces stay visible here so API and webhook work remains in the product map.',
+    comingSoon: true,
+  },
+  access: {
+    eyebrow: 'Permissions',
+    subtitle: 'Role assignment and account administration for the live workspace.',
+  },
+}
+
+function ComingSoonPill() {
+  return (
+    <span className="badge badge-yellow" style={{ fontSize: 10 }}>
+      Coming Soon
+    </span>
+  )
+}
 
 export default function SettingsPage() {
   const { role: currentRole, userId: currentUserId, loading: roleLoading } = useRole()
@@ -404,36 +455,58 @@ export default function SettingsPage() {
     })()
   }
 
-  return (
-    <div className="page-wrap" style={{ maxWidth: 760 }}>
-      <div className="page-header">
-        <div className="page-header-left">
-          <h1 className="page-title">Settings</h1>
-          <p className="page-sub">App preferences, integrations &amp; data management</p>
-        </div>
-        <div className="page-header-right">
-          <button
-            className="btn-ghost btn-sm"
-            style={{ color: '#f87171' }}
-            onClick={() => void supabase.auth.signOut()}
-          >
-            Sign Out
-          </button>
-        </div>
-      </div>
+  const activeTabMeta = TAB_META[activeTab]
+  const activeWorkspaceSignals = [
+    gmailConnected ? 'Gmail connected' : 'Gmail pending',
+    settings.timesheetAutomationEnabled ? 'Timesheet import live' : 'Timesheet import off',
+    can.manageRoles(currentRole) ? 'Team access enabled' : 'Role-limited view',
+  ]
 
-      {/* Tab nav */}
-      <div className="settings-tabs">
-        {TABS.map(t => (
-          <button
-            key={t.id}
-            className={`settings-tab${activeTab === t.id ? ' settings-tab-active' : ''}`}
-            onClick={() => setActiveTab(t.id)}
-          >
-            {t.label}
-          </button>
-        ))}
-      </div>
+  return (
+    <div className="settings-prototype-page">
+      <div className="settings-shell">
+        <aside className="settings-sidebar">
+          <div className="settings-sidebar-head">
+            <div className="settings-sidebar-label">Workspace</div>
+            <div className="settings-sidebar-title">Settings</div>
+          </div>
+          <div className="settings-sidebar-list">
+            {TABS.map(t => (
+              <button
+                key={t.id}
+                className={`settings-sidebar-tab${activeTab === t.id ? ' active' : ''}`}
+                onClick={() => setActiveTab(t.id)}
+              >
+                <span className="settings-sidebar-tab-icon">
+                  <ProtoIcon name={t.icon} size={14} />
+                </span>
+                <span className="settings-sidebar-tab-main">
+                  <span className="settings-sidebar-tab-label">{t.label}</span>
+                  <span className="settings-sidebar-tab-sub">{TAB_META[t.id].eyebrow}</span>
+                </span>
+                {TAB_META[t.id].comingSoon ? <ComingSoonPill /> : null}
+              </button>
+            ))}
+          </div>
+          <div className="settings-sidebar-foot">
+            {activeWorkspaceSignals.join(' · ')}
+            <button className="settings-signout" onClick={() => void supabase.auth.signOut()}>
+              Sign Out
+            </button>
+          </div>
+        </aside>
+
+        <div className="settings-pane">
+          <div className="settings-pane-header">
+            <div className="settings-pane-copy">
+              <span className="page-hero-eyebrow">{activeTabMeta.eyebrow}</span>
+              <h2 className="page-title" style={{ fontSize: 20 }}>{ALL_TABS.find(tab => tab.id === activeTab)?.label || 'Settings'}</h2>
+              <p>{activeTabMeta.subtitle}</p>
+            </div>
+            {activeTabMeta.comingSoon ? <ComingSoonPill /> : null}
+          </div>
+
+          <div className="settings-pane-body">
 
       {/* ── Company ── */}
       {activeTab === 'company' && (
@@ -515,6 +588,47 @@ export default function SettingsPage() {
                 placeholder="10000"
               />
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Billing ── */}
+      {activeTab === 'billing' && (
+        <div className="settings-section">
+          <div className="settings-section-title">Billing Operations</div>
+
+          <div className="settings-row">
+            <div className="settings-row-info">
+              <div className="settings-row-label">Invoice Sequencing</div>
+              <div className="settings-row-sub">
+                Invoice numbering is already active in the live app. Quick invoices use the shared invoice counter, while project-driven invoices use a project-derived prefix and sequence.
+              </div>
+            </div>
+            <span className="badge badge-green" style={{ fontSize: 10 }}>
+              Live
+            </span>
+          </div>
+
+          <div className="settings-row">
+            <div className="settings-row-info">
+              <div className="settings-row-label">Current Format</div>
+              <div className="settings-row-sub">
+                Examples: <strong>INV-001</strong> for quick invoices and project sequences like <strong>FNPR0019</strong> for project-linked billing.
+              </div>
+            </div>
+            <button className="btn-ghost btn-sm" disabled>
+              Auto-managed
+            </button>
+          </div>
+
+          <div className="settings-row" style={{ opacity: 0.7 }}>
+            <div className="settings-row-info">
+              <div className="settings-row-label">Custom Invoice Number Format</div>
+              <div className="settings-row-sub">
+                Planned for a later phase. This will let us define editable numbering rules without changing the current Supabase or Netlify wiring now.
+              </div>
+            </div>
+            <ComingSoonPill />
           </div>
         </div>
       )}
@@ -1074,6 +1188,46 @@ export default function SettingsPage() {
         </>
       )}
 
+      {/* ── API & Webhooks ── */}
+      {activeTab === 'api' && (
+        <div className="settings-section">
+          <div className="settings-section-title">API &amp; Webhooks</div>
+          <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 16, lineHeight: 1.7 }}>
+            This section stays visible so the expansion roadmap remains in the product surface, but no provisioning or webhook delivery is being wired yet in this phase.
+          </div>
+
+          <div className="settings-row" style={{ opacity: 0.7 }}>
+            <div className="settings-row-info">
+              <div className="settings-row-label">API Keys</div>
+              <div className="settings-row-sub">
+                Generate and rotate workspace keys for future integrations and automation tooling.
+              </div>
+            </div>
+            <ComingSoonPill />
+          </div>
+
+          <div className="settings-row" style={{ opacity: 0.7 }}>
+            <div className="settings-row-info">
+              <div className="settings-row-label">Webhook Endpoints</div>
+              <div className="settings-row-sub">
+                Push invoice, payment, recruiting, and operational events to external systems once the webhook layer is built.
+              </div>
+            </div>
+            <ComingSoonPill />
+          </div>
+
+          <div className="settings-row" style={{ opacity: 0.7 }}>
+            <div className="settings-row-info">
+              <div className="settings-row-label">Developer Audit Log</div>
+              <div className="settings-row-sub">
+                View key creation, webhook delivery history, and integration activity in a future release.
+              </div>
+            </div>
+            <ComingSoonPill />
+          </div>
+        </div>
+      )}
+
       {/* ── Team Access ── */}
       {activeTab === 'access' && can.manageRoles(currentRole) && (
         <div className="settings-section">
@@ -1146,6 +1300,9 @@ export default function SettingsPage() {
           )}
         </div>
       )}
+          </div>
+        </div>
+      </div>
 
       {confirmClear && (
         <div className="modal-overlay" onClick={() => setConfirmClear(false)}>

@@ -7,6 +7,7 @@ import { sendEmail, type SendEmailResult } from '../services/gmail'
 import { formatMoney, fmtHoursHM } from '../utils/money'
 import { htmlToPdfAttachment } from '../utils/pdf'
 import { employeePremiumConfig, normalizeClockInput, payrollFromInvoiceItem } from '../utils/payroll'
+import { Avatar, ProtoIcon, StatusChip, colorFromString, protoCurrency } from '../components/PrototypeKit'
 
 function uid() { return crypto.randomUUID() }
 
@@ -477,55 +478,72 @@ export default function EmployeeProfilePage() {
     })
   }
 
-  const color = avatarColor(empNN.name)
+  const tenure = empNN.startYear ? Math.max(0, new Date().getFullYear() - Number(empNN.startYear)) : null
 
   return (
-    <div className="page-wrap" style={{ maxWidth: 900 }}>
-      {/* Back */}
-      <button className="btn-ghost btn-sm" style={{ marginBottom: 16 }} onClick={() => navigate('/employees')}>
-        ← Back to Team
-      </button>
-
-      {/* Profile header */}
+    <div className="proto-page">
       <input ref={photoInputRef} type="file" accept="image/*" style={{ display: 'none' }}
         onChange={e => { const f = e.target.files?.[0]; if (f) handlePhotoUpload(f); e.target.value = '' }} />
 
-      <div className="profile-header">
-        <div className="profile-header-left">
-          <div className="avatar-wrap" title="Click to change photo" onClick={() => photoInputRef.current?.click()}>
-            {photoUrl
-              ? <img className="avatar-photo" src={photoUrl} alt={empNN.name} />
-              : <div className="avatar profile-avatar" style={{ background: color }}>{initials(empNN.name)}</div>
-            }
-            <span className="avatar-cam">📷</span>
-          </div>
-          <div>
-            {editing
-              ? <input className="form-input profile-name-input" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} />
-              : <h1 className="profile-name">{empNN.name}</h1>
-            }
-            <div className="profile-sub">
-              {empNN.employeeNumber && <span style={{ color: 'var(--gold)', fontWeight: 700 }}>{empNN.employeeNumber}</span>}
-              {empNN.employeeNumber && empNN.role && <span style={{ color: 'var(--muted)' }}> · </span>}
-              {empNN.role && <span style={{ color: 'var(--muted)' }}>{empNN.role}</span>}
+      <div className="proto-profile-head">
+        <button type="button" className="proto-back-link proto-plain-button" onClick={() => navigate('/employees')}>
+          <ProtoIcon name="chevronL" size={12} />
+          All Team Members
+        </button>
+        <div className="proto-profile-row">
+          <div className="proto-profile-main">
+            <button type="button" className="proto-plain-button" title="Change photo" onClick={() => photoInputRef.current?.click()}>
+              {photoUrl
+                ? <img src={photoUrl} alt={empNN.name} style={{ width: 64, height: 64, borderRadius: 999, objectFit: 'cover', border: '1px solid rgba(255,255,255,0.08)' }} />
+                : <Avatar name={empNN.name} color={colorFromString(empNN.name)} size="lg" />}
+            </button>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              {editing
+                ? <input className="form-input" style={{ maxWidth: 320, fontSize: 24, fontWeight: 800 }} value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} />
+                : <h1 className="proto-profile-title">{empNN.name}</h1>}
+              <div className="proto-profile-meta">
+                {empNN.employeeNumber ? <span className="proto-mono" style={{ color: 'var(--gold)', fontWeight: 700 }}>{empNN.employeeNumber}</span> : null}
+                {empNN.role ? <span>{empNN.role}</span> : null}
+                {empNN.location ? <span>{empNN.location}</span> : null}
+                {empNN.email ? <span>{empNN.email}</span> : null}
+                {tenure != null ? <span>{tenure} year{tenure === 1 ? '' : 's'} at YVA</span> : null}
+                {payRate > 0 ? <span>{protoCurrency(payRate)}/hr base</span> : null}
+              </div>
             </div>
           </div>
-        </div>
-        <div className="profile-header-actions">
-          {editing ? (
-            <>
-              <button className="btn-primary btn-sm" onClick={handleSave} disabled={!form.name.trim()}>Save Changes</button>
-              <button className="btn-ghost btn-sm" onClick={handleCancel}>Cancel</button>
-            </>
-          ) : (
-            <>
-              <span className={`badge ${statusBadge(empNN.status)}`} style={{ fontSize: 13 }}>{empNN.status || 'Active'}</span>
-              <button className="btn-ghost btn-sm" onClick={() => setEditing(true)}>Edit Profile</button>
-              <button className="btn-danger btn-sm" onClick={() => setConfirmDelete(true)}>Delete</button>
-            </>
-          )}
+          <div className="proto-profile-actions">
+            {editing ? (
+              <>
+                <button className="proto-btn proto-btn-primary" onClick={handleSave} disabled={!form.name.trim()}>Save Changes</button>
+                <button className="proto-btn" onClick={handleCancel}>Cancel</button>
+              </>
+            ) : (
+              <>
+                <StatusChip status={(empNN.status || 'active').toLowerCase()} filled />
+                <button className="proto-btn" onClick={() => setEditing(true)}><ProtoIcon name="edit" size={13} /> Edit</button>
+                <button className="proto-btn proto-btn-danger" onClick={() => setConfirmDelete(true)}><ProtoIcon name="trash" size={13} /> Delete</button>
+              </>
+            )}
+          </div>
         </div>
       </div>
+
+      <div className="proto-page-body">
+        <div className="proto-kpi-grid-4" style={{ marginBottom: 14 }}>
+          {[
+            { label: 'Statements', value: String(empInvoices.length), sub: `${pendingCount} pending`, color: '#22d3ee' },
+            { label: 'Hours · lifetime', value: `${Math.round(totalHours)}h`, sub: `${fmtHoursHM(summary.premiumHours)} premium`, color: '#60a5fa' },
+            { label: 'Paid · lifetime', value: payRate > 0 ? protoCurrency(totalPaid, 2) : '—', sub: `${paidCount} paid`, color: '#22c55e' },
+            { label: 'Pending', value: payRate > 0 ? protoCurrency(totalEarned - totalPaid, 2) : '—', sub: `${pendingCount} statements`, color: '#fb923c' },
+          ].map(metric => (
+            <div key={metric.label} className="proto-kpi">
+              <div className="proto-kpi-accent" style={{ background: metric.color }} />
+              <div className="proto-kpi-label">{metric.label}</div>
+              <div className="proto-kpi-value" style={{ marginTop: 8 }}>{metric.value}</div>
+              <div style={{ fontSize: 10.5, color: 'var(--muted)', marginTop: 6 }}>{metric.sub}</div>
+            </div>
+          ))}
+        </div>
 
       <div className="profile-grid">
         {/* Left column */}
@@ -861,6 +879,7 @@ export default function EmployeeProfilePage() {
             </div>
           )}
         </div>
+      </div>
       </div>
 
       {/* Mark as Paid modal */}

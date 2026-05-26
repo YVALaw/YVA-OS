@@ -1,13 +1,28 @@
-import { useEffect, useState, useRef } from 'react'
+import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react'
 import { useNavigate } from 'react-router-dom'
 import type { Attachment, Candidate, CandidateStage, Employee } from '../data/types'
 import {
-  loadCandidates, saveCandidates,
-  loadEmployees, saveEmployees,
-  loadEmployeeCounter, saveEmployeeCounter,
+  loadCandidates,
+  loadEmployeeCounter,
+  loadEmployees,
+  saveCandidates,
+  saveEmployeeCounter,
+  saveEmployees,
 } from '../services/storage'
 import { useRole } from '../context/RoleContext'
 import { can } from '../lib/roles'
+import {
+  Avatar,
+  Drawer,
+  KanbanColumn,
+  KanbanItem,
+  Modal,
+  ProtoIcon,
+  SearchField,
+  colorFromString,
+  protoDateShort,
+  useKanbanDnd,
+} from '../components/PrototypeKit'
 
 const ONBOARDING_TASKS = [
   'Set up work email address',
@@ -20,13 +35,13 @@ const ONBOARDING_TASKS = [
   'Add to team Slack / communication channel',
 ]
 
-const STAGES: { key: CandidateStage; label: string }[] = [
-  { key: 'applied', label: 'Applied' },
-  { key: 'screening', label: 'Screening' },
-  { key: 'interview', label: 'Interview' },
-  { key: 'offer', label: 'Offer' },
-  { key: 'hired', label: 'Hired' },
-  { key: 'rejected', label: 'Rejected' },
+const STAGES: { key: CandidateStage; label: string; color: string }[] = [
+  { key: 'applied', label: 'Applied', color: '#3b82f6' },
+  { key: 'screening', label: 'Screening', color: '#a855f7' },
+  { key: 'interview', label: 'Interview', color: '#f97316' },
+  { key: 'offer', label: 'Offer', color: '#22d3ee' },
+  { key: 'hired', label: 'Hired', color: '#22c55e' },
+  { key: 'rejected', label: 'Rejected', color: '#64748b' },
 ]
 
 function uid() {
@@ -90,37 +105,23 @@ export default function CandidatesPage() {
   const hiredOnly = can.viewHiredOnly(role)
   const [candidates, setCandidates] = useState<Candidate[]>([])
   const [employees, setEmployees] = useState<Employee[]>([])
-  useEffect(() => {
-    loadCandidates().then(all => setCandidates(hiredOnly ? all.filter(c => c.stage === 'hired') : all))
-    loadEmployees().then(setEmployees)
-  }, [hiredOnly])
+  const [search, setSearch] = useState('')
   const [modal, setModal] = useState<null | 'add'>(null)
   const [form, setForm] = useState<Omit<Candidate, 'id' | 'updatedAt'>>(EMPTY_FORM)
+  const [attachments, setAttachments] = useState<Attachment[]>([])
+  const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(null)
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
-  const [onboardingCandidate, setOnboardingCandidate] = useState<Candidate | null>(null)
   const [hireCandidate, setHireCandidate] = useState<Candidate | null>(null)
   const [employeeForm, setEmployeeForm] = useState<EmployeeFormData>(EMPTY_EMPLOYEE_FORM)
   const [hireAttachments, setHireAttachments] = useState<Attachment[]>([])
   const [checkedTasks, setCheckedTasks] = useState<Set<number>>(new Set())
-  const dragId = useRef<string | null>(null)
-  const dragSuppressRef = useRef<string | null>(null)
-  const [attachments, setAttachments] = useState<Attachment[]>([])
   const fileInputRef = useRef<HTMLInputElement>(null)
   const hireFileInputRef = useRef<HTMLInputElement>(null)
 
-  function handleFileUpload(file: File) {
-    const MAX = 5 * 1024 * 1024
-    if (file.size > MAX) { alert('File too large (max 5 MB). For videos, paste a link in Resume URL instead.'); return }
-    const reader = new FileReader()
-    reader.onload = ev => {
-      const att: Attachment = {
-        id: uid(), name: file.name, mimeType: file.type,
-        size: file.size, dataUrl: ev.target?.result as string, uploadedAt: Date.now(),
-      }
-      setAttachments(prev => [...prev, att])
-    }
-    reader.readAsDataURL(file)
-  }
+  useEffect(() => {
+    loadCandidates().then(all => setCandidates(hiredOnly ? all.filter(candidate => candidate.stage === 'hired') : all))
+    loadEmployees().then(setEmployees)
+  }, [hiredOnly])
 
   function persist(next: Candidate[]) {
     setCandidates(next)
@@ -140,14 +141,14 @@ export default function CandidatesPage() {
 
   function saveForm() {
     if (!form.name.trim()) return
-    const next = [...candidates, { ...form, id: uid(), updatedAt: Date.now(), attachments }]
-    persist(next)
+    persist([...candidates, { ...form, id: uid(), updatedAt: Date.now(), attachments }])
     setModal(null)
   }
 
   function deleteCandidate(id: string) {
-    persist(candidates.filter((c) => c.id !== id))
+    persist(candidates.filter(candidate => candidate.id !== id))
     setConfirmDelete(null)
+    if (selectedCandidateId === id) setSelectedCandidateId(null)
   }
 
   function buildEmployeeForm(candidate: Candidate): EmployeeFormData {
@@ -178,10 +179,9 @@ export default function CandidatesPage() {
 
   function startHire(candidate: Candidate) {
     if (employeeAlreadyExists(candidate)) {
-      const next: Candidate[] = candidates.filter(c => c.id !== candidate.id)
+      const next = candidates.filter(item => item.id !== candidate.id)
       persist(next)
-      setOnboardingCandidate({ ...candidate, stage: 'hired', updatedAt: Date.now() })
-      setCheckedTasks(new Set())
+      setSelectedCandidateId(candidate.id)
       return
     }
     setHireCandidate(candidate)
@@ -190,13 +190,65 @@ export default function CandidatesPage() {
   }
 
   function moveStage(id: string, stage: CandidateStage) {
-    const candidate = candidates.find(c => c.id === id)
+    const candidate = candidates.find(item => item.id === id)
     if (!candidate) return
     if (stage === 'hired') {
-      startHire(candidate)
+      persist(candidates.map(item => (item.id === id ? { ...item, stage, updatedAt: Date.now() } : item)))
       return
     }
-    persist(candidates.map((c) => (c.id === id ? { ...c, stage, updatedAt: Date.now() } : c)))
+    persist(candidates.map(item => (item.id === id ? { ...item, stage, updatedAt: Date.now() } : item)))
+  }
+
+  function openCandidate(candidateId: string) {
+    setSelectedCandidateId(candidateId)
+    setCheckedTasks(new Set())
+  }
+
+  function onDragStart(id: string) {
+    // handled by useKanbanDnd
+    return id
+  }
+
+  function handleFileUpload(file: File) {
+    const MAX = 5 * 1024 * 1024
+    if (file.size > MAX) {
+      alert('File too large (max 5 MB). For videos, paste a link in Resume URL instead.')
+      return
+    }
+    const reader = new FileReader()
+    reader.onload = event => {
+      const att: Attachment = {
+        id: uid(),
+        name: file.name,
+        mimeType: file.type,
+        size: file.size,
+        dataUrl: event.target?.result as string,
+        uploadedAt: Date.now(),
+      }
+      setAttachments(prev => [...prev, att])
+    }
+    reader.readAsDataURL(file)
+  }
+
+  function handleHireFileUpload(file: File) {
+    const MAX = 5 * 1024 * 1024
+    if (file.size > MAX) {
+      alert('File too large (max 5 MB). For videos, paste a link in Resume URL instead.')
+      return
+    }
+    const reader = new FileReader()
+    reader.onload = event => {
+      const att: Attachment = {
+        id: uid(),
+        name: file.name,
+        mimeType: file.type,
+        size: file.size,
+        dataUrl: event.target?.result as string,
+        uploadedAt: Date.now(),
+      }
+      setHireAttachments(prev => [...prev, att])
+    }
+    reader.readAsDataURL(file)
   }
 
   function closeHireModal() {
@@ -207,18 +259,6 @@ export default function CandidatesPage() {
 
   async function confirmHire() {
     if (!hireCandidate || !employeeForm.name.trim()) return
-
-    const hiredCandidate: Candidate = {
-      ...hireCandidate,
-      name: employeeForm.name.trim(),
-      email: employeeForm.email.trim() || undefined,
-      phone: employeeForm.phone.trim() || undefined,
-      role: employeeForm.role.trim() || undefined,
-      notes: employeeForm.notes.trim() || undefined,
-      stage: 'hired',
-      attachments: hireAttachments,
-      updatedAt: Date.now(),
-    }
 
     const employeeNumber = await generateEmployeeNumber()
     const nextEmployee: Employee = {
@@ -240,18 +280,13 @@ export default function CandidatesPage() {
 
     const nextCandidates = candidates.filter(candidate => candidate.id !== hireCandidate.id)
     const nextEmployees = [...employees, nextEmployee]
-
     setCandidates(nextCandidates)
     setEmployees(nextEmployees)
 
     try {
-      await Promise.all([
-        saveCandidates(nextCandidates),
-        saveEmployees(nextEmployees),
-      ])
+      await Promise.all([saveCandidates(nextCandidates), saveEmployees(nextEmployees)])
       closeHireModal()
-      setOnboardingCandidate(hiredCandidate)
-      setCheckedTasks(new Set())
+      setSelectedCandidateId(null)
     } catch (error) {
       setCandidates(candidates)
       setEmployees(employees)
@@ -259,454 +294,480 @@ export default function CandidatesPage() {
     }
   }
 
-  function handleHireFileUpload(file: File) {
-    const MAX = 5 * 1024 * 1024
-    if (file.size > MAX) { alert('File too large (max 5 MB). For videos, paste a link in Resume URL instead.'); return }
-    const reader = new FileReader()
-    reader.onload = ev => {
-      const att: Attachment = {
-        id: uid(), name: file.name, mimeType: file.type,
-        size: file.size, dataUrl: ev.target?.result as string, uploadedAt: Date.now(),
-      }
-      setHireAttachments(prev => [...prev, att])
-    }
-    reader.readAsDataURL(file)
-  }
+  const query = search.trim().toLowerCase()
+  const filtered = candidates.filter(candidate => {
+    if (!query) return true
+    return [
+      candidate.name,
+      candidate.role || '',
+      candidate.source || '',
+      candidate.email || '',
+    ].join(' ').toLowerCase().includes(query)
+  })
 
-  // drag and drop
-  function onDragStart(id: string) {
-    dragId.current = id
-    dragSuppressRef.current = id
+  const byStage: Record<CandidateStage, Candidate[]> = {
+    applied: [],
+    screening: [],
+    interview: [],
+    offer: [],
+    hired: [],
+    rejected: [],
   }
+  filtered.forEach(candidate => byStage[candidate.stage].push(candidate))
 
-  function onDrop(stage: CandidateStage) {
-    if (dragId.current) {
-      moveStage(dragId.current, stage)
-      dragId.current = null
-    }
-  }
-
-  const byStage = (stage: CandidateStage) => candidates.filter((c) => c.stage === stage)
-  const offerPipelineCount = candidates.filter((candidate) => candidate.stage === 'interview' || candidate.stage === 'offer').length
-  const hiredCount = candidates.filter((candidate) => candidate.stage === 'hired').length
-  const rejectedCount = candidates.filter((candidate) => candidate.stage === 'rejected').length
+  const dnd = useKanbanDnd<Candidate>(candidates, setCandidates, (candidate, newStage) => ({ ...candidate, stage: newStage as CandidateStage, updatedAt: Date.now() }))
+  const selectedCandidate = selectedCandidateId ? candidates.find(candidate => candidate.id === selectedCandidateId) || null : null
+  const pipelineCount = candidates.filter(candidate => !['hired', 'rejected'].includes(candidate.stage)).length
+  const offerCount = candidates.filter(candidate => candidate.stage === 'offer').length
+  const hiredCount = candidates.filter(candidate => candidate.stage === 'hired').length
+  const rejectedCount = candidates.filter(candidate => candidate.stage === 'rejected').length
 
   if (hiredOnly) {
     return (
-      <div className="page-wrap">
-        <div className="page-header">
-          <div className="page-header-left">
-            <h1 className="page-title">Hired Staff</h1>
-            <p className="page-sub">Candidates who have been hired — for payroll reference</p>
+      <div className="proto-page">
+        <div className="proto-page-head">
+          <div className="proto-page-head-row">
+            <div>
+              <div className="proto-eyebrow">Grow · Recruiting</div>
+              <h1 className="page-title">Hired Staff</h1>
+              <p className="page-sub">Candidates who were hired and remain available for payroll reference.</p>
+            </div>
           </div>
         </div>
-        <div className="card-grid">
-          {candidates.map(c => (
-            <div key={c.id} className="entity-card" style={{ cursor: 'pointer' }} onClick={() => navigate('/candidates/' + c.id)}>
-              <div className="card-avatar avatar" style={{ background: '#22c55e', fontWeight: 800 }}>
-                {c.name.split(' ').map((w: string) => w[0]).slice(0, 2).join('').toUpperCase()}
+        <div className="proto-page-body">
+          <div className="proto-kpi-grid-4" style={{ marginBottom: 16 }}>
+            {[
+              { label: 'Visible Hires', value: candidates.length, color: 'var(--emerald)' },
+              { label: 'Open pipeline', value: pipelineCount, color: 'var(--blue)' },
+              { label: 'Offers', value: offerCount, color: 'var(--gold)' },
+              { label: 'Rejected', value: rejectedCount, color: 'var(--dim)' },
+            ].map(card => (
+              <div key={card.label} className="proto-kpi">
+                <div className="proto-kpi-accent" style={{ background: card.color }} />
+                <div className="proto-kpi-label">{card.label}</div>
+                <div className="proto-kpi-value">{card.value}</div>
               </div>
-              <div className="card-info">
-                <div className="card-name">{c.name}</div>
-                {c.role && <div className="card-meta">{c.role}</div>}
-                {c.email && <div className="card-meta">{c.email}</div>}
-              </div>
-            </div>
-          ))}
-          {candidates.length === 0 && (
-            <div style={{ color: 'var(--muted)', fontSize: 13, padding: 20 }}>No hired candidates yet.</div>
-          )}
+            ))}
+          </div>
+
+          <div className="card-grid">
+            {candidates.map(candidate => (
+              <button key={candidate.id} type="button" className="proto-plain-button" onClick={() => openCandidate(candidate.id)} style={{ justifyContent: 'flex-start', padding: 14 }}>
+                <Avatar name={candidate.name} color={colorFromString(candidate.name)} size="md" />
+                <div style={{ textAlign: 'left' }}>
+                  <div style={{ fontSize: 13, fontWeight: 700 }}>{candidate.name}</div>
+                  <div style={{ fontSize: 11, color: 'var(--muted)' }}>{candidate.role || 'No role set'}</div>
+                </div>
+              </button>
+            ))}
+          </div>
         </div>
+
+        <Drawer open={Boolean(selectedCandidate)} onClose={() => setSelectedCandidateId(null)} width={560}>
+          {selectedCandidate && <CandidateDrawer candidate={selectedCandidate} onClose={() => setSelectedCandidateId(null)} onAdvance={moveStage} onHire={startHire} onDelete={() => setConfirmDelete(selectedCandidate.id)} checkedTasks={checkedTasks} setCheckedTasks={setCheckedTasks} />}
+        </Drawer>
       </div>
     )
   }
 
   return (
-    <div className="page-wrap">
-      <div className="page-header">
-        <div>
-          <h1 className="page-title">Candidates</h1>
-          <p className="page-sub">Hiring pipeline — drag cards between stages</p>
+    <div className="proto-page">
+      <div className="proto-page-head">
+        <div className="proto-page-head-row" style={{ alignItems: 'flex-start' }}>
+          <div>
+            <div className="proto-eyebrow">Grow · Recruiting</div>
+            <h1 className="page-title">Candidates</h1>
+            <p className="page-sub">
+              <strong>{pipelineCount}</strong> in pipeline · <strong>{offerCount}</strong> in offer · <strong>{hiredCount}</strong> hired this month
+            </p>
+          </div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+            <button type="button" className="proto-btn proto-btn-ghost" onClick={() => fileInputRef.current?.click()}>
+              <ProtoIcon name="download" size={13} />
+              Import CSV
+            </button>
+            <button type="button" className="proto-btn proto-btn-primary" onClick={openAdd}>
+              <ProtoIcon name="plus" size={13} />
+              Add Candidate
+            </button>
+            <input ref={fileInputRef} type="file" accept="image/*,.pdf,audio/*,video/*,.mp4,.mov,.avi,.webm,.mkv,.m4v,.wmv" style={{ display: 'none' }} onChange={e => { const f = e.target.files?.[0]; if (f) handleFileUpload(f); e.target.value = '' }} />
+          </div>
         </div>
-        <button className="btn-primary" onClick={openAdd}>+ Add Candidate</button>
+
+        <div className="proto-page-head-row" style={{ alignItems: 'center' }}>
+          <SearchField value={search} onChange={setSearch} placeholder="Search by name or role..." minWidth={280} />
+          <div className="proto-mono" style={{ color: 'var(--muted)', fontSize: 11 }}>
+            Drag cards between columns to change stage
+          </div>
+        </div>
       </div>
 
-      <div className="metric-grid-4">
-        <div className="settings-stat-card board-kpi-card">
-          <div className="settings-stat-count">{candidates.length}</div>
-          <div className="settings-stat-label">Visible Candidates</div>
-        </div>
-        <div className="settings-stat-card board-kpi-card">
-          <div className="settings-stat-count" style={{ color: '#c084fc' }}>{offerPipelineCount}</div>
-          <div className="settings-stat-label">Interview / Offer Stage</div>
-        </div>
-        <div className="settings-stat-card board-kpi-card">
-          <div className="settings-stat-count" style={{ color: '#4ade80' }}>{hiredCount}</div>
-          <div className="settings-stat-label">Converted To Hire</div>
-        </div>
-        <div className="settings-stat-card board-kpi-card">
-          <div className="settings-stat-count" style={{ color: rejectedCount > 0 ? '#f87171' : 'var(--soft)' }}>{rejectedCount}</div>
-          <div className="settings-stat-label">Closed Out</div>
-        </div>
-      </div>
-
-      <div className="kanban-board">
-        {STAGES.map(({ key, label }) => (
-          <div
-            key={key}
-            className={`kanban-col kanban-col-${key}`}
-            style={{ minWidth: 0 }}
-            onDragOver={(e) => e.preventDefault()}
-            onDrop={() => onDrop(key)}
-          >
-            <div className="kanban-col-header">
-              <div className="board-lane-header-main">
-                <span className={`kanban-stage-dot kanban-stage-dot-${key}`} />
-                <span className="kanban-col-label">{label}</span>
-                <span className="kanban-col-count">{byStage(key).length}</span>
-              </div>
-              <div className="board-lane-header-meta">
-                <span>{byStage(key).filter(candidate => Boolean(candidate.email)).length} with email</span>
-                <span>{byStage(key).filter(candidate => Boolean(candidate.resumeUrl || candidate.attachments?.length)).length} with docs</span>
-              </div>
+      <div className="proto-page-body">
+        <div className="proto-kpi-grid-4" style={{ marginBottom: 16 }}>
+          {[
+            { label: 'Visible Candidates', value: candidates.length, color: 'var(--blue)' },
+            { label: 'Interview / Offer', value: candidates.filter(candidate => candidate.stage === 'interview' || candidate.stage === 'offer').length, color: 'var(--purple)' },
+            { label: 'Converted To Hire', value: hiredCount, color: 'var(--emerald)' },
+            { label: 'Closed Out', value: rejectedCount, color: 'var(--red)' },
+          ].map(card => (
+            <div key={card.label} className="proto-kpi">
+              <div className="proto-kpi-accent" style={{ background: card.color }} />
+              <div className="proto-kpi-label">{card.label}</div>
+              <div className="proto-kpi-value">{card.value}</div>
             </div>
+          ))}
+        </div>
 
-            <div className="kanban-cards">
-              {byStage(key).map((c) => (
-                <div
-                  key={c.id}
-                  className="kanban-card board-kanban-card"
-                  draggable
-                  onDragStart={() => onDragStart(c.id)}
-                  onDragEnd={() => { window.setTimeout(() => { dragSuppressRef.current = null }, 0) }}
-                  style={{ cursor: 'pointer' }}
-                  onClick={() => {
-                    if (dragSuppressRef.current === c.id) return
-                    navigate('/candidates/' + c.id)
-                  }}
+        <div className="kanban" style={{ '--kanban-cols': STAGES.length } as React.CSSProperties}>
+          {STAGES.map(stage => (
+            <KanbanColumn<Candidate>
+              key={stage.key}
+              column={{ id: stage.key, label: stage.label, items: byStage[stage.key] }}
+              dnd={dnd}
+              accent={stage.color}
+              headerRight={<button type="button" className="proto-btn proto-btn-ghost proto-btn-icon" onClick={openAdd}><ProtoIcon name="plus" size={12} /></button>}
+            >
+              {byStage[stage.key].map(candidate => (
+                <KanbanItem
+                  key={candidate.id}
+                  item={candidate}
+                  dnd={dnd}
+                  accent={stage.color}
+                  sourceColumnId={stage.key}
+                  onClick={() => openCandidate(candidate.id)}
                 >
-                  <div className="board-kanban-top">
-                    <div>
-                      <div className="kanban-card-name">{c.name}</div>
-                      {c.role && <div className="kanban-card-role">{c.role}</div>}
-                    </div>
-                    <span className="board-drag-hint">Drag</span>
-                  </div>
-                  <div className="board-contact-line board-contact-line-sm">
-                    {c.email && <span>{c.email}</span>}
-                    {c.email && c.phone && <span className="board-card-dot">•</span>}
-                    {c.phone && <span>{c.phone}</span>}
-                  </div>
-                  <div className="board-kanban-stats">
-                    <div>
-                      <div className="stat-label">Source</div>
-                      <div className="stat-value">{c.source || 'Manual'}</div>
-                    </div>
-                    <div>
-                      <div className="stat-label">Applied</div>
-                      <div className="stat-value">{c.appliedAt || '—'}</div>
-                    </div>
-                    <div>
-                      <div className="stat-label">Docs</div>
-                      <div className="stat-value">{(c.attachments?.length || 0) + (c.resumeUrl ? 1 : 0)}</div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+                    <Avatar name={candidate.name} color={colorFromString(candidate.name)} size="sm" />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div className="kanban-card-name">{candidate.name}</div>
+                      <div className="kanban-card-role">{candidate.role || 'No role set'}</div>
                     </div>
                   </div>
-                  {c.notes && <div className="kanban-card-meta">{c.notes}</div>}
-                  <div className="kanban-card-actions">
-                    <button className="btn-xs btn-ghost" onClick={ev => { ev.stopPropagation(); navigate('/candidates/' + c.id) }}>View</button>
-                    <button className="btn-xs btn-danger" onClick={ev => { ev.stopPropagation(); setConfirmDelete(c.id) }}>Remove</button>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: 8, borderTop: '1px solid var(--border)' }}>
+                    <span style={{ fontSize: 9.5, fontWeight: 800, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--muted)' }}>{candidate.source || 'Manual'}</span>
+                    <span className="proto-mono" style={{ fontSize: 10, color: 'var(--dim)' }}>{candidate.appliedAt ? `${Math.abs(new Date(`${candidate.appliedAt}T12:00:00`).getTime() - Date.now()) / 86400000 | 0}d` : '—'}</span>
                   </div>
-                </div>
+                </KanbanItem>
               ))}
-              {byStage(key).length === 0 && (
-                <div className="kanban-empty">Drop here</div>
-              )}
-            </div>
-          </div>
-        ))}
+            </KanbanColumn>
+          ))}
+        </div>
       </div>
 
-      {/* Add / Edit Modal */}
-      {modal && (
-        <div className="sheet-overlay" onClick={() => setModal(null)}>
-          <aside className="sheet-panel" onClick={(e) => e.stopPropagation()}>
-            <div className="sheet-header">
-              <div>
-                <div className="sheet-eyebrow">Hiring Pipeline</div>
-                <h2 className="sheet-title">Add Candidate</h2>
-                <p className="sheet-subtitle">Capture the profile, source, and supporting material without leaving the board view.</p>
-              </div>
-              <button className="modal-close btn-icon" onClick={() => setModal(null)}>✕</button>
-            </div>
-            <div className="sheet-body">
-              <div className="sheet-section">
-                <div className="sheet-section-title">Candidate Profile</div>
-              <div className="form-grid-2">
-                <div className="form-group">
-                  <label className="form-label">Name *</label>
-                  <input className="form-input" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Full name" />
-                </div>
-                <div className="form-group">
-                  <label className="form-label">Role / Position</label>
-                  <input className="form-input" value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })} placeholder="e.g. Virtual Assistant" />
-                </div>
-                <div className="form-group">
-                  <label className="form-label">Email</label>
-                  <input className="form-input" type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="email@example.com" />
-                </div>
-                <div className="form-group">
-                  <label className="form-label">Phone</label>
-                  <input className="form-input" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} placeholder="+1 555 000 0000" />
-                </div>
-                <div className="form-group">
-                  <label className="form-label">Stage</label>
-                  <select className="form-select" value={form.stage} onChange={(e) => setForm({ ...form, stage: e.target.value as CandidateStage })}>
-                    {STAGES.map((s) => <option key={s.key} value={s.key}>{s.label}</option>)}
-                  </select>
-                </div>
-                <div className="form-group">
-                  <label className="form-label">Source</label>
-                  <input className="form-input" value={form.source} onChange={(e) => setForm({ ...form, source: e.target.value })} placeholder="e.g. LinkedIn, Referral" />
-                </div>
-                <div className="form-group">
-                  <label className="form-label">Applied Date</label>
-                  <input className="form-input" type="date" value={form.appliedAt} onChange={(e) => setForm({ ...form, appliedAt: e.target.value })} />
-                </div>
-                <div className="form-group">
-                  <label className="form-label">LinkedIn URL</label>
-                  <input className="form-input" value={form.linkedinUrl} onChange={(e) => setForm({ ...form, linkedinUrl: e.target.value })} placeholder="https://linkedin.com/in/..." />
-                </div>
-                <div className="form-group form-group-full">
-                  <label className="form-label">Resume URL</label>
-                  <input className="form-input" value={form.resumeUrl} onChange={(e) => setForm({ ...form, resumeUrl: e.target.value })} placeholder="https://drive.google.com/..." />
-                </div>
-                <div className="form-group form-group-full">
-                  <label className="form-label">Notes</label>
-                  <textarea className="form-textarea" rows={3} value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} placeholder="Interview notes, comments..." />
-                </div>
-              </div>
-              </div>
+      <Drawer open={Boolean(selectedCandidate)} onClose={() => setSelectedCandidateId(null)} width={580}>
+        {selectedCandidate && <CandidateDrawer candidate={selectedCandidate} onClose={() => setSelectedCandidateId(null)} onAdvance={moveStage} onHire={startHire} onDelete={() => setConfirmDelete(selectedCandidate.id)} checkedTasks={checkedTasks} setCheckedTasks={setCheckedTasks} />}
+      </Drawer>
 
-              {/* Attachments */}
-              <div className="sheet-section">
-                <div className="sheet-section-title">Files &amp; Documents</div>
-              <div style={{ marginTop: 4 }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-                  <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.07em', color: 'var(--muted)' }}>
-                    Files &amp; Documents {attachments.length > 0 && `(${attachments.length})`}
-                  </div>
-                  <button className="btn-ghost btn-xs" onClick={() => fileInputRef.current?.click()}>+ Upload</button>
-                  <input ref={fileInputRef} type="file" accept="image/*,.pdf,audio/*" style={{ display: 'none' }}
-                    onChange={e => { const f = e.target.files?.[0]; if (f) handleFileUpload(f); e.target.value = '' }} />
-                </div>
-                {attachments.length === 0 ? (
-                  <div style={{ fontSize: 12, color: 'var(--muted)' }}>No files. Accepts images, PDFs, audio (max 5 MB each). For videos, paste a link in Resume URL.</div>
-                ) : (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                    {attachments.map(att => (
-                      <div key={att.id} style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'var(--surf2)', border: '1px solid var(--border)', borderRadius: 6, padding: '7px 10px' }}>
-                        <span style={{ fontSize: 16 }}>{att.mimeType.startsWith('image/') ? '🖼' : att.mimeType === 'application/pdf' ? '📄' : att.mimeType.startsWith('audio/') ? '🎵' : '📎'}</span>
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ fontSize: 12, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{att.name}</div>
-                          <div style={{ fontSize: 10, color: 'var(--muted)' }}>{(att.size / 1024).toFixed(0)} KB</div>
-                        </div>
-                        {att.mimeType.startsWith('audio/') && (
-                          <audio controls src={att.dataUrl} style={{ height: 28, maxWidth: 160 }} />
-                        )}
-                        {att.mimeType.startsWith('image/') && (
-                          <img src={att.dataUrl} alt={att.name} style={{ height: 36, width: 36, objectFit: 'cover', borderRadius: 4 }} />
-                        )}
-                        <a href={att.dataUrl} download={att.name} className="btn-ghost btn-xs">↓</a>
-                        <button className="btn-icon btn-danger" style={{ fontSize: 11, padding: '2px 6px' }} onClick={() => setAttachments(prev => prev.filter(a => a.id !== att.id))}>×</button>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-              </div>
+      <Modal
+        open={modal === 'add'}
+        onClose={() => setModal(null)}
+        title="Add Candidate"
+        subtitle="Capture the profile, source, and supporting material in the new recruiting layout."
+        width={760}
+        footer={(
+          <>
+            <button type="button" className="proto-btn proto-btn-ghost" onClick={() => setModal(null)}>Cancel</button>
+            <button type="button" className="proto-btn proto-btn-primary" onClick={saveForm} disabled={!form.name.trim()}>Add Candidate</button>
+          </>
+        )}
+      >
+        <div className="proto-two-col" style={{ gap: 14 }}>
+          <div className="proto-list-card">
+            <div className="proto-list-card-head"><span>Candidate Profile</span></div>
+            <div className="proto-profile-row">
+              <label className="proto-profile-label">Name *</label>
+              <input className="proto-input" value={form.name} onChange={e => setForm(prev => ({ ...prev, name: e.target.value }))} placeholder="Full name" />
             </div>
-            <div className="sheet-footer">
-              <button className="btn-ghost" onClick={() => setModal(null)}>Cancel</button>
-              <button className="btn-primary" onClick={saveForm} disabled={!form.name.trim()}>
-                Add Candidate
-              </button>
+            <div className="proto-profile-row">
+              <label className="proto-profile-label">Role</label>
+              <input className="proto-input" value={form.role} onChange={e => setForm(prev => ({ ...prev, role: e.target.value }))} placeholder="e.g. Virtual Assistant" />
             </div>
-          </aside>
-        </div>
-      )}
-
-      {hireCandidate && (
-        <div className="modal-overlay" onClick={closeHireModal}>
-          <div className="modal modal-lg" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <div>
-                <h2 className="modal-title">Hire Candidate</h2>
-                <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 2 }}>
-                  Complete the missing employee details for {hireCandidate.name}
-                </div>
-              </div>
-              <button className="modal-close btn-icon" onClick={closeHireModal}>✕</button>
+            <div className="proto-profile-row">
+              <label className="proto-profile-label">Email</label>
+              <input className="proto-input" type="email" value={form.email} onChange={e => setForm(prev => ({ ...prev, email: e.target.value }))} placeholder="name@example.com" />
             </div>
-            <div className="modal-body">
-              <div className="form-grid-2">
-                <div className="form-group form-group-full">
-                  <label className="form-label">Full Name *</label>
-                  <input className="form-input" value={employeeForm.name} onChange={(e) => setEmployeeForm({ ...employeeForm, name: e.target.value })} placeholder="Full name" />
-                </div>
-                <div className="form-group">
-                  <label className="form-label">Role / Position</label>
-                  <input className="form-input" value={employeeForm.role} onChange={(e) => setEmployeeForm({ ...employeeForm, role: e.target.value })} placeholder="e.g. Intake Specialist" />
-                </div>
-                <div className="form-group">
-                  <label className="form-label">Employment Type</label>
-                  <select className="form-select" value={employeeForm.employmentType} onChange={(e) => setEmployeeForm({ ...employeeForm, employmentType: e.target.value })}>
-                    {EMPLOYMENT_TYPES.map(type => <option key={type} value={type}>{type || '— Not set —'}</option>)}
-                  </select>
-                </div>
-                <div className="form-group">
-                  <label className="form-label">Pay Rate ($/hr)</label>
-                  <input className="form-input" type="number" value={employeeForm.payRate} onChange={(e) => setEmployeeForm({ ...employeeForm, payRate: e.target.value })} placeholder="4.50" />
-                </div>
-                <div className="form-group">
-                  <label className="form-label">Status</label>
-                  <select className="form-select" value={employeeForm.status} onChange={(e) => setEmployeeForm({ ...employeeForm, status: e.target.value })}>
-                    {EMPLOYEE_STATUS_OPTIONS.map(status => <option key={status} value={status}>{status}</option>)}
-                  </select>
-                </div>
-                <div className="form-group">
-                  <label className="form-label">Email</label>
-                  <input className="form-input" type="email" value={employeeForm.email} onChange={(e) => setEmployeeForm({ ...employeeForm, email: e.target.value })} placeholder="name@example.com" />
-                </div>
-                <div className="form-group">
-                  <label className="form-label">Phone</label>
-                  <input className="form-input" value={employeeForm.phone} onChange={(e) => setEmployeeForm({ ...employeeForm, phone: e.target.value })} placeholder="+1 555 000 0000" />
-                </div>
-                <div className="form-group">
-                  <label className="form-label">Location</label>
-                  <input className="form-input" value={employeeForm.location} onChange={(e) => setEmployeeForm({ ...employeeForm, location: e.target.value })} placeholder="Santo Domingo, DO" />
-                </div>
-                <div className="form-group">
-                  <label className="form-label">Timezone</label>
-                  <input className="form-input" value={employeeForm.timezone} onChange={(e) => setEmployeeForm({ ...employeeForm, timezone: e.target.value })} placeholder="EST / AST" />
-                </div>
-                <div className="form-group">
-                  <label className="form-label">Hire Year</label>
-                  <input className="form-input" value={employeeForm.startYear} onChange={(e) => setEmployeeForm({ ...employeeForm, startYear: e.target.value })} placeholder="2025" />
-                </div>
-                <div className="form-group form-group-full">
-                  <label className="form-label">Internal Notes</label>
-                  <textarea className="form-textarea" rows={2} value={employeeForm.notes} onChange={(e) => setEmployeeForm({ ...employeeForm, notes: e.target.value })} placeholder="Performance notes, schedule preferences, etc." />
-                </div>
-              </div>
-
-              <div style={{ marginTop: 10, fontSize: 12, color: 'var(--muted)' }}>
-                Candidate info is preserved in the pipeline and this will create the linked employee profile details.
-              </div>
-
-              <div style={{ marginTop: 16, borderTop: '1px solid var(--border)', paddingTop: 14 }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-                  <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.07em', color: 'var(--muted)' }}>
-                    Files &amp; Documents {hireAttachments.length > 0 && `(${hireAttachments.length})`}
-                  </div>
-                  <button className="btn-ghost btn-xs" onClick={() => hireFileInputRef.current?.click()}>+ Upload</button>
-                  <input ref={hireFileInputRef} type="file" accept="image/*,.pdf,audio/*" style={{ display: 'none' }}
-                    onChange={e => { const file = e.target.files?.[0]; if (file) handleHireFileUpload(file); e.target.value = '' }} />
-                </div>
-                {hireAttachments.length === 0 ? (
-                  <div style={{ fontSize: 12, color: 'var(--muted)' }}>No files. Candidate attachments will carry over and you can add more here.</div>
-                ) : (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                    {hireAttachments.map(att => (
-                      <div key={att.id} style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'var(--surf2)', border: '1px solid var(--border)', borderRadius: 6, padding: '7px 10px' }}>
-                        <span style={{ fontSize: 16 }}>{att.mimeType.startsWith('image/') ? '🖼' : att.mimeType === 'application/pdf' ? '📄' : att.mimeType.startsWith('audio/') ? '🎵' : '📎'}</span>
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ fontSize: 12, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{att.name}</div>
-                          <div style={{ fontSize: 10, color: 'var(--muted)' }}>{(att.size / 1024).toFixed(0)} KB</div>
-                        </div>
-                        <a href={att.dataUrl} download={att.name} className="btn-ghost btn-xs">↓</a>
-                        <button className="btn-icon btn-danger" style={{ fontSize: 11, padding: '2px 6px' }} onClick={() => setHireAttachments(prev => prev.filter(a => a.id !== att.id))}>×</button>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
+            <div className="proto-profile-row">
+              <label className="proto-profile-label">Phone</label>
+              <input className="proto-input" value={form.phone} onChange={e => setForm(prev => ({ ...prev, phone: e.target.value }))} placeholder="+1 555 000 0000" />
             </div>
-            <div className="modal-footer">
-              <button className="btn-ghost" onClick={closeHireModal}>Cancel</button>
-              <button className="btn-primary" onClick={() => { void confirmHire() }} disabled={!employeeForm.name.trim()}>
-                Hire And Create Profile
-              </button>
+            <div className="proto-profile-row">
+              <label className="proto-profile-label">Stage</label>
+              <select className="proto-input" value={form.stage} onChange={e => setForm(prev => ({ ...prev, stage: e.target.value as CandidateStage }))}>
+                {STAGES.map(stage => <option key={stage.key} value={stage.key}>{stage.label}</option>)}
+              </select>
+            </div>
+            <div className="proto-profile-row">
+              <label className="proto-profile-label">Source</label>
+              <input className="proto-input" value={form.source} onChange={e => setForm(prev => ({ ...prev, source: e.target.value }))} placeholder="LinkedIn, referral, etc." />
+            </div>
+            <div className="proto-profile-row">
+              <label className="proto-profile-label">Applied date</label>
+              <input className="proto-input" type="date" value={form.appliedAt} onChange={e => setForm(prev => ({ ...prev, appliedAt: e.target.value }))} />
+            </div>
+            <div className="proto-profile-row">
+              <label className="proto-profile-label">LinkedIn</label>
+              <input className="proto-input" value={form.linkedinUrl} onChange={e => setForm(prev => ({ ...prev, linkedinUrl: e.target.value }))} placeholder="https://linkedin.com/in/..." />
+            </div>
+            <div className="proto-profile-row">
+              <label className="proto-profile-label">Resume URL</label>
+              <input className="proto-input" value={form.resumeUrl} onChange={e => setForm(prev => ({ ...prev, resumeUrl: e.target.value }))} placeholder="https://..." />
+            </div>
+            <div className="proto-profile-row" style={{ alignItems: 'flex-start' }}>
+              <label className="proto-profile-label">Notes</label>
+              <textarea className="proto-input" rows={3} value={form.notes} onChange={e => setForm(prev => ({ ...prev, notes: e.target.value }))} />
             </div>
           </div>
-        </div>
-      )}
 
-      {/* Onboarding Checklist */}
-      {onboardingCandidate && (
-        <div className="modal-overlay" onClick={() => setOnboardingCandidate(null)}>
-          <div className="modal" onClick={e => e.stopPropagation()}>
-            <div className="modal-header">
-              <div>
-                <h2 className="modal-title">Onboarding — {onboardingCandidate.name}</h2>
-                <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 2 }}>{onboardingCandidate.role || 'New hire'}</div>
-              </div>
-              <button className="modal-close btn-icon" onClick={() => setOnboardingCandidate(null)}>✕</button>
-            </div>
-            <div className="modal-body">
-              <p style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 16 }}>
-                Complete the following steps to onboard {onboardingCandidate.name.split(' ')[0]}:
-              </p>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                {ONBOARDING_TASKS.map((task, i) => (
-                  <label key={i} style={{
-                    display: 'flex', alignItems: 'center', gap: 10, fontSize: 13,
-                    background: checkedTasks.has(i) ? 'rgba(34,197,94,.08)' : 'var(--surf2)',
-                    borderRadius: 8, padding: '10px 14px', cursor: 'pointer',
-                    border: `1px solid ${checkedTasks.has(i) ? 'rgba(34,197,94,.3)' : 'var(--border)'}`,
-                    textDecoration: checkedTasks.has(i) ? 'line-through' : 'none',
-                    color: checkedTasks.has(i) ? 'var(--muted)' : 'var(--soft)',
-                  }}>
-                    <input
-                      type="checkbox"
-                      style={{ width: 16, height: 16, accentColor: '#22c55e' }}
-                      checked={checkedTasks.has(i)}
-                      onChange={() => setCheckedTasks(prev => {
-                        const next = new Set(prev)
-                        next.has(i) ? next.delete(i) : next.add(i)
-                        return next
-                      })}
-                    />
-                    {task}
-                  </label>
+          <div className="proto-sidebar-stack">
+            <div className="proto-list-card">
+              <div className="proto-list-card-head"><span>Files & Documents</span></div>
+              <button type="button" className="proto-btn proto-btn-ghost" onClick={() => fileInputRef.current?.click()}>
+                <ProtoIcon name="plus" size={12} />
+                Upload
+              </button>
+              <input ref={fileInputRef} type="file" accept="image/*,.pdf,audio/*" style={{ display: 'none' }} onChange={e => { const file = e.target.files?.[0]; if (file) handleFileUpload(file); e.target.value = '' }} />
+              <div style={{ display: 'grid', gap: 8, marginTop: 12 }}>
+                {attachments.length === 0 ? (
+                  <div className="proto-empty">No files yet.</div>
+                ) : attachments.map(att => (
+                  <div key={att.id} className="proto-list-row" style={{ alignItems: 'center' }}>
+                    <div>
+                      <div style={{ fontSize: 12.5, fontWeight: 700 }}>{att.name}</div>
+                      <div style={{ fontSize: 11, color: 'var(--muted)' }}>{(att.size / 1024).toFixed(0)} KB</div>
+                    </div>
+                    <button type="button" className="proto-btn proto-btn-ghost proto-btn-icon" onClick={() => setAttachments(prev => prev.filter(item => item.id !== att.id))}>
+                      <ProtoIcon name="close" size={10} />
+                    </button>
+                  </div>
                 ))}
               </div>
-              <div style={{ marginTop: 14, fontSize: 12, color: 'var(--muted)', textAlign: 'center' }}>
-                {checkedTasks.size} / {ONBOARDING_TASKS.length} completed
+            </div>
+          </div>
+        </div>
+      </Modal>
+
+      {hireCandidate && (
+        <Modal
+          open={Boolean(hireCandidate)}
+          onClose={closeHireModal}
+          title="Hire Candidate"
+          subtitle={`Complete the employee record for ${hireCandidate.name}`}
+          width={760}
+          footer={(
+            <>
+              <button type="button" className="proto-btn proto-btn-ghost" onClick={closeHireModal}>Cancel</button>
+              <button type="button" className="proto-btn proto-btn-primary" onClick={() => void confirmHire()} disabled={!employeeForm.name.trim()}>
+                Hire And Create Profile
+              </button>
+            </>
+          )}
+        >
+          <div className="proto-two-col" style={{ gap: 14 }}>
+            <div className="proto-list-card">
+              <div className="proto-list-card-head"><span>Employee Details</span></div>
+              <div className="proto-profile-row">
+                <label className="proto-profile-label">Full Name *</label>
+                <input className="proto-input" value={employeeForm.name} onChange={e => setEmployeeForm(prev => ({ ...prev, name: e.target.value }))} />
+              </div>
+              <div className="proto-profile-row">
+                <label className="proto-profile-label">Role</label>
+                <input className="proto-input" value={employeeForm.role} onChange={e => setEmployeeForm(prev => ({ ...prev, role: e.target.value }))} />
+              </div>
+              <div className="proto-profile-row">
+                <label className="proto-profile-label">Employment Type</label>
+                <select className="proto-input" value={employeeForm.employmentType} onChange={e => setEmployeeForm(prev => ({ ...prev, employmentType: e.target.value }))}>
+                  {EMPLOYMENT_TYPES.map(type => <option key={type} value={type}>{type || 'Not set'}</option>)}
+                </select>
+              </div>
+              <div className="proto-profile-row">
+                <label className="proto-profile-label">Pay Rate</label>
+                <input className="proto-input" type="number" value={employeeForm.payRate} onChange={e => setEmployeeForm(prev => ({ ...prev, payRate: e.target.value }))} />
+              </div>
+              <div className="proto-profile-row">
+                <label className="proto-profile-label">Status</label>
+                <select className="proto-input" value={employeeForm.status} onChange={e => setEmployeeForm(prev => ({ ...prev, status: e.target.value }))}>
+                  {EMPLOYEE_STATUS_OPTIONS.map(status => <option key={status} value={status}>{status}</option>)}
+                </select>
+              </div>
+              <div className="proto-profile-row">
+                <label className="proto-profile-label">Email</label>
+                <input className="proto-input" type="email" value={employeeForm.email} onChange={e => setEmployeeForm(prev => ({ ...prev, email: e.target.value }))} />
+              </div>
+              <div className="proto-profile-row">
+                <label className="proto-profile-label">Phone</label>
+                <input className="proto-input" value={employeeForm.phone} onChange={e => setEmployeeForm(prev => ({ ...prev, phone: e.target.value }))} />
+              </div>
+              <div className="proto-profile-row">
+                <label className="proto-profile-label">Location</label>
+                <input className="proto-input" value={employeeForm.location} onChange={e => setEmployeeForm(prev => ({ ...prev, location: e.target.value }))} />
+              </div>
+              <div className="proto-profile-row">
+                <label className="proto-profile-label">Timezone</label>
+                <input className="proto-input" value={employeeForm.timezone} onChange={e => setEmployeeForm(prev => ({ ...prev, timezone: e.target.value }))} />
+              </div>
+              <div className="proto-profile-row">
+                <label className="proto-profile-label">Hire Year</label>
+                <input className="proto-input" value={employeeForm.startYear} onChange={e => setEmployeeForm(prev => ({ ...prev, startYear: e.target.value }))} />
+              </div>
+              <div className="proto-profile-row" style={{ alignItems: 'flex-start' }}>
+                <label className="proto-profile-label">Notes</label>
+                <textarea className="proto-input" rows={3} value={employeeForm.notes} onChange={e => setEmployeeForm(prev => ({ ...prev, notes: e.target.value }))} />
               </div>
             </div>
-            <div className="modal-footer">
-              <button className="btn-ghost" onClick={() => setOnboardingCandidate(null)}>Close</button>
-              {checkedTasks.size === ONBOARDING_TASKS.length && (
-                <button className="btn-primary" onClick={() => setOnboardingCandidate(null)}>All Done!</button>
-              )}
+
+            <div className="proto-sidebar-stack">
+              <div className="proto-list-card">
+                <div className="proto-list-card-head"><span>Attachments</span></div>
+                <button type="button" className="proto-btn proto-btn-ghost" onClick={() => hireFileInputRef.current?.click()}>
+                  <ProtoIcon name="plus" size={12} />
+                  Upload
+                </button>
+                <input ref={hireFileInputRef} type="file" accept="image/*,.pdf,audio/*" style={{ display: 'none' }} onChange={e => { const file = e.target.files?.[0]; if (file) handleHireFileUpload(file); e.target.value = '' }} />
+                <div style={{ display: 'grid', gap: 8, marginTop: 12 }}>
+                  {hireAttachments.length === 0 ? (
+                    <div className="proto-empty">No attachments yet.</div>
+                  ) : hireAttachments.map(att => (
+                    <div key={att.id} className="proto-list-row">
+                      <span style={{ fontSize: 12.5, fontWeight: 700 }}>{att.name}</span>
+                      <button type="button" className="proto-btn proto-btn-ghost proto-btn-icon" onClick={() => setHireAttachments(prev => prev.filter(item => item.id !== att.id))}>
+                        <ProtoIcon name="close" size={10} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
             </div>
           </div>
-        </div>
+        </Modal>
       )}
 
-      {/* Confirm Delete */}
-      {confirmDelete && (
-        <div className="modal-overlay" onClick={() => setConfirmDelete(null)}>
-          <div className="confirm-dialog" onClick={(e) => e.stopPropagation()}>
-            <div className="confirm-title">Remove candidate?</div>
-            <div className="confirm-body">This action cannot be undone.</div>
-            <div className="confirm-actions">
-              <button className="btn-ghost" onClick={() => setConfirmDelete(null)}>Cancel</button>
-              <button className="btn-danger" onClick={() => deleteCandidate(confirmDelete)}>Remove</button>
+      <Drawer open={Boolean(selectedCandidate)} onClose={() => setSelectedCandidateId(null)} width={580}>
+        {selectedCandidate && (
+          <CandidateDrawer
+            candidate={selectedCandidate}
+            onClose={() => setSelectedCandidateId(null)}
+            onAdvance={moveStage}
+            onHire={startHire}
+            onDelete={() => setConfirmDelete(selectedCandidate.id)}
+            checkedTasks={checkedTasks}
+            setCheckedTasks={setCheckedTasks}
+          />
+        )}
+      </Drawer>
+
+      {confirmDelete ? (
+        <Modal
+          open={Boolean(confirmDelete)}
+          onClose={() => setConfirmDelete(null)}
+          title="Remove candidate?"
+          subtitle="This action cannot be undone."
+          width={420}
+          footer={(
+            <>
+              <button type="button" className="proto-btn proto-btn-ghost" onClick={() => setConfirmDelete(null)}>Cancel</button>
+              <button type="button" className="proto-btn proto-btn-danger" onClick={() => deleteCandidate(confirmDelete)}>Remove</button>
+            </>
+          )}
+        >
+          <p style={{ fontSize: 13, color: 'var(--muted)', margin: 0 }}>Removing a candidate deletes them from the recruiting pipeline.</p>
+        </Modal>
+      ) : null}
+    </div>
+  )
+}
+
+function CandidateDrawer({
+  candidate,
+  onClose,
+  onAdvance,
+  onHire,
+  onDelete,
+  checkedTasks,
+  setCheckedTasks,
+}: {
+  candidate: Candidate
+  onClose: () => void
+  onAdvance: (id: string, stage: CandidateStage) => void
+  onHire: (candidate: Candidate) => void
+  onDelete: () => void
+  checkedTasks: Set<number>
+  setCheckedTasks: Dispatch<SetStateAction<Set<number>>>
+}) {
+  const daysAgo = candidate.appliedAt ? Math.max(0, Math.round((Date.now() - new Date(`${candidate.appliedAt}T12:00:00`).getTime()) / 86400000)) : null
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+      <div style={{ padding: '18px 22px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', gap: 12 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
+          <Avatar name={candidate.name} color={colorFromString(candidate.name)} size="lg" />
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontSize: 16, fontWeight: 800 }}>{candidate.name}</div>
+            <div style={{ fontSize: 12, color: 'var(--muted)' }}>
+              {candidate.role || 'No role set'}
+              {candidate.source ? ` · via ${candidate.source}` : ''}
+              {candidate.appliedAt ? ` · Applied ${protoDateShort(candidate.appliedAt)}` : ''}
             </div>
           </div>
         </div>
-      )}
+        <button type="button" className="proto-btn proto-btn-ghost proto-btn-icon" onClick={onClose}>
+          <ProtoIcon name="close" size={14} />
+        </button>
+      </div>
+
+      <div style={{ padding: 22, overflow: 'auto', flex: 1 }}>
+        <div style={{ display: 'flex', gap: 8, marginBottom: 18, flexWrap: 'wrap' }}>
+          <button type="button" className="proto-btn proto-btn-primary" onClick={() => onAdvance(candidate.id, 'screening')}>
+            <ProtoIcon name="arrowR" size={12} />
+            Advance
+          </button>
+          <button type="button" className="proto-btn proto-btn-ghost" onClick={() => onHire(candidate)}>
+            <ProtoIcon name="plus" size={12} />
+            Hire
+          </button>
+          <button type="button" className="proto-btn proto-btn-ghost" onClick={() => onAdvance(candidate.id, 'interview')}>
+            <ProtoIcon name="send" size={12} />
+            Schedule
+          </button>
+          <button type="button" className="proto-btn proto-btn-danger" onClick={onDelete}>
+            <ProtoIcon name="trash" size={12} />
+            Reject
+          </button>
+        </div>
+
+        <div className="proto-list-card" style={{ marginBottom: 14 }}>
+          <div className="proto-list-card-head">
+            <span>Onboarding checklist</span>
+          </div>
+          <div className="proto-checklist">
+            {ONBOARDING_TASKS.map((task, index) => (
+              <button
+                key={task}
+                type="button"
+                className={`proto-checklist-row${checkedTasks.has(index) ? ' done' : ''}`}
+                onClick={() => setCheckedTasks(prev => {
+                  const next = new Set(prev)
+                  next.has(index) ? next.delete(index) : next.add(index)
+                  return next
+                })}
+              >
+                <span className={`proto-check${checkedTasks.has(index) ? ' done' : ''}`} />
+                <span style={{ textDecoration: checkedTasks.has(index) ? 'line-through' : 'none' }}>{task}</span>
+              </button>
+            ))}
+          </div>
+          <div style={{ marginTop: 12, fontSize: 12, color: 'var(--muted)' }}>
+            {checkedTasks.size} / {ONBOARDING_TASKS.length} completed
+          </div>
+        </div>
+
+        <div className="proto-list-card">
+          <div className="proto-list-card-head">
+            <span>Notes</span>
+            <span className="proto-mono" style={{ fontSize: 10, color: 'var(--muted)' }}>{daysAgo != null ? `${daysAgo}d ago` : '—'}</span>
+          </div>
+          <textarea className="proto-input" rows={5} defaultValue={candidate.notes || ''} placeholder="Add private notes..." />
+        </div>
+      </div>
     </div>
   )
 }

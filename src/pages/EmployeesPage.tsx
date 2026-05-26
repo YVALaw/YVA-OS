@@ -1,8 +1,8 @@
-import React, { useEffect, useRef, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import type { Attachment, Employee, Invoice } from '../data/types'
+import type { Attachment, Client, Employee, Invoice, Project } from '../data/types'
 import {
-  loadSnapshot, saveEmployees, saveInvoices,
+  loadSnapshot, saveEmployees, saveInvoices, saveProjects,
   loadEmployeeCounter, saveEmployeeCounter, loadSettings,
 } from '../services/storage'
 import { sendEmail, type SendEmailResult } from '../services/gmail'
@@ -11,6 +11,7 @@ import { useRole } from '../context/RoleContext'
 import { can } from '../lib/roles'
 import { htmlToPdfAttachment } from '../utils/pdf'
 import { computePayrollBreakdown, employeePremiumConfig, normalizeClockInput, payrollFromInvoiceItem } from '../utils/payroll'
+import { Avatar, FilterChips, KanbanColumn, KanbanItem, ProtoIcon, SearchField, StatusChip, ToggleGroup, colorFromString, protoCurrency, useKanbanDnd } from '../components/PrototypeKit'
 
 function uid() { return crypto.randomUUID() }
 
@@ -46,6 +47,17 @@ function statusColor(s?: string): string {
     case 'onboarding': return '#3b82f6'
     case 'trial': return '#a855f7'
     default: return '#22c55e'
+  }
+}
+
+function projectAccent(status?: string): string {
+  switch ((status || '').toLowerCase()) {
+    case 'active': return '#22c55e'
+    case 'hiring': return '#fb923c'
+    case 'review': return '#a855f7'
+    case 'on-hold': return '#22d3ee'
+    case 'completed': return '#6b7280'
+    default: return '#3b82f6'
   }
 }
 
@@ -560,16 +572,17 @@ export default function EmployeesPage() {
   const showPayRates = can.viewPayRates(role)
   const [employees, setEmployees] = useState<Employee[]>([])
   const [invoices,  setInvoices]  = useState<Invoice[]>([])
-  const [projects,  setProjects]  = useState<{ id: string; name: string; employeeIds?: string[]; status?: string }[]>([])
+  const [projects,  setProjects]  = useState<Project[]>([])
+  const [clients, setClients] = useState<Client[]>([])
   useEffect(() => {
     loadSnapshot().then(snap => {
       setEmployees(snap.employees)
       setInvoices(snap.invoices)
       setProjects(snap.projects)
+      setClients(snap.clients)
     })
   }, [])
   const [modal, setModal]       = useState<null | 'add' | 'edit' | 'statements'>(null)
-  const [showCapacity, setShowCapacity] = useState(false)
   const [form, setForm]         = useState<FormData>(EMPTY)
   const [editId, setEditId]     = useState<string | null>(null)
   const [attachments, setAttachments] = useState<Attachment[]>([])
@@ -578,8 +591,7 @@ export default function EmployeesPage() {
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
   const [search, setSearch]     = useState('')
   const [filterStatus, setFilterStatus] = useState('')
-  const [teamLayout, setTeamLayout] = useState<'kanban' | 'cards'>('kanban')
-  const [collapsedLanes, setCollapsedLanes] = useState<Set<string>>(new Set())
+  const [view, setView] = useState<'cards' | 'projects' | 'capacity' | 'table'>('cards')
 
   function persist(next: Employee[]) { setEmployees(next); void saveEmployees(next) }
 
@@ -631,13 +643,6 @@ export default function EmployeesPage() {
     setModal(null)
   }
   function doDelete(id: string) { persist(employees.filter((e) => e.id !== id)); setConfirmDelete(null) }
-  function toggleLane(id: string) {
-    setCollapsedLanes(prev => {
-      const next = new Set(prev)
-      next.has(id) ? next.delete(id) : next.add(id)
-      return next
-    })
-  }
 
   const filtered = employees.filter((e) => {
     const matchSearch = `${e.name} ${e.email ?? ''} ${(e as {role?:string}).role ?? ''}`.toLowerCase().includes(search.toLowerCase())
@@ -645,294 +650,347 @@ export default function EmployeesPage() {
     return matchSearch && matchStatus
   })
 
-  const projectColumns = [
-    ...projects
-      .filter(project => (project.status || '').toLowerCase() !== 'completed')
-      .sort((a, b) => a.name.localeCompare(b.name))
-      .map(project => ({
-        id: project.id,
-        name: project.name,
-        employees: filtered.filter(employee => (project.employeeIds || []).includes(employee.id)),
-      })),
-    {
-      id: 'unassigned',
-      name: 'Unassigned',
-      employees: filtered.filter(employee =>
-        !projects.some(project => (project.employeeIds || []).includes(employee.id))
-      ),
-    },
-  ]
   const activeMemberCount = filtered.filter((employee) => (employee.status || 'Active').toLowerCase() === 'active').length
   const onboardingCount = filtered.filter((employee) => ['onboarding', 'trial'].includes((employee.status || '').toLowerCase())).length
   const assignedMemberCount = filtered.filter((employee) => projects.some((project) => (project.employeeIds || []).includes(employee.id))).length
   const unassignedMemberCount = filtered.length - assignedMemberCount
   const editSheetOpen = modal === 'add' || modal === 'edit'
-
-  function renderEmployeeCard(employee: Employee, key?: string) {
-    const color = avatarColor(employee.name)
-    const empInvoices = invoices.filter(inv => (inv.items||[]).some(it => it.employeeName?.toLowerCase() === employee.name.toLowerCase()))
-    const empInvoiceCount = empInvoices.length
-    const empNum = employee.employeeNumber
+  const filterCounts = useMemo(() => ({
+    all: employees.length,
+    active: employees.filter(employee => (employee.status || '').toLowerCase() === 'active').length,
+    trial: employees.filter(employee => (employee.status || '').toLowerCase() === 'trial').length,
+    onboarding: employees.filter(employee => (employee.status || '').toLowerCase() === 'onboarding').length,
+    'on hold': employees.filter(employee => (employee.status || '').toLowerCase() === 'on hold').length,
+  }), [employees])
+  const normalizedEmployees = useMemo(() => filtered.map(employee => {
+    const empInvoices = invoices.filter(inv => (inv.items || []).some(item => item.employeeName?.toLowerCase() === employee.name.toLowerCase()))
     const summary = summarizeEmployeeInvoices(employee, empInvoices)
     const assignedProjects = projects.filter(project => (project.employeeIds || []).includes(employee.id))
+    return {
+      ...employee,
+      color: colorFromString(employee.name),
+      roleLabel: (employee as { role?: string }).role || 'No role',
+      typeLabel: (employee as { employmentType?: string }).employmentType || 'Unspecified',
+      locationLabel: (employee as { location?: string }).location || 'Remote',
+      hoursMtd: summary.hours,
+      earned: summary.totalPay,
+      projectsList: assignedProjects,
+      projectNames: assignedProjects.map(project => project.name),
+      projectIdsList: assignedProjects.map(project => project.id),
+    }
+  }), [filtered, invoices, projects])
+  const totalHoursLogged = Math.round(normalizedEmployees.reduce((sum, employee) => sum + employee.hoursMtd, 0))
+  const totalPayrollMtd = normalizedEmployees.reduce((sum, employee) => sum + employee.earned, 0)
+  const projectColumns = useMemo(() => ([
+    {
+      id: '__unassigned',
+      label: 'Unassigned',
+      accent: '#6b7280',
+      clientName: '',
+      rate: 0,
+      stage: '',
+      items: normalizedEmployees.filter(employee => employee.projectIdsList.length === 0),
+      isPseudo: true,
+    },
+    ...projects
+      .filter(project => (project.status || '').toLowerCase() !== 'completed')
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map(project => ({
+        id: project.id,
+        label: project.name,
+        accent: projectAccent(project.status),
+        clientName: clients.find(client => client.id === project.clientId)?.company || clients.find(client => client.id === project.clientId)?.name || '',
+        rate: Number(project.rate) || 0,
+        stage: project.status || '',
+        items: normalizedEmployees.filter(employee => employee.projectIdsList.includes(project.id)),
+        isPseudo: false,
+      })),
+  ]), [clients, normalizedEmployees, projects])
+  const dnd = useKanbanDnd(normalizedEmployees, (updater) => {
+    const next = typeof updater === 'function' ? updater(normalizedEmployees) : updater
+    const employeeIdToProjects = new Map(next.map(employee => [employee.id, employee.projectIdsList]))
+    const updatedProjects = projects.map(project => ({
+      ...project,
+      employeeIds: (project.employeeIds || []).filter(id => {
+        const assigned = employeeIdToProjects.get(id)
+        return assigned ? assigned.includes(project.id) : false
+      }).concat(
+        next.filter(employee => employee.projectIdsList.includes(project.id)).map(employee => employee.id).filter((value, index, array) => array.indexOf(value) === index)
+      ),
+    }))
+    setProjects(updatedProjects)
+    void saveProjects(updatedProjects)
+  }, (employee, newColumnId, sourceColumnId) => {
+    let nextProjectIds = [...employee.projectIdsList]
+    if (sourceColumnId && sourceColumnId !== '__unassigned') nextProjectIds = nextProjectIds.filter(id => id !== sourceColumnId)
+    if (newColumnId === '__unassigned') nextProjectIds = []
+    if (newColumnId !== '__unassigned' && !nextProjectIds.includes(newColumnId)) nextProjectIds.push(newColumnId)
+    return { ...employee, projectIdsList: nextProjectIds }
+  })
+
+  function exportTeamCsv() {
+    const rows = [
+      ['Name', 'Employee Number', 'Role', 'Status', 'Location', 'Rate', 'Hours MTD', 'Earned MTD', 'Projects'],
+      ...normalizedEmployees.map(employee => [
+        employee.name,
+        employee.employeeNumber || '',
+        employee.roleLabel,
+        employee.status || '',
+        employee.locationLabel,
+        showPayRates ? String(employee.payRate || '') : '',
+        String(employee.hoursMtd || 0),
+        showPayRates ? String(employee.earned || 0) : '',
+        employee.projectNames.join(' | '),
+      ]),
+    ]
+    const csv = rows.map(row => row.map(value => `"${String(value).replace(/"/g, '""')}"`).join(',')).join('\n')
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `team-${new Date().toISOString().slice(0, 10)}.csv`
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    URL.revokeObjectURL(url)
+  }
+
+  function renderEmployeeCard(employee: typeof normalizedEmployees[number], key?: string) {
+    const utilization = Math.min(120, Math.round(((employee.hoursMtd || 0) / 160) * 100))
     return (
-      <div key={key || employee.id} className="entity-card compact board-entity-card" style={{ borderTop: `2px solid ${statusColor(employee.status)}`, cursor: 'pointer' }} onClick={() => navigate('/employees/' + employee.id)}>
-        <div className="card-top">
-          <div className="board-top-left">
-            <div className="avatar" style={{ background: color }}>{initials(employee.name)}</div>
-            <div>
-              <div className="card-name">{employee.name}</div>
-              <div className="card-sub">{empNum ? `${empNum} · ` : ''}{(employee as {role?:string}).role || employee.email || 'No email'}</div>
+      <div key={key || employee.id} className="card" style={{ padding: 0, overflow: 'hidden', cursor: 'pointer' }} onClick={() => navigate('/employees/' + employee.id)}>
+        <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+            <Avatar name={employee.name} color={employee.color} size="lg" />
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
+              <StatusChip status={(employee.status || 'active').toLowerCase()} filled />
+              <span className="proto-mono" style={{ fontSize: 10, color: 'var(--dim)', fontWeight: 700 }}>{employee.employeeNumber || '—'}</span>
             </div>
           </div>
-          <span className={`badge ${statusBadge(employee.status)}`}>{employee.status || 'Active'}</span>
-        </div>
-        <div className="board-contact-line">
-          {employee.email && <span>{employee.email}</span>}
-          {employee.email && employee.phone && <span className="board-card-dot">•</span>}
-          {employee.phone && <span>{employee.phone}</span>}
-        </div>
-        <div className="card-stats">
-          {showPayRates && employee.payRate && (
-            <div className="stat-item">
-              <div className="stat-label">Pay Rate</div>
-              <div className="stat-value stat-value-gold">${employee.payRate}/hr</div>
-            </div>
-          )}
-          {showPayRates && employee.premiumEnabled && (
-            <div className="stat-item">
-              <div className="stat-label">Premium</div>
-              <div className="stat-value">{`+${employee.premiumPercent || 0}% after ${employee.premiumStartTime || '21:00'}`}</div>
-            </div>
-          )}
-          {showPayRates && (employee.defaultShiftStart || employee.defaultShiftEnd) && (
-            <div className="stat-item">
-              <div className="stat-label">Default Shift</div>
-              <div className="stat-value">{`${employee.defaultShiftStart || '—'} to ${employee.defaultShiftEnd || '—'}`}</div>
-            </div>
-          )}
-          {(employee as {employmentType?:string}).employmentType && (
-            <div className="stat-item">
-              <div className="stat-label">Type</div>
-              <div className="stat-value">{(employee as {employmentType?:string}).employmentType}</div>
-            </div>
-          )}
-          {(employee as {location?:string}).location && (
-            <div className="stat-item">
-              <div className="stat-label">Location</div>
-              <div className="stat-value" style={{ fontSize: 12 }}>{(employee as {location?:string}).location}</div>
-            </div>
-          )}
-          {employee.timezone && (
-            <div className="stat-item">
-              <div className="stat-label">Timezone</div>
-              <div className="stat-value">{employee.timezone}</div>
-            </div>
-          )}
-          {employee.startYear && (
-            <div className="stat-item">
-              <div className="stat-label">Since</div>
-              <div className="stat-value">{employee.startYear}</div>
-            </div>
-          )}
-          <div className="stat-item">
-            <div className="stat-label">Invoices</div>
-            <div className="stat-value">{empInvoiceCount}</div>
+          <div>
+            <div style={{ fontSize: 14, fontWeight: 800, color: 'var(--text)', letterSpacing: '-0.005em' }}>{employee.name}</div>
+            <div style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 2 }}>{employee.roleLabel} · {employee.typeLabel}</div>
           </div>
-          {summary.hours > 0 && (
-            <div className="stat-item">
-              <div className="stat-label">Hours Logged</div>
-              <div className="stat-value">{fmtHoursHM(summary.hours)}</div>
-            </div>
-          )}
-        </div>
-        <div className="board-card-secondary">
-          {assignedProjects.length > 0 ? assignedProjects.slice(0, 3).map(project => (
-            <span key={project.id} className="pill-meta">{project.name}</span>
-          )) : <span className="pill-meta">Unassigned</span>}
-        </div>
-        {showPayRates && summary.premiumHours > 0 && (
-          <div className="board-alert-strip board-alert-strip-compact" style={{ color: 'var(--gold)' }}>
-            {summary.premiumHours.toFixed(1)}h premium time on record
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--muted)' }}>
+            <span>{employee.locationLabel}</span>
+            <span style={{ color: 'var(--dim)' }}>·</span>
+            <span>{employee.projectIdsList.length} project{employee.projectIdsList.length === 1 ? '' : 's'}</span>
           </div>
-        )}
-        {(employee as {notes?:string}).notes && (
-          <div className="card-detail" style={{ fontSize: 11, opacity: .75 }}>{(employee as {notes?:string}).notes}</div>
-        )}
-        <div className="card-footer">
-          <button className="btn-xs btn-teal" onClick={ev => { ev.stopPropagation(); setSelectedEmp(employee); setModal('statements') }}>Statements</button>
-          <button className="btn-xs btn-ghost" onClick={ev => { ev.stopPropagation(); openEdit(employee) }}>Edit</button>
-          <button className="btn-xs btn-danger" onClick={ev => { ev.stopPropagation(); setConfirmDelete(employee.id) }}>Remove</button>
+          <div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+              <span className="proto-eyebrow">Utilization</span>
+              <span className="proto-mono" style={{ fontSize: 10.5, fontWeight: 700, color: utilization > 100 ? '#fb923c' : 'var(--text-soft)' }}>{Math.round(employee.hoursMtd)}h · {utilization}%</span>
+            </div>
+            <div style={{ height: 4, background: 'var(--surf2)', borderRadius: 2, overflow: 'hidden' }}>
+              <div style={{ width: `${Math.min(100, utilization)}%`, height: '100%', background: utilization > 100 ? '#fb923c' : 'var(--gold)' }} />
+            </div>
+          </div>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', borderTop: '1px solid var(--border)', background: 'var(--surf2)' }}>
+          <div style={{ padding: 10, borderRight: '1px solid var(--border)', textAlign: 'center' }}>
+            <div className="proto-eyebrow">Rate</div>
+            <div className="proto-mono" style={{ fontSize: 13, fontWeight: 700, color: 'var(--text)', marginTop: 2 }}>{showPayRates && employee.payRate ? protoCurrency(Number(employee.payRate)) + '/h' : '—'}</div>
+          </div>
+          <div style={{ padding: 10, textAlign: 'center' }}>
+            <div className="proto-eyebrow">Earned</div>
+            <div className="proto-mono" style={{ fontSize: 13, fontWeight: 700, color: 'var(--gold)', marginTop: 2 }}>{showPayRates ? protoCurrency(employee.earned) : '—'}</div>
+          </div>
         </div>
       </div>
     )
   }
 
   return (
-    <div className="page-wrap">
-      <div className="page-header">
-        <div className="page-header-left">
-          <h1 className="page-title">Team</h1>
-          <p className="page-sub">{employees.length} member{employees.length !== 1 ? 's' : ''}</p>
-        </div>
-        <div className="page-header-actions">
-          <div style={{ display: 'flex', gap: 6 }}>
-            <button className="btn-ghost btn-sm" style={{ borderColor: teamLayout === 'kanban' ? 'var(--gold)' : undefined, color: teamLayout === 'kanban' ? 'var(--gold)' : undefined }} onClick={() => setTeamLayout('kanban')}>
-              Project Board
+    <div className="proto-page">
+      <div className="proto-page-head">
+        <div className="proto-page-head-row">
+          <div>
+            <div className="proto-eyebrow" style={{ color: 'var(--gold)', marginBottom: 8 }}>People · Team</div>
+            <h1 className="page-title">Team</h1>
+            <div style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: 6, fontWeight: 500 }}>
+              <span style={{ color: 'var(--text)', fontWeight: 700 }}>{employees.length}</span> employees · {activeMemberCount} active · {totalHoursLogged.toLocaleString()} hours logged this month
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button type="button" className="proto-btn" onClick={exportTeamCsv}>
+              <ProtoIcon name="download" size={13} />
+              Export
             </button>
-            <button className="btn-ghost btn-sm" style={{ borderColor: teamLayout === 'cards' ? 'var(--gold)' : undefined, color: teamLayout === 'cards' ? 'var(--gold)' : undefined }} onClick={() => setTeamLayout('cards')}>
-              Card Grid
+            <button type="button" className="proto-btn proto-btn-primary" onClick={openAdd}>
+              <ProtoIcon name="plus" size={13} />
+              ADD EMPLOYEE
             </button>
           </div>
-          <button className="btn-primary" onClick={openAdd}>+ Add Member</button>
         </div>
-      </div>
-
-      <div className="metric-grid-4">
-        <div className="settings-stat-card board-kpi-card">
-          <div className="settings-stat-count">{filtered.length}</div>
-          <div className="settings-stat-label">Visible Members</div>
-        </div>
-        <div className="settings-stat-card board-kpi-card">
-          <div className="settings-stat-count" style={{ color: '#4ade80' }}>{activeMemberCount}</div>
-          <div className="settings-stat-label">Active Staff</div>
-        </div>
-        <div className="settings-stat-card board-kpi-card">
-          <div className="settings-stat-count" style={{ color: '#60a5fa' }}>{assignedMemberCount}</div>
-          <div className="settings-stat-label">Assigned To Projects</div>
-        </div>
-        <div className="settings-stat-card board-kpi-card">
-          <div className="settings-stat-count" style={{ color: onboardingCount > 0 ? '#c084fc' : '#f87171' }}>
-            {onboardingCount > 0 ? onboardingCount : unassignedMemberCount}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
+          <FilterChips
+            value={filterStatus || 'all'}
+            onChange={(value) => setFilterStatus(value === 'all' ? '' : value)}
+            options={[
+              { id: 'all', label: 'All', count: filterCounts.all },
+              { id: 'active', label: 'Active', count: filterCounts.active },
+              { id: 'trial', label: 'Trial', count: filterCounts.trial },
+              { id: 'onboarding', label: 'Onboarding', count: filterCounts.onboarding },
+              { id: 'on hold', label: 'On hold', count: filterCounts['on hold'] },
+            ]}
+          />
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <SearchField value={search} onChange={setSearch} placeholder="Search team…" minWidth={220} />
+            <ToggleGroup
+              value={view}
+              onChange={setView}
+              options={[
+                { id: 'cards', label: 'Cards' },
+                { id: 'projects', label: 'By Project' },
+                { id: 'capacity', label: 'Capacity' },
+                { id: 'table', label: 'Table' },
+              ]}
+            />
           </div>
-          <div className="settings-stat-label">{onboardingCount > 0 ? 'Onboarding / Trial' : 'Unassigned Members'}</div>
         </div>
       </div>
 
-      <div className="filter-bar">
-        <input className="form-input filter-input-sm" placeholder="Search team..." value={search} onChange={(e) => setSearch(e.target.value)} />
-        <select className="form-select filter-select-sm" value={filterStatus} onChange={e => setFilterStatus(e.target.value)}>
-          <option value="">All statuses</option>
-          {STATUS_OPTIONS.map(s => <option key={s} value={s}>{s}</option>)}
-        </select>
-        <span className="toolbar-spacer pill-meta">
-          {filtered.length} showing
-        </span>
-      </div>
+      <div className="proto-page-body">
+        {view === 'cards' && (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 12 }}>
+            {normalizedEmployees.map(employee => renderEmployeeCard(employee))}
+          </div>
+        )}
 
-      {/* Capacity toggle */}
-      <div style={{ marginBottom: 12 }}>
-        <button className="btn-ghost btn-sm" onClick={() => setShowCapacity(v => !v)}>
-          {showCapacity ? 'Hide' : 'Show'} Capacity View
-        </button>
-      </div>
+        {view === 'projects' && (
+          <div className="kanban" style={{ ['--kanban-cols' as never]: projectColumns.length }}>
+            {projectColumns.map(column => {
+              const totalHours = column.items.reduce((sum, employee) => sum + employee.hoursMtd, 0)
+              const totalEarned = column.items.reduce((sum, employee) => sum + employee.earned, 0)
+              return (
+                <KanbanColumn
+                  key={column.id}
+                  column={{ id: column.id, label: column.label, items: column.items }}
+                  dnd={dnd}
+                  accent={column.accent}
+                  headerRight={!column.isPseudo ? (
+                    <button type="button" className="proto-btn proto-btn-ghost proto-btn-icon" onClick={() => navigate(`/projects/${column.id}`)} title="Open project">
+                      <ProtoIcon name="arrowR" size={11} />
+                    </button>
+                  ) : undefined}
+                >
+                  {!column.isPseudo ? (
+                    <div style={{ fontSize: 10.5, color: 'var(--muted)', marginBottom: 6, display: 'flex', justifyContent: 'space-between' }}>
+                      <span>{column.clientName || column.stage || 'Project'}</span>
+                      <span className="proto-mono" style={{ color: 'var(--gold)' }}>{showPayRates && column.rate > 0 ? `${protoCurrency(column.rate)}/h` : '—'}</span>
+                    </div>
+                  ) : null}
+                  {column.items.map(employee => (
+                    <KanbanItem key={`${employee.id}-${column.id}`} item={employee} dnd={dnd} sourceColumnId={column.id} accent={employee.color} onClick={() => navigate(`/employees/${employee.id}`)}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                        <Avatar name={employee.name} color={employee.color} size="sm" />
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--text)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{employee.name}</div>
+                          <div style={{ fontSize: 10.5, color: 'var(--muted)' }}>{employee.roleLabel}</div>
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: 8, borderTop: '1px solid var(--border)', marginTop: 8 }}>
+                        <span className="proto-mono" style={{ fontSize: 10, color: 'var(--muted)', fontWeight: 700 }}>{showPayRates && employee.payRate ? `${protoCurrency(Number(employee.payRate))}/h` : '—'}</span>
+                        <span className="proto-mono" style={{ fontSize: 10, color: 'var(--text)', fontWeight: 700 }}>{Math.round(employee.hoursMtd)}h MTD</span>
+                      </div>
+                    </KanbanItem>
+                  ))}
+                  {!column.isPseudo && column.items.length > 0 ? (
+                    <div style={{ marginTop: 'auto', padding: '6px 8px', borderRadius: 6, background: 'var(--surf2)', fontSize: 10.5, display: 'flex', justifyContent: 'space-between', color: 'var(--muted)' }} className="proto-mono">
+                      <span>Total</span>
+                      <span style={{ color: 'var(--gold)', fontWeight: 700 }}>{Math.round(totalHours)}h{showPayRates ? ` · ${protoCurrency(totalEarned)}` : ''}</span>
+                    </div>
+                  ) : null}
+                </KanbanColumn>
+              )
+            })}
+          </div>
+        )}
 
-      {/* Capacity View */}
-      {showCapacity && (() => {
-        const now = new Date()
-        const monthStart = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-01`
-        const monthEnd   = new Date(now.getFullYear(), now.getMonth()+1, 0).toISOString().slice(0,10)
-        const activeEmps = employees.filter(e => (e.status || 'Active').toLowerCase() === 'active')
+        {view === 'capacity' && (
+          <div className="card" style={{ overflow: 'hidden' }}>
+            <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+              <div className="section-title">Hours Logged · {new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}</div>
+              <div style={{ display: 'flex', gap: 14, fontSize: 10.5, fontWeight: 700, color: 'var(--muted)', letterSpacing: '.06em', flexWrap: 'wrap' }}>
+                <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}><span style={{ width: 10, height: 10, background: 'var(--gold)', borderRadius: 2 }} /> ACTUAL</span>
+                <span>TARGET: 160h / month</span>
+              </div>
+            </div>
+            <div style={{ padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {normalizedEmployees.map(employee => {
+                const pct = Math.min(1.2, employee.hoursMtd / 160)
+                const overCapacity = employee.hoursMtd > 160
+                return (
+                  <div key={employee.id} style={{ display: 'grid', gridTemplateColumns: 'minmax(180px, 220px) 1fr 90px 110px', gap: 14, alignItems: 'center' }}>
+                    <button type="button" className="proto-plain-button" onClick={() => navigate(`/employees/${employee.id}`)} style={{ display: 'flex', alignItems: 'center', gap: 10, textAlign: 'left' }}>
+                      <Avatar name={employee.name} color={employee.color} size="sm" />
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--text)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{employee.name}</div>
+                        <div style={{ fontSize: 10.5, color: 'var(--muted)' }}>{employee.roleLabel}</div>
+                      </div>
+                    </button>
+                    <div style={{ position: 'relative', height: 18, background: 'var(--surf2)', borderRadius: 4, overflow: 'hidden' }}>
+                      <div style={{ width: `${(pct / 1.2) * 100}%`, height: '100%', background: overCapacity ? '#fb923c' : 'var(--gold)' }} />
+                      <div style={{ position: 'absolute', top: 0, bottom: 0, left: `${(1 / 1.2) * 100}%`, width: 1, background: 'var(--border-strong)' }} />
+                      <span className="proto-mono" style={{ position: 'absolute', left: 8, top: 1, fontSize: 10.5, fontWeight: 700, color: '#0b1018' }}>{Math.round(employee.hoursMtd)}h</span>
+                    </div>
+                    <span className="proto-mono" style={{ fontSize: 11.5, color: overCapacity ? '#fb923c' : 'var(--text-soft)', fontWeight: 700, textAlign: 'right' }}>{Math.round(pct * 100)}%</span>
+                    <span className="proto-mono" style={{ fontSize: 11.5, color: showPayRates ? 'var(--text)' : 'var(--dim)', fontWeight: 700, textAlign: 'right' }}>{showPayRates ? protoCurrency(employee.earned) : '—'}</span>
+                  </div>
+                )
+              })}
+            </div>
+            <div style={{ padding: '12px 16px', borderTop: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', gap: 16, fontSize: 11.5, flexWrap: 'wrap' }} className="proto-mono">
+              <span style={{ color: 'var(--muted)' }}>Total hours: <span style={{ color: 'var(--gold)', fontWeight: 700 }}>{totalHoursLogged.toLocaleString()}</span></span>
+              <span style={{ color: 'var(--muted)' }}>Payroll: <span style={{ color: 'var(--text)', fontWeight: 700 }}>{showPayRates ? protoCurrency(totalPayrollMtd) : '—'}</span></span>
+            </div>
+          </div>
+        )}
 
-        return (
-          <div className="data-card" style={{ marginBottom: 16 }}>
-            <div className="data-card-title">Team Capacity — {now.toLocaleString('en-US',{month:'long',year:'numeric'})}</div>
-            <div className="table-wrap">
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>Employee</th>
-                    <th>Role</th>
-                    <th>Assigned Projects</th>
-                    <th style={{textAlign:'right'}}>Hrs This Month</th>
-                    {showPayRates && <th style={{textAlign:'right'}}>Earned (USD)</th>}
+        {view === 'table' && (
+          <div className="card" style={{ overflow: 'hidden' }}>
+            <table className="proto-table">
+              <thead>
+                <tr>
+                  <th>Employee</th>
+                  <th>Number</th>
+                  <th>Role</th>
+                  <th>Status</th>
+                  <th>Location</th>
+                  <th style={{ textAlign: 'right' }}>Rate</th>
+                  <th style={{ textAlign: 'right' }}>Hrs MTD</th>
+                  <th style={{ textAlign: 'right' }}>Earned</th>
+                </tr>
+              </thead>
+              <tbody>
+                {normalizedEmployees.map(employee => (
+                  <tr key={employee.id} onClick={() => navigate(`/employees/${employee.id}`)}>
+                    <td>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                        <Avatar name={employee.name} color={employee.color} size="sm" />
+                        <span style={{ fontWeight: 700, color: 'var(--text)' }}>{employee.name}</span>
+                      </div>
+                    </td>
+                    <td className="proto-mono" style={{ color: 'var(--muted)' }}>{employee.employeeNumber || '—'}</td>
+                    <td style={{ color: 'var(--muted)' }}>{employee.roleLabel}</td>
+                    <td><StatusChip status={(employee.status || 'active').toLowerCase()} /></td>
+                    <td style={{ color: 'var(--muted)' }}>{employee.locationLabel}</td>
+                    <td className="proto-mono" style={{ textAlign: 'right', color: showPayRates ? 'var(--text)' : 'var(--dim)', fontWeight: 700 }}>{showPayRates && employee.payRate ? protoCurrency(Number(employee.payRate)) : '—'}</td>
+                    <td className="proto-mono" style={{ textAlign: 'right', color: 'var(--text)' }}>{Math.round(employee.hoursMtd)}</td>
+                    <td className="proto-mono" style={{ textAlign: 'right', color: showPayRates ? 'var(--gold)' : 'var(--dim)', fontWeight: 700 }}>{showPayRates ? protoCurrency(employee.earned) : '—'}</td>
                   </tr>
-                </thead>
-                <tbody>
-                  {activeEmps.map(e => {
-                    const empProjects = projects.filter(p => (p.employeeIds||[]).includes(e.id) && (p.status||'').toLowerCase() === 'active')
-                    const monthInvs   = invoices.filter(inv => {
-                      const d = inv.date || inv.billingEnd || ''
-                      return d >= monthStart && d <= monthEnd && (inv.items||[]).some(it => it.employeeName?.toLowerCase() === e.name.toLowerCase())
-                    })
-                    const monthSummary = summarizeEmployeeInvoices(e, monthInvs)
-                    const monthHours  = monthSummary.hours
-                    return (
-                      <tr key={e.id}>
-                        <td className="td-name">{e.name}</td>
-                        <td className="td-muted">{(e as {role?:string}).role || '—'}</td>
-                        <td>
-                          {empProjects.length === 0
-                            ? <span className="td-muted">None</span>
-                            : empProjects.map(p => (
-                              <span key={p.id} style={{fontSize:11,background:'var(--surf2)',border:'1px solid var(--border)',borderRadius:4,padding:'2px 6px',marginRight:4}}>{p.name}</span>
-                            ))}
-                        </td>
-                        <td style={{textAlign:'right',fontWeight:600}}>{monthHours > 0 ? `${monthHours.toFixed(1)}h` : '—'}</td>
-                        {showPayRates && <td style={{textAlign:'right',color:'var(--gold)',fontWeight:700}}>{monthHours > 0 ? formatMoney(monthSummary.totalPay) : '—'}</td>}
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
-            </div>
+                ))}
+              </tbody>
+            </table>
           </div>
-        )
-      })()}
+        )}
 
-      {teamLayout === 'kanban' ? (
-        <div className="kanban-lanes">
-          {projectColumns.map(column => (
-            <div key={column.id} className="team-lane">
-              <div className="team-lane-header">
-                <div className="team-lane-header-main">
-                  <div className="team-lane-title">{column.name}</div>
-                  <div className="team-lane-sub">
-                    {column.employees.length} member{column.employees.length !== 1 ? 's' : ''}
-                  </div>
-                  <div className="team-lane-header-meta">
-                    <span className="pill-meta">{column.employees.filter(employee => (employee.status || 'Active').toLowerCase() === 'active').length} active</span>
-                    <span className="pill-meta">{column.employees.filter(employee => employee.premiumEnabled).length} premium pay</span>
-                  </div>
-                </div>
-                <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                  <span className="pill-meta">{column.employees.length}</span>
-                  <button
-                    type="button"
-                    className="lane-toggle"
-                    onClick={() => toggleLane(column.id)}
-                    aria-label={collapsedLanes.has(column.id) ? `Expand ${column.name}` : `Collapse ${column.name}`}
-                    title={collapsedLanes.has(column.id) ? 'Expand lane' : 'Collapse lane'}
-                  >
-                    {collapsedLanes.has(column.id) ? '+' : '−'}
-                  </button>
-                </div>
-              </div>
-              {!collapsedLanes.has(column.id) && (
-              <div className="team-lane-body">
-                {column.employees.length === 0 ? (
-                  <div className="team-lane-empty">
-                    No team members in this lane.
-                  </div>
-                ) : (
-                  column.employees.map(employee => renderEmployeeCard(employee, `${column.id}-${employee.id}`))
-                )}
-              </div>
-              )}
-            </div>
-          ))}
-        </div>
-      ) : (
-        <div className="card-grid">
-          {filtered.map(employee => renderEmployeeCard(employee))}
-          {filtered.length === 0 && (
-            <div className="empty-state" style={{ gridColumn: '1/-1' }}>
-              <div className="empty-state-title">{search || filterStatus ? 'No team members match these filters.' : 'No team members yet.'}</div>
-              <div className="empty-state-copy">{search || filterStatus ? 'Try clearing the search or status filter.' : 'Add your first employee to start tracking staffing, projects, and statements.'}</div>
-            </div>
-          )}
-        </div>
-      )}
+        {normalizedEmployees.length === 0 && (
+          <div className="card" style={{ padding: 28, textAlign: 'center', color: 'var(--muted)' }}>
+            {search || filterStatus ? 'No team members match these filters.' : 'No team members yet.'}
+          </div>
+        )}
+      </div>
 
       {/* Statements Modal */}
       {modal === 'statements' && selectedEmp && (

@@ -39,6 +39,29 @@ CREATE POLICY "team_all" ON clients           FOR ALL TO authenticated USING (tr
 CREATE POLICY "team_all" ON projects          FOR ALL TO authenticated USING (true) WITH CHECK (true);
 CREATE POLICY "team_all" ON invoices          FOR ALL TO authenticated USING (true) WITH CHECK (true);
 CREATE POLICY "team_all" ON expenses          FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
+ALTER TABLE expenses
+  ADD COLUMN IF NOT EXISTS recurrence_source_id text,
+  ADD COLUMN IF NOT EXISTS recurrence_anchor_date date,
+  ADD COLUMN IF NOT EXISTS recurrence_interval_months integer;
+
+-- ── App schema parity fixes ───────────────────────────────────────────────────
+-- These columns are used by the current UI/storage layer. Keep them idempotent so
+-- the script can be safely re-run against existing Supabase projects.
+ALTER TABLE clients
+  ADD COLUMN IF NOT EXISTS links jsonb;
+
+ALTER TABLE projects
+  ADD COLUMN IF NOT EXISTS description text;
+
+ALTER TABLE tasks
+  ADD COLUMN IF NOT EXISTS description text,
+  ADD COLUMN IF NOT EXISTS status text DEFAULT 'todo',
+  ADD COLUMN IF NOT EXISTS assignee_name text;
+
+ALTER TABLE timesheet_import_batches
+  ADD COLUMN IF NOT EXISTS notify_email text;
+
 CREATE POLICY "team_all" ON tasks              FOR ALL TO authenticated USING (true) WITH CHECK (true);
 CREATE POLICY "team_all" ON activity_log      FOR ALL TO authenticated USING (true) WITH CHECK (true);
 CREATE POLICY "team_all" ON candidates        FOR ALL TO authenticated USING (true) WITH CHECK (true);

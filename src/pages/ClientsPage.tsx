@@ -1,12 +1,13 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import type { ActivityLogEntry, Client, Invoice, Project } from '../data/types'
 import { loadSnapshot, saveClients, loadActivityLog, saveActivityLog, loadSettings } from '../services/storage'
 import { sendEmail } from '../services/gmail'
+import { Avatar, KanbanColumn, KanbanItem, ProtoIcon, SearchField, StatusChip, ToggleGroup, colorFromString, dueLabel, protoCurrency, protoDateShort, useKanbanDnd } from '../components/PrototypeKit'
 function uid() { return crypto.randomUUID() }
 
 type ClientStage = 'lead' | 'prospect' | 'active' | 'paused' | 'churned'
-type ViewMode = 'cards' | 'kanban'
+type ViewMode = 'cards' | 'kanban' | 'table'
 
 const STAGES: { key: ClientStage; label: string }[] = [
   { key: 'lead',     label: 'Lead' },
@@ -213,238 +214,198 @@ export default function ClientsPage() {
     sendEmail(c.email || '', subject, bodyText)
   }
 
-  const dragId = { current: null as string | null }
+  const stageCounts = useMemo(() => ({
+    lead: clients.filter(client => (client.status || 'lead').toLowerCase() === 'lead').length,
+    prospect: clients.filter(client => (client.status || 'lead').toLowerCase() === 'prospect').length,
+    active: clients.filter(client => (client.status || 'lead').toLowerCase() === 'active').length,
+    paused: clients.filter(client => (client.status || 'lead').toLowerCase() === 'paused').length,
+    churned: clients.filter(client => (client.status || 'lead').toLowerCase() === 'churned').length,
+  }), [clients])
+  const dnd = useKanbanDnd(clients, (updater) => {
+    const next = typeof updater === 'function' ? updater(clients) : updater
+    persist(next)
+  }, (client, newStageId) => ({ ...client, status: newStageId }))
   const panelOpen = modal !== null
 
   return (
-    <div className="page-wrap">
-      <div className="page-header">
-        <div className="page-header-left">
-          <h1 className="page-title">Clients</h1>
-          <p className="page-sub">{clients.length} client{clients.length !== 1 ? 's' : ''}</p>
-        </div>
-        <div className="page-header-actions">
-          <input className="form-input" style={{ width: 200 }} placeholder="Search clients..." value={search} onChange={(e) => setSearch(e.target.value)} />
-          <div className="view-toggle">
-            <button className={`view-toggle-btn${view === 'cards' ? ' active' : ''}`} onClick={() => setView('cards')}>Cards</button>
-            <button className={`view-toggle-btn${view === 'kanban' ? ' active' : ''}`} onClick={() => setView('kanban')}>Pipeline</button>
+    <div className="proto-page">
+      <div className="proto-page-head">
+        <div className="proto-page-head-row">
+          <div>
+            <div className="proto-eyebrow" style={{ color: 'var(--gold)', marginBottom: 8 }}>People · Clients</div>
+            <h1 className="page-title">Clients</h1>
+            <div style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: 6, fontWeight: 500 }}>
+              <span style={{ color: 'var(--text)', fontWeight: 700 }}>{clients.length}</span> total · {activeClients} active · {protoCurrency(totalOutstanding)} outstanding
+            </div>
           </div>
-          <button className="btn-primary" onClick={openAdd}>+ Add Client</button>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button type="button" className="proto-btn">
+              <ProtoIcon name="download" size={13} />
+              Export
+            </button>
+            <button type="button" className="proto-btn proto-btn-primary" onClick={openAdd}>
+              <ProtoIcon name="plus" size={13} />
+              NEW CLIENT
+            </button>
+          </div>
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
+          <SearchField value={search} onChange={setSearch} placeholder="Search clients, tags, contacts…" minWidth={280} />
+          <ToggleGroup
+            value={view}
+            onChange={setView}
+            options={[
+              { id: 'kanban', label: 'Kanban' },
+              { id: 'cards', label: 'Cards' },
+              { id: 'table', label: 'Table' },
+            ]}
+          />
         </div>
       </div>
 
-      <div className="metric-grid-4">
-        <div className="settings-stat-card client-kpi-card">
-          <div className="settings-stat-count">{filtered.length}</div>
-          <div className="settings-stat-label">Visible Clients</div>
-        </div>
-        <div className="settings-stat-card client-kpi-card">
-          <div className="settings-stat-count" style={{ color: '#4ade80' }}>{activeClients}</div>
-          <div className="settings-stat-label">Active Accounts</div>
-        </div>
-        <div className="settings-stat-card client-kpi-card">
-          <div className="settings-stat-count" style={{ color: 'var(--gold)' }}>${totalRevenue.toLocaleString(undefined, { maximumFractionDigits: 0 })}</div>
-          <div className="settings-stat-label">Lifetime Billed</div>
-        </div>
-        <div className="settings-stat-card client-kpi-card">
-          <div className="settings-stat-count" style={{ color: totalOutstanding > 0 ? '#f87171' : '#4ade80' }}>
-            ${totalOutstanding.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+      <div className="proto-page-body">
+        {view === 'kanban' && (
+          <div className="kanban" style={{ ['--kanban-cols' as never]: STAGES.length }}>
+            {STAGES.map(stage => {
+              const laneClients = byStage(stage.key)
+              const laneOutstanding = laneClients.reduce((sum, client) => sum + clientOutstanding(client.id), 0)
+              return (
+                <KanbanColumn
+                  key={stage.key}
+                  column={{ id: stage.key, label: stage.label, items: laneClients }}
+                  dnd={dnd}
+                  accent={stageColor(stage.key)}
+                  headerRight={<button type="button" className="proto-btn proto-btn-ghost proto-btn-icon" onClick={openAdd}><ProtoIcon name="plus" size={12} /></button>}
+                >
+                  {laneClients.map(client => {
+                    const mtdBilled = invoices
+                      .filter(invoice => invoice.clientName === client.name && (invoice.date || '').slice(0, 7) === new Date().toISOString().slice(0, 7))
+                      .reduce((sum, invoice) => sum + (Number(invoice.subtotal) || 0), 0)
+                    return (
+                      <KanbanItem key={client.id} item={client} dnd={dnd} accent={stageColor(stage.key)} sourceColumnId={stage.key} onClick={() => navigate(`/clients/${client.id}`)}>
+                        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: 10 }}>
+                          <Avatar name={client.name} color={colorFromString(client.name)} size="sm" />
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--text)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{client.company || client.name}</div>
+                            <div style={{ fontSize: 10.5, color: 'var(--muted)', marginTop: 1 }}>{client.name}</div>
+                          </div>
+                        </div>
+                        {client.tags ? (
+                          <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginBottom: 10 }}>
+                            {client.tags.split(',').map(tag => tag.trim()).filter(Boolean).slice(0, 2).map(tag => (
+                              <span key={tag} style={{ fontSize: 9, fontWeight: 800, letterSpacing: '.08em', textTransform: 'uppercase', padding: '1px 5px', background: 'var(--surf3)', color: 'var(--muted)', borderRadius: 3 }}>{tag}</span>
+                            ))}
+                          </div>
+                        ) : null}
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: 8, borderTop: '1px solid var(--border)' }}>
+                          <span className="proto-mono" style={{ fontSize: 11.5, color: 'var(--text)', fontWeight: 700 }}>{protoCurrency(mtdBilled)}</span>
+                          {clientOutstanding(client.id) > 0 ? <span className="proto-mono" style={{ fontSize: 10, color: '#f87171', fontWeight: 700 }}>{protoCurrency(clientOutstanding(client.id))} due</span> : null}
+                          {client.contractEnd ? <span className="proto-mono" style={{ fontSize: 10, color: '#fb923c', fontWeight: 700 }}>↻ {dueLabel(client.contractEnd)}</span> : null}
+                        </div>
+                      </KanbanItem>
+                    )
+                  })}
+                  <div style={{ marginTop: 'auto', padding: '6px 8px', borderRadius: 6, background: 'var(--surf2)', fontSize: 10.5, display: 'flex', justifyContent: 'space-between', color: 'var(--muted)' }} className="proto-mono">
+                    <span>{laneClients.length} client{laneClients.length === 1 ? '' : 's'}</span>
+                    <span style={{ color: laneOutstanding > 0 ? '#f87171' : 'var(--gold)', fontWeight: 700 }}>{protoCurrency(laneOutstanding)}</span>
+                  </div>
+                </KanbanColumn>
+              )
+            })}
           </div>
-          <div className="settings-stat-label">{contractRisk > 0 ? `${contractRisk} contracts expiring` : 'Outstanding Balance'}</div>
-        </div>
-      </div>
+        )}
 
-      {/* CARDS VIEW */}
-      {view === 'cards' && (
-        <div className="card-grid">
-          {filtered.map((c) => {
-            const rev = clientRevenue(c.id)
-            const projCount = clientProjects(c.id)
-            const outstanding = clientOutstanding(c.id)
-            const color = avatarColor(c.name)
-            return (
-              <div key={c.id} className="entity-card client-entity-card" style={{ borderTop: `2px solid ${stageColor(c.status)}`, cursor: 'pointer' }} onClick={() => navigate('/clients/' + c.id)}>
-                <div className="card-top">
-                  <div className="card-top-left">
-                    <div className="avatar" style={{ background: color }}>{initials(c.name)}</div>
+        {view === 'cards' && (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 12 }}>
+            {filtered.map(client => {
+              const outstanding = clientOutstanding(client.id)
+              const billedMtd = invoices
+                .filter(invoice => invoice.clientName === client.name && (invoice.date || '').slice(0, 7) === new Date().toISOString().slice(0, 7))
+                .reduce((sum, invoice) => sum + (Number(invoice.subtotal) || 0), 0)
+              const tagList = (client.tags || '').split(',').map(tag => tag.trim()).filter(Boolean)
+              return (
+                <button
+                  key={client.id}
+                  type="button"
+                  className="proto-plain-button card"
+                  onClick={() => navigate(`/clients/${client.id}`)}
+                  style={{ padding: 16, textAlign: 'left', display: 'flex', flexDirection: 'column', gap: 12 }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                    <Avatar name={client.name} color={colorFromString(client.name)} size="lg" />
+                    <StatusChip status={(client.status || 'lead').toLowerCase()} filled />
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 14, fontWeight: 800, color: 'var(--text)', letterSpacing: '-0.005em' }}>{client.company || client.name}</div>
+                    <div style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 2 }}>{client.name} · {(client.address || '').split(',')[0] || 'No city'}</div>
+                  </div>
+                  {tagList.length ? (
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                      {tagList.map(tag => <span key={tag} style={{ fontSize: 9.5, fontWeight: 800, letterSpacing: '.08em', textTransform: 'uppercase', padding: '2px 7px', background: 'var(--surf2)', color: 'var(--muted)', borderRadius: 3 }}>{tag}</span>)}
+                    </div>
+                  ) : null}
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, paddingTop: 8, borderTop: '1px solid var(--border)' }}>
                     <div>
-                      <div className="card-name">{c.name}</div>
-                      <div className="card-sub">{c.company || c.email || 'No company or email'}</div>
+                      <div className="proto-eyebrow">MTD</div>
+                      <div className="proto-mono" style={{ fontSize: 14, fontWeight: 700, color: 'var(--text)', marginTop: 2 }}>{protoCurrency(billedMtd)}</div>
+                    </div>
+                    <div>
+                      <div className="proto-eyebrow">Outstanding</div>
+                      <div className="proto-mono" style={{ fontSize: 14, fontWeight: 700, color: outstanding > 0 ? '#f87171' : 'var(--dim)', marginTop: 2 }}>{protoCurrency(outstanding)}</div>
                     </div>
                   </div>
-                  <span className={`badge ${stageBadge(c.status)}`}>{c.status || 'Lead'}</span>
-                </div>
-                <div className="client-card-contact-line">
-                  {c.email && <span>{c.email}</span>}
-                  {c.email && c.phone && <span className="client-card-dot">•</span>}
-                  {c.phone && <span>{c.phone}</span>}
-                </div>
-                <div className="card-stats">
-                  <div className="stat-item">
-                    <div className="stat-label">Billed</div>
-                    <div className="stat-value stat-value-gold">${rev.toLocaleString(undefined, { maximumFractionDigits: 0 })}</div>
-                  </div>
-                  <div className="stat-item">
-                    <div className="stat-label">Projects</div>
-                    <div className="stat-value">{projCount}</div>
-                  </div>
-                  {outstanding > 0 && (
-                    <div className="stat-item">
-                      <div className="stat-label">Outstanding</div>
-                      <div className="stat-value" style={{ color: '#f87171', fontSize: 13 }}>${outstanding.toFixed(2)}</div>
-                    </div>
-                  )}
-                  {c.paymentTerms && (
-                    <div className="stat-item">
-                      <div className="stat-label">Terms</div>
-                      <div className="stat-value" style={{ fontSize: 12 }}>{c.paymentTerms}</div>
-                    </div>
-                  )}
-                  {c.address && (
-                    <div className="stat-item">
-                      <div className="stat-label">Location</div>
-                      <div className="stat-value" style={{ fontSize: 12 }}>{c.address.split(',')[0]}</div>
-                    </div>
-                  )}
-                </div>
-                <div className="client-card-secondary">
-                  {c.address && <span className="pill-meta">{c.address.split(',')[0]}</span>}
-                  {c.timezone && <span className="pill-meta">{c.timezone}</span>}
-                  {c.defaultRate != null && <span className="pill-meta">${c.defaultRate}/hr default</span>}
-                </div>
-                {c.contractEnd && (() => {
-                  const daysLeft = Math.ceil((new Date(c.contractEnd).getTime() - Date.now()) / 86400000)
-                  if (daysLeft > 60) return null
-                  return (
-                    <div className="client-alert-strip" style={{ color: daysLeft <= 0 ? '#ef4444' : daysLeft <= 30 ? '#f97316' : '#f5b533' }}>
-                      {daysLeft <= 0 ? `Contract expired ${Math.abs(daysLeft)}d ago` : `Contract ends in ${daysLeft}d (${c.contractEnd})`}
-                    </div>
-                  )
-                })()}
-                {c.notes && <div className="card-detail" style={{ fontSize: 11, opacity: .7 }}>{c.notes}</div>}
-                {(c.links ?? []).length > 0 && (
-                  <div className="card-links">
-                    {(c.links ?? []).map((lk, i) => (
-                      <a key={i} href={lk.url} target="_blank" rel="noopener noreferrer" className="card-link-pill">{lk.label}</a>
-                    ))}
-                  </div>
-                )}
-                <div className="card-footer">
-                  {outstanding > 0 && c.email && (
-                    <button className="btn-xs btn-ghost" style={{ color: '#fb923c' }} onClick={ev => { ev.stopPropagation(); sendClientReminder(c) }}>✉ Remind</button>
-                  )}
-                  <button className="btn-xs btn-ghost" onClick={ev => { ev.stopPropagation(); openEdit(c) }}>Quick Edit</button>
-                  <button className="btn-xs btn-danger" onClick={ev => { ev.stopPropagation(); setConfirmDelete(c.id) }}>Remove</button>
-                </div>
-              </div>
-            )
-          })}
-          {filtered.length === 0 && (
-            <div style={{ gridColumn: '1/-1', textAlign: 'center', padding: '48px 20px', color: 'var(--muted)', fontSize: 14 }}>
-              {search ? 'No clients match your search.' : 'No clients yet. Add your first.'}
-            </div>
-          )}
-        </div>
-      )}
+                </button>
+              )
+            })}
+          </div>
+        )}
 
-      {/* KANBAN VIEW */}
-      {view === 'kanban' && (
-        <div className="kanban-board">
-          {STAGES.map(({ key, label }) => {
-            const laneClients = byStage(key)
-            const laneOutstanding = laneClients.reduce((sum, client) => sum + clientOutstanding(client.id), 0)
-            const laneRevenue = laneClients.reduce((sum, client) => sum + clientRevenue(client.id), 0)
-            return (
-            <div key={key} className={`kanban-col kanban-col-${key}`}>
-              <div className="kanban-col-header">
-                <div className="client-lane-header-main">
-                  <span className="kanban-stage-dot" />
-                  <span className="kanban-col-label">{label}</span>
-                  <span className="kanban-col-count">{laneClients.length}</span>
-                </div>
-                <div className="client-lane-header-meta">
-                  <span>${laneRevenue.toLocaleString(undefined, { maximumFractionDigits: 0 })} billed</span>
-                  <span>${laneOutstanding.toLocaleString(undefined, { maximumFractionDigits: 0 })} open</span>
-                </div>
-              </div>
-              <div className="kanban-cards" onDragOver={(e) => e.preventDefault()} onDrop={() => { if (dragId.current) { moveStage(dragId.current, key); dragId.current = null } }}>
-                {laneClients.map((c) => {
-                  const rev = clientRevenue(c.id)
-                  const outstanding = clientOutstanding(c.id)
-                  const projCount = clientProjects(c.id)
-                  const color = avatarColor(c.name)
+        {view === 'table' && (
+          <div className="card" style={{ overflow: 'hidden' }}>
+            <table className="proto-table">
+              <thead>
+                <tr>
+                  <th>Company</th>
+                  <th>Contact</th>
+                  <th>Stage</th>
+                  <th>Tags</th>
+                  <th style={{ textAlign: 'right' }}>Billed MTD</th>
+                  <th style={{ textAlign: 'right' }}>Outstanding</th>
+                  <th>Contract</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map(client => {
+                  const billedMtd = invoices
+                    .filter(invoice => invoice.clientName === client.name && (invoice.date || '').slice(0, 7) === new Date().toISOString().slice(0, 7))
+                    .reduce((sum, invoice) => sum + (Number(invoice.subtotal) || 0), 0)
+                  const tagList = (client.tags || '').split(',').map(tag => tag.trim()).filter(Boolean)
                   return (
-                  <div
-                    key={c.id}
-                    className="kanban-card client-kanban-card"
-                    draggable
-                    onDragStart={() => { dragId.current = c.id; dragSuppressRef.current = c.id }}
-                    onDragEnd={() => { window.setTimeout(() => { dragSuppressRef.current = null }, 0) }}
-                    onClick={() => {
-                      if (dragSuppressRef.current === c.id) return
-                      navigate('/clients/' + c.id)
-                    }}
-                  >
-                    <div className="client-kanban-top">
-                      <div className="card-top-left">
-                        <div className="avatar avatar-sm" style={{ background: color }}>{initials(c.name)}</div>
-                        <div>
-                          <div className="kanban-card-name">{c.name}</div>
-                          <div className="kanban-card-meta">{c.company || c.email || 'No company or email'}</div>
+                    <tr key={client.id} onClick={() => navigate(`/clients/${client.id}`)}>
+                      <td>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                          <Avatar name={client.name} color={colorFromString(client.name)} size="sm" />
+                          <span style={{ fontWeight: 700, color: 'var(--text)' }}>{client.company || client.name}</span>
                         </div>
-                      </div>
-                      <span className="client-drag-hint">Drag</span>
-                    </div>
-                    <div className="client-card-contact-line client-card-contact-line-sm">
-                      {c.email && <span>{c.email}</span>}
-                      {c.email && c.phone && <span className="client-card-dot">•</span>}
-                      {c.phone && <span>{c.phone}</span>}
-                    </div>
-                    <div className="client-kanban-stats">
-                      <div>
-                        <div className="stat-label">Billed</div>
-                        <div className="kanban-card-amount">${rev.toLocaleString(undefined, { maximumFractionDigits: 0 })}</div>
-                      </div>
-                      <div>
-                        <div className="stat-label">Projects</div>
-                        <div className="stat-value">{projCount}</div>
-                      </div>
-                      <div>
-                        <div className="stat-label">Open</div>
-                        <div className="stat-value" style={{ color: outstanding > 0 ? '#f87171' : '#4ade80' }}>
-                          ${outstanding.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                      </td>
+                      <td style={{ color: 'var(--muted)' }}>{client.name}</td>
+                      <td><StatusChip status={(client.status || 'lead').toLowerCase()} /></td>
+                      <td>
+                        <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                          {tagList.slice(0, 2).map(tag => <span key={tag} style={{ fontSize: 9.5, fontWeight: 800, letterSpacing: '.08em', textTransform: 'uppercase', padding: '2px 6px', background: 'var(--surf2)', color: 'var(--muted)', borderRadius: 3 }}>{tag}</span>)}
                         </div>
-                      </div>
-                    </div>
-                    {(c.links ?? []).length > 0 && (
-                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3, marginTop: 5 }}>
-                        {(c.links ?? []).slice(0, 2).map((lk, i) => (
-                          <a key={i} href={lk.url} target="_blank" rel="noopener noreferrer" className="card-link-pill card-link-pill-sm" onClick={e => e.stopPropagation()}>{lk.label}</a>
-                        ))}
-                      </div>
-                    )}
-                    {c.contractEnd && (() => {
-                      const daysLeft = Math.ceil((new Date(c.contractEnd).getTime() - Date.now()) / 86400000)
-                      if (daysLeft > 45) return null
-                      return (
-                        <div className="client-alert-strip client-alert-strip-compact" style={{ color: daysLeft <= 0 ? '#ef4444' : '#f97316' }}>
-                          {daysLeft <= 0 ? 'Contract expired' : `Contract ends in ${daysLeft}d`}
-                        </div>
-                      )
-                    })()}
-                    <div className="kanban-card-actions">
-                      <button className="btn-xs btn-ghost" onClick={(e) => { e.stopPropagation(); openActivity(c) }}>Activity</button>
-                      <button className="btn-xs btn-ghost" onClick={(e) => { e.stopPropagation(); openEdit(c) }}>Quick Edit</button>
-                      <button className="btn-xs btn-danger" onClick={(e) => { e.stopPropagation(); setConfirmDelete(c.id) }}>×</button>
-                    </div>
-                  </div>
-                )})}
-                {byStage(key).length === 0 && <div className="kanban-empty">Drop here</div>}
-              </div>
-            </div>
-          )})}
-        </div>
-      )}
+                      </td>
+                      <td className="proto-mono" style={{ textAlign: 'right', fontWeight: 700, color: 'var(--text)' }}>{protoCurrency(billedMtd)}</td>
+                      <td className="proto-mono" style={{ textAlign: 'right', fontWeight: 700, color: clientOutstanding(client.id) > 0 ? '#f87171' : 'var(--dim)' }}>{protoCurrency(clientOutstanding(client.id))}</td>
+                      <td className="proto-mono" style={{ color: 'var(--muted)' }}>{client.contractEnd ? protoDateShort(client.contractEnd) : '—'}</td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
 
       {/* Add/Edit Panel */}
       {panelOpen && (

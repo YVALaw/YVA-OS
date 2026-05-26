@@ -18,6 +18,9 @@
 - The experimental Logwork timesheet import flow remains in the codebase and database schema, but the UI is hidden in production because the source data was not reliable enough for safe invoice automation.
 - The weekly reminder email remains active as a standalone reminder under Settings → Notifications, independent of the hidden timesheet import UI.
 - Keep in progress for later: a real notifications system plus a notifications bell in the UI. Do not fold that into the current reminder-only implementation yet.
+- Keep in progress for later: Stripe Invoicing integration. Add a client-level `stripe_enabled` toggle, create/reuse Stripe customers, create and send Stripe-hosted invoices automatically for opted-in clients, store Stripe invoice IDs/hosted URLs on local invoices, and sync paid/failed/voided states back through Stripe webhooks.
+- Keep in progress for later: Google Calendar + Gmail lead-capture integration. Calendar should support scheduling and assigning tasks/events for the whole team; Gmail/contact email intake should automatically detect inbound leads and create them in the system for follow-up.
+- Keep in progress for later: DocuSign + document template system. Add a reusable document/template database for service agreements, staffing contracts, and other reusable documents; support editing/creating templates, selecting a client/contact/person from the system, and sending the generated contract through DocuSign for signature.
 
 ## Tech Stack
 - React 18 + TypeScript + Vite
@@ -342,6 +345,9 @@ Also shows: Employee Performance table, Revenue by Client/Project, All-Time Clie
 - [x] **Video support in attachments** — Employee and Candidate profiles accept video files; inline player uses fetch→blob to bypass CORS range-request blocking; extension-based MIME detection for Windows compatibility
 - [x] **Force-download for attachments** — download button fetches as blob with `application/octet-stream` so PDFs and videos save instead of opening in browser
 - [x] **Banco Popular exchange-rate integration** — Settings auto-fetch now targets Banco Popular `BPDConsultaTasa` instead of the prior public rate source
+- [ ] **Stripe Invoicing integration** — planned future phase: client opt-in toggle, Netlify create-invoice function, Stripe webhook status sync, hosted invoice/payment URL storage, and UI actions for open/resend/sync Stripe invoice
+- [ ] **Google Calendar + Gmail lead capture** — planned future phase: team-wide calendar task/event scheduling plus contact-email/Gmail lead intake that automatically creates leads in the system
+- [ ] **DocuSign + document templates** — planned future phase: database-backed contract/template library for service agreements, staffing contracts, editable templates, recipient lookup, and send-for-signature workflow
 
 ---
 
@@ -365,6 +371,7 @@ Standalone component used inside the builder modal in InvoicePage. Handles:
 ### Netlify functions
 - `netlify/functions/gmail-oauth.cjs` handles Google OAuth token exchange/refresh server-side using Netlify env var `GMAIL_CLIENT_SECRET`
 - `netlify/functions/infodolar-bhd.cjs` scrapes InfoDolar Banco BHD buy/sell rates for the currency settings auto-fetch
+- Planned Stripe phase should add `netlify/functions/stripe-create-invoice.cjs` and `netlify/functions/stripe-webhook.cjs`. Required env vars: `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, and `SUPABASE_SERVICE_ROLE_KEY`.
 
 ### Supabase schema notes
 - `name`, `role`, `location`, `timestamp` are PostgreSQL reserved words — wrapped in double quotes in SQL
@@ -376,6 +383,28 @@ Standalone component used inside the builder modal in InvoicePage. Handles:
   ```sql
   alter table public.invoices
   add column if not exists employee_payments jsonb not null default '{}'::jsonb;
+  ```
+- Planned Stripe phase schema sketch:
+  ```sql
+  alter table public.clients
+    add column if not exists stripe_enabled boolean default false,
+    add column if not exists stripe_customer_id text,
+    add column if not exists stripe_currency text default 'usd';
+
+  alter table public.invoices
+    add column if not exists stripe_invoice_id text,
+    add column if not exists stripe_invoice_status text,
+    add column if not exists stripe_hosted_invoice_url text,
+    add column if not exists stripe_invoice_pdf text,
+    add column if not exists stripe_payment_intent_id text,
+    add column if not exists stripe_synced_at timestamptz,
+    add column if not exists stripe_last_error text;
+
+  create table if not exists public.stripe_webhook_events (
+    id text primary key,
+    type text not null,
+    received_at timestamptz default now()
+  );
   ```
 
 ### Supabase Storage
@@ -415,6 +444,17 @@ Standalone component used inside the builder modal in InvoicePage. Handles:
 - Netlify SPA routing: `public/_redirects` contains `/* /index.html 200`
 
 ## Recent Progress
+- 2026-05-25 UI refactor pass: dashboard, invoices, clients, team, candidates, projects, expenses, profiles, modals, search, settings, kanban, and mobile bottom navigation were moved toward the supplied prototype visual system. Continue checking against `C:\Users\cronu\Desktop\Invoice - Copy\New\prototype` before any new UI changes.
+- 2026-05-25 Dashboard: range filters now drive KPI values; KPI cards open detail modals; Attention Required groups unpaid/overdue/draft/payroll/client/hiring items and opens detail modals; rows now route to the relevant invoice, employee, client, or candidate.
+- 2026-05-25 Dashboard: replaced Talent Pipeline panel with Revenue by Project showing project, total registered hours, total invoiced, payroll, and earnings from existing invoice/project/employee data.
+- 2026-05-25 Invoices: project-grouped invoice view kept as the active invoice UX, status changes use a custom dark prototype dropdown instead of the native white select, status chips were flattened to remove block styling, and stale `/invoices` routes were corrected to `/invoice`.
+- 2026-05-25 Search: global command palette was restyled to match the prototype more closely, using icon-led flat rows instead of blocky category rows.
+- 2026-05-25 Settings/profile polish: settings sections were resized to reduce oversized button blocks, icons were added to settings navigation/actions, profile pages were reworked toward prototype-style full pages while preserving existing data/actions, and global font sizing was increased slightly for readability.
+- 2026-05-25 Expenses: recurring general expenses now materialize monthly occurrences on load and persist generated rows. Supabase recurrence columns were verified live and are present.
+- 2026-05-25 Supabase verification: live schema was checked against the app. Remaining missing columns were identified as `clients.links`, `projects.description`, `tasks.description`, `tasks.status`, `tasks.assignee_name`, and `timesheet_import_batches.notify_email`; `supabase/rls.sql` now includes safe `ADD COLUMN IF NOT EXISTS` statements for them.
+- 2026-05-25 Stripe planning: Stripe Invoicing was added as a future integration with client opt-in, Stripe customer reuse, automatic Stripe invoice send, local Stripe metadata, Netlify create/webhook functions, webhook de-dupe, and status sync back into local invoices.
+- 2026-05-25 Calendar/Gmail planning: future integrations should include team-wide Google Calendar task/event scheduling and Gmail/contact-email lead capture that automatically creates inbound leads in the system.
+- 2026-05-25 DocuSign planning: future document workflow should include a database-backed template library for reusable agreements/contracts, template editing/creation, recipient lookup from system records, and DocuSign sending/tracking.
 - Candidates: dragging a card to `Hired` now opens an employee-profile completion modal prefilled from the candidate, creates the employee profile, then removes the candidate card from the pipeline
 - Team: default view now supports a project-board layout that groups employees under assigned projects; employees assigned to multiple projects repeat visually across those project lanes while still using a single employee profile record
 - Gmail: OAuth token exchange/refresh now runs through a Netlify function using `GMAIL_CLIENT_SECRET`; subject lines are MIME-encoded correctly and fallback toasts report real Gmail failure reasons

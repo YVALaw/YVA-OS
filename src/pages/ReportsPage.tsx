@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { getAllDataSnapshot } from '../services/dataSnapshot'
 import {
@@ -14,6 +14,7 @@ import { loadSettings, loadGeneralExpenses, loadCandidates, loadExpenses } from 
 import type { AppSettings, Candidate, DataSnapshot, Expense, Invoice } from '../data/types'
 import { useRole } from '../context/RoleContext'
 import { can } from '../lib/roles'
+import PrototypeDashboard from '../components/PrototypeDashboard'
 
 function downloadCSV(filename: string, rows: string[][]): void {
   const escape = (v: string) => `"${String(v ?? '').replace(/"/g, '""')}"`
@@ -113,6 +114,56 @@ function sBadge(s?: string) {
   }
 }
 
+function DashboardHero({
+  eyebrow,
+  title,
+  subtitle,
+  detail,
+  actions,
+  stats,
+  wideStats = false,
+}: {
+  eyebrow: string
+  title: string
+  subtitle: string
+  detail?: string
+  actions?: ReactNode
+  stats: { label: string; value: string; note: string; tone?: 'accent' | 'success' | 'danger' | 'warn' }[]
+  wideStats?: boolean
+}) {
+  const toneClass = {
+    accent: 'page-hero-stat-value-accent',
+    success: 'page-hero-stat-value-success',
+    danger: 'page-hero-stat-value-danger',
+    warn: 'page-hero-stat-value-warn',
+  } as const
+
+  return (
+    <section className="page-hero">
+      <div className="page-hero-main">
+        <div className="page-hero-top">
+          <div className="page-hero-copy">
+            <span className="page-hero-eyebrow">{eyebrow}</span>
+            <h1 className="page-title">{title}</h1>
+            <p className="page-sub">{subtitle}</p>
+          </div>
+          {actions ? <div className="page-hero-actions-col">{actions}</div> : null}
+        </div>
+        {detail ? <div className="page-hero-detail">{detail}</div> : null}
+      </div>
+      <div className={`page-hero-stats${wideStats ? ' page-hero-stats-wide' : ''}`}>
+        {stats.map(stat => (
+          <div key={stat.label} className="page-hero-stat">
+            <div className="page-hero-stat-label">{stat.label}</div>
+            <div className={`page-hero-stat-value ${stat.tone ? toneClass[stat.tone] : ''}`.trim()}>{stat.value}</div>
+            <div className="page-hero-stat-note">{stat.note}</div>
+          </div>
+        ))}
+      </div>
+    </section>
+  )
+}
+
 export default function ReportsPage() {
   const { role } = useRole()
   const navigate = useNavigate()
@@ -154,6 +205,8 @@ export default function ReportsPage() {
 
   const computed = useMemo(() => computeReports(store, range), [store, range])
   const topClient = computed.byClient.length ? computed.byClient[0] : null
+  const topClientName = topClient?.name || '—'
+  const topClientTotal = topClient?.total ?? null
 
   const invoicesInRange = useMemo(() => store.invoices.filter(inv => {
     const d = inv.date || inv.billingEnd || inv.billingStart || ''
@@ -361,6 +414,24 @@ export default function ReportsPage() {
     }).sort((a, b) => new Date(a.contractEnd!).getTime() - new Date(b.contractEnd!).getTime())
   }, [store])
 
+  const canSeeOwnerStats = can.viewOwnerStats(role)
+  const rangeExpenses = useMemo(() => generalExpenses.filter(e => {
+    if (!e.date) return true
+    if (from && e.date < from) return false
+    if (to && e.date > to) return false
+    return true
+  }), [from, generalExpenses, to])
+  const totalExpenses = useMemo(
+    () => rangeExpenses.reduce((sum, expense) => sum + (Number(expense.amount) || 0), 0),
+    [rangeExpenses],
+  )
+  const netAfterExpenses = computed.totalNetEarnings - totalExpenses
+  const allUnpaidBalance = useMemo(
+    () => allUnpaidInvoices.reduce((sum, invoice) => sum + Math.max(0, (Number(invoice.subtotal) || 0) - (Number(invoice.amountPaid) || 0)), 0),
+    [allUnpaidInvoices],
+  )
+  const monthlyGoal = settings.monthlyGoal ?? 0
+
   const attentionInvoiceDrillModal = (() => {
     if (kpiDrill !== 'attentionOverdue' && kpiDrill !== 'attentionDrafts') return null
 
@@ -410,6 +481,33 @@ export default function ReportsPage() {
     )
   })()
 
+  function exportOverviewCsv() {
+    const rows: string[][] = [
+      ['invoice_number', 'client', 'project', 'status', 'date', 'due_date', 'subtotal', 'amount_paid'],
+      ...store.invoices.map(invoice => [
+        invoice.number,
+        invoice.clientName || '',
+        invoice.projectName || '',
+        invoice.status || 'draft',
+        invoice.date || '',
+        invoice.dueDate || '',
+        String(Number(invoice.subtotal) || 0),
+        String(Number(invoice.amountPaid) || 0),
+      ]),
+    ]
+    downloadCSV(`yva-dashboard-export-${new Date().toISOString().slice(0, 10)}.csv`, rows)
+  }
+
+  return (
+    <PrototypeDashboard
+      store={store}
+      candidates={candidates}
+      generalExpenses={generalExpenses}
+      onNavigate={(path) => navigate(path)}
+      onExport={exportOverviewCsv}
+    />
+  )
+
   // ── Admin dashboard ─────────────────────────────────────────────────────────
   if (role === 'admin') {
     const activeProjects = store.projects.filter(p => (p.status||'').toLowerCase() === 'active').length
@@ -424,30 +522,29 @@ export default function ReportsPage() {
 
     return (
       <div className="page-wrap">
-        <div className="page-header">
-          <div className="page-header-left">
-            <h1 className="page-title">Dashboard</h1>
-            <p className="page-sub">Operations overview</p>
-          </div>
-        </div>
-
-        <div className="kpi-grid">
-          {[
-            { label: 'Active Projects',  value: String(activeProjects),          color: '#60a5fa' },
-            { label: 'Team Members',     value: String(store.employees.length),  color: '#c084fc' },
-            { label: 'Total Clients',    value: String(store.clients.length),    color: 'var(--text)' },
-            { label: 'Open Candidates',  value: String(inPipeline.length),       color: '#a855f7' },
-            { label: 'Draft Invoices',   value: String(draftInvoices.length),    color: draftInvoices.length > 0 ? '#f5b533' : 'var(--muted)' },
-            { label: 'Overdue',          value: String(overdueInvoices.length),  color: overdueInvoices.length > 0 ? '#f87171' : 'var(--muted)' },
-            { label: 'Sent / Pending',   value: String(sentPending.length),      color: '#60a5fa' },
-            { label: 'Paid This Month',  value: String(paidThisMonth.length),    color: '#4ade80' },
-          ].map(({ label, value, color }) => (
-            <div key={label} className="kpi-card">
-              <div className="kpi-label">{label}</div>
-              <div className="kpi-value" style={{ color, fontSize: 26 }}>{value}</div>
-            </div>
-          ))}
-        </div>
+        <DashboardHero
+          eyebrow="Operations overview"
+          title="Dashboard"
+          subtitle="Company-wide health across projects, hiring, client activity, and billing."
+          detail={`You have ${overdueInvoices.length} overdue invoice${overdueInvoices.length === 1 ? '' : 's'}, ${draftInvoices.length} draft${draftInvoices.length === 1 ? '' : 's'} waiting for review, and ${expiringContracts.length} contract${expiringContracts.length === 1 ? '' : 's'} expiring inside 60 days.`}
+          actions={(
+            <>
+              <button className="btn-ghost btn-sm" onClick={() => navigate('/clients')}>Open Clients</button>
+              <button className="btn-primary btn-sm" onClick={() => navigate('/invoice')}>Open Invoices</button>
+            </>
+          )}
+          stats={[
+            { label: 'Active Projects', value: String(activeProjects), note: 'Delivery work currently running', tone: 'accent' },
+            { label: 'Team Members', value: String(store.employees.length), note: 'People tracked in the system' },
+            { label: 'Total Clients', value: String(store.clients.length), note: 'Accounts under management' },
+            { label: 'Open Candidates', value: String(inPipeline.length), note: 'Recruiting pipeline not yet closed', tone: 'warn' },
+            { label: 'Draft Invoices', value: String(draftInvoices.length), note: 'Need review before sending', tone: draftInvoices.length > 0 ? 'warn' : undefined },
+            { label: 'Overdue', value: String(overdueInvoices.length), note: 'Invoices needing collection follow-up', tone: overdueInvoices.length > 0 ? 'danger' : undefined },
+            { label: 'Sent / Pending', value: String(sentPending.length), note: 'Open invoices awaiting payment', tone: 'accent' },
+            { label: 'Paid This Month', value: String(paidThisMonth.length), note: `Invoices closed in ${thisMonthStr}`, tone: 'success' },
+          ]}
+          wideStats
+        />
 
         <div className="layout-two-col">
           <div className="stack-md">
@@ -589,26 +686,24 @@ export default function ReportsPage() {
 
     return (
       <div className="page-wrap">
-        <div className="page-header">
-          <div className="page-header-left">
-            <h1 className="page-title">Dashboard</h1>
-            <p className="page-sub">Invoice &amp; billing overview</p>
-          </div>
-        </div>
-
-        <div className="kpi-grid">
-          {[
-            { label: 'Draft (to send)',  value: String(draftInvoices.length),   color: draftInvoices.length > 0 ? '#f5b533' : 'var(--muted)' },
-            { label: 'Overdue',          value: String(overdueInvoices.length), color: overdueInvoices.length > 0 ? '#f87171' : 'var(--muted)' },
-            { label: 'Sent / Pending',   value: String(sentPending.length),     color: '#60a5fa' },
-            { label: 'Paid This Month',  value: String(paidThisMonth.length),   color: '#4ade80' },
-          ].map(({ label, value, color }) => (
-            <div key={label} className="kpi-card">
-              <div className="kpi-label">{label}</div>
-              <div className="kpi-value" style={{ color, fontSize: 26 }}>{value}</div>
-            </div>
-          ))}
-        </div>
+        <DashboardHero
+          eyebrow="Billing operations"
+          title="Dashboard"
+          subtitle="Open balances, send queue, payroll-linked statements, and collection priorities."
+          detail={`Accounting is currently tracking ${outstanding.length} outstanding invoice${outstanding.length === 1 ? '' : 's'} with ${draftInvoices.length} draft${draftInvoices.length === 1 ? '' : 's'} still in the send queue.`}
+          actions={(
+            <>
+              <button className="btn-ghost btn-sm" onClick={() => navigate('/settings')}>Open Settings</button>
+              <button className="btn-primary btn-sm" onClick={() => navigate('/invoice')}>Review Invoices</button>
+            </>
+          )}
+          stats={[
+            { label: 'Drafts To Send', value: String(draftInvoices.length), note: 'Awaiting review and delivery', tone: draftInvoices.length > 0 ? 'warn' : undefined },
+            { label: 'Overdue', value: String(overdueInvoices.length), note: 'Invoices past due', tone: overdueInvoices.length > 0 ? 'danger' : undefined },
+            { label: 'Sent / Pending', value: String(sentPending.length), note: 'Open invoices not fully paid', tone: 'accent' },
+            { label: 'Paid This Month', value: String(paidThisMonth.length), note: `Invoices closed in ${thisMonthStr}`, tone: 'success' },
+          ]}
+        />
 
         <div className="layout-two-col">
           <div className="stack-md">
@@ -889,47 +984,78 @@ export default function ReportsPage() {
 
   return (
     <div className="page-wrap">
-      {/* Date range controls */}
-      <div className="page-header">
-        <div className="page-header-left">
-          <h1 className="page-title">Dashboard</h1>
-          <p className="page-sub">Financial overview &amp; insights</p>
-        </div>
-        <div className="page-header-actions">
-          <div className="form-group" style={{ margin: 0 }}>
-            <select className="form-select" style={{ width: 140 }} value={preset} onChange={(e) => setPreset(e.target.value as Preset)}>
-              <option value="month">This month</option>
-              <option value="quarter">This quarter</option>
-              <option value="custom">Custom</option>
-            </select>
-          </div>
-          <input className="form-input" type="date" value={from} onChange={(e) => { setPreset('custom'); setFrom(e.target.value) }} />
-          <input className="form-input" type="date" value={to} onChange={(e) => { setPreset('custom'); setTo(e.target.value) }} />
-        </div>
-      </div>
+      <DashboardHero
+        eyebrow="Financial command"
+        title="Dashboard"
+        subtitle="Billing, payroll exposure, expenses, and client performance in one operating view."
+        detail={`Current window: ${from} through ${to}. ${allUnpaidInvoices.length} unpaid invoice${allUnpaidInvoices.length === 1 ? '' : 's'} remain open across all periods, and ${payrollDueByEmployee.length} team member${payrollDueByEmployee.length === 1 ? '' : 's'} still have payroll due.`}
+        actions={(
+          <>
+            <div className="filter-bar" style={{ padding: 8, gap: 8 }}>
+              <select className="form-select" style={{ width: 140 }} value={preset} onChange={(e) => setPreset(e.target.value as Preset)}>
+                <option value="month">This month</option>
+                <option value="quarter">This quarter</option>
+                <option value="custom">Custom</option>
+              </select>
+              <input className="form-input" type="date" value={from} onChange={(e) => { setPreset('custom'); setFrom(e.target.value) }} />
+              <input className="form-input" type="date" value={to} onChange={(e) => { setPreset('custom'); setTo(e.target.value) }} />
+            </div>
+            <div className="page-hero-actions">
+              <button className="btn-ghost btn-sm" onClick={() => navigate('/invoice')}>Open Invoices</button>
+              <button className="btn-primary btn-sm" onClick={() => navigate('/projects')}>Open Projects</button>
+            </div>
+          </>
+        )}
+        stats={[
+          {
+            label: canSeeOwnerStats ? 'Billed In Range' : 'Hours In Range',
+            value: canSeeOwnerStats ? formatMoney(computed.totalBilled) : fmtHoursHM(computed.totalHours),
+            note: canSeeOwnerStats ? `${computed.invoiceCount} invoice${computed.invoiceCount === 1 ? '' : 's'} in range` : 'Tracked work billed in current window',
+            tone: 'accent',
+          },
+          {
+            label: canSeeOwnerStats ? 'Collected' : 'Paid Invoices',
+            value: canSeeOwnerStats ? formatMoney(computed.totalCollected) : String(computed.paidCount),
+            note: canSeeOwnerStats ? 'Cash received in the selected period' : 'Invoices marked paid in range',
+            tone: 'success',
+          },
+          {
+            label: 'Unpaid Queue',
+            value: String(allUnpaidInvoices.length),
+            note: `${formatMoney(allUnpaidBalance)} still awaiting collection`,
+            tone: allUnpaidInvoices.length > 0 ? 'danger' : undefined,
+          },
+          {
+            label: 'Payroll Due',
+            value: canSeeOwnerStats ? formatMoney(totalPayrollDue) : String(payrollDueByEmployee.length),
+            note: canSeeOwnerStats ? 'Outstanding pay still owed to the team' : 'People still awaiting payment',
+            tone: payrollDueByEmployee.length > 0 ? 'warn' : undefined,
+          },
+        ]}
+      />
 
       {/* Monthly revenue goal progress bar */}
-      {settings.monthlyGoal && settings.monthlyGoal > 0 && preset === 'month' && (
-        <div className="data-card" style={{ marginBottom: 0, padding: '14px 20px' }}>
+      {monthlyGoal > 0 && preset === 'month' && (
+        <div className="goal-progress-card">
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
             <div style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.07em', color: 'var(--muted)' }}>Monthly Goal</div>
             <div style={{ fontSize: 13, color: 'var(--gold)', fontWeight: 700 }}>
-              {formatMoney(computed.totalBilled)} / {formatMoney(settings.monthlyGoal)}
+              {formatMoney(computed.totalBilled)} / {formatMoney(monthlyGoal)}
               <span style={{ color: 'var(--muted)', fontWeight: 400, marginLeft: 8 }}>
-                ({Math.round(Math.min((computed.totalBilled / settings.monthlyGoal) * 100, 100))}%)
+                ({Math.round(Math.min((computed.totalBilled / monthlyGoal) * 100, 100))}%)
               </span>
             </div>
           </div>
           <div style={{ background: 'rgba(255,255,255,.07)', borderRadius: 6, height: 8, overflow: 'hidden' }}>
             <div style={{
               height: '100%',
-              width: `${Math.min((computed.totalBilled / settings.monthlyGoal) * 100, 100)}%`,
-              background: computed.totalBilled >= settings.monthlyGoal ? '#4ade80' : 'var(--gold)',
+              width: `${Math.min((computed.totalBilled / monthlyGoal) * 100, 100)}%`,
+              background: computed.totalBilled >= monthlyGoal ? '#4ade80' : 'var(--gold)',
               borderRadius: 6,
               transition: 'width .4s ease',
             }} />
           </div>
-          {computed.totalBilled >= settings.monthlyGoal && (
+          {computed.totalBilled >= monthlyGoal && (
             <div style={{ fontSize: 12, color: '#4ade80', marginTop: 6 }}>Goal reached!</div>
           )}
         </div>
@@ -937,25 +1063,17 @@ export default function ReportsPage() {
 
       {/* KPI cards */}
       {(() => {
-        const rangeExpenses = generalExpenses.filter(e => {
-          if (!e.date) return true
-          if (from && e.date < from) return false
-          if (to   && e.date > to)   return false
-          return true
-        })
-        const totalExpenses = rangeExpenses.reduce((s, e) => s + (Number(e.amount) || 0), 0)
-        const netAfterExpenses = computed.totalNetEarnings - totalExpenses
         const cardStyle: React.CSSProperties = { cursor: 'pointer' }
         return (
           <div className="kpi-grid">
-            {can.viewOwnerStats(role) && (
+            {canSeeOwnerStats && (
               <div className="kpi-card" style={cardStyle} onClick={() => setKpiDrill('billed')}>
                 <div className="kpi-label">Total Billed</div>
                 <div className="kpi-value">{formatMoney(computed.totalBilled)}</div>
                 <div className="kpi-sub">{computed.invoiceCount} invoice{computed.invoiceCount === 1 ? '' : 's'} invoiced in range</div>
               </div>
             )}
-            {can.viewOwnerStats(role) && (
+            {canSeeOwnerStats && (
               <div className="kpi-card" style={cardStyle} onClick={() => setKpiDrill('collected')}>
                 <div className="kpi-label">Collected</div>
                 <div className="kpi-value" style={{ color: '#38bdf8' }}>{formatMoney(computed.totalCollected)}</div>
@@ -967,14 +1085,14 @@ export default function ReportsPage() {
               <div className="kpi-value" style={{ fontSize: 22 }}>{fmtHoursHM(computed.totalHours)}</div>
               <div className="kpi-sub">billed in range</div>
             </div>
-            {can.viewOwnerStats(role) && (
+            {canSeeOwnerStats && (
               <div className="kpi-card" style={cardStyle} onClick={() => setKpiDrill('payroll')}>
                 <div className="kpi-label">Est. Payroll</div>
                 <div className="kpi-value" style={{ color: '#f87171' }}>{formatMoney(computed.totalPayroll)}</div>
                 <div className="kpi-sub">based on employee pay rates</div>
               </div>
             )}
-            {can.viewOwnerStats(role) && (
+            {canSeeOwnerStats && (
               <div className="kpi-card" style={cardStyle} onClick={() => setKpiDrill('payrollDue')}>
                 <div className="kpi-label">Payroll Due</div>
                 <div className="kpi-value" style={{ color: '#fb7185' }}>{formatMoney(totalPayrollDue)}</div>
@@ -987,7 +1105,7 @@ export default function ReportsPage() {
               <div className="kpi-value" style={{ color: '#fb923c' }}>{formatMoney(totalExpenses)}</div>
               <div className="kpi-sub">{rangeExpenses.length} expense{rangeExpenses.length !== 1 ? 's' : ''} in range</div>
             </div>
-            {can.viewOwnerStats(role) && (
+            {canSeeOwnerStats && (
               <div className="kpi-card" style={cardStyle} onClick={() => setKpiDrill('net')}>
                 <div className="kpi-label">Net Earnings</div>
                 <div className="kpi-value" style={{ color: netAfterExpenses >= 0 ? '#4ade80' : '#f87171' }}>
@@ -1009,8 +1127,8 @@ export default function ReportsPage() {
             </div>
             <div className="kpi-card" style={cardStyle} onClick={() => setKpiDrill('topClient')}>
               <div className="kpi-label">Top Client</div>
-              <div className="kpi-value kpi-value-name">{topClient?.name || '—'}</div>
-              <div className="kpi-sub">{topClient ? formatMoney(topClient.total) : 'No data'}</div>
+              <div className="kpi-value kpi-value-name">{topClientName}</div>
+              <div className="kpi-sub">{topClientTotal != null ? formatMoney(topClientTotal!) : 'No data'}</div>
             </div>
             <div className="kpi-card" style={cardStyle} onClick={() => setKpiDrill('clients')}>
               <div className="kpi-label">Clients</div>
@@ -1027,8 +1145,8 @@ export default function ReportsPage() {
       })()}
 
       {/* Revenue chart + attention */}
-      <div className="layout-two-col" style={!can.viewOwnerStats(role) ? { gridTemplateColumns: '1fr' } : undefined}>
-        {can.viewOwnerStats(role) && (
+      <div className="layout-two-col" style={!canSeeOwnerStats ? { gridTemplateColumns: '1fr' } : undefined}>
+        {canSeeOwnerStats && (
           <div className="data-card">
             <div className="data-card-header">
               <div>
@@ -1116,7 +1234,7 @@ export default function ReportsPage() {
       </div>
 
       {/* By client + by project */}
-      {can.viewOwnerStats(role) && <div className="layout-halves">
+      {canSeeOwnerStats && <div className="layout-halves">
         <div className="data-card">
           <div className="data-card-title">Revenue by Client</div>
           <div className="table-wrap">
@@ -1161,7 +1279,7 @@ export default function ReportsPage() {
         </div>
       </div>}
 
-      {can.viewOwnerStats(role) && (
+      {canSeeOwnerStats && (
         <div className="data-card">
           <div className="data-card-header">
             <div>
@@ -1213,8 +1331,8 @@ export default function ReportsPage() {
                   <th>Employee</th>
                   <th>Hours</th>
                   <th>Billed</th>
-                  {can.viewOwnerStats(role) && <th>Payroll Cost</th>}
-                  {can.viewOwnerStats(role) && <th>Margin</th>}
+                  {canSeeOwnerStats && <th>Payroll Cost</th>}
+                  {canSeeOwnerStats && <th>Margin</th>}
                   <th>Invoices</th>
                 </tr>
               </thead>
@@ -1224,8 +1342,8 @@ export default function ReportsPage() {
                     <td className="td-name">{e.name}</td>
                     <td className="td-muted">{fmtHoursHM(e.hours)}</td>
                     <td style={{ color: 'var(--gold)', fontWeight: 700 }}>{formatMoney(e.billed)}</td>
-                    {can.viewOwnerStats(role) && <td style={{ color: '#f87171' }}>{e.payroll > 0 ? formatMoney(e.payroll) : <span className="td-muted">—</span>}</td>}
-                    {can.viewOwnerStats(role) && (
+                    {canSeeOwnerStats && <td style={{ color: '#f87171' }}>{e.payroll > 0 ? formatMoney(e.payroll) : <span className="td-muted">—</span>}</td>}
+                    {canSeeOwnerStats && (
                       <td style={{ color: e.margin >= 0 ? '#4ade80' : '#f87171', fontWeight: 600 }}>
                         {e.payroll > 0 ? formatMoney(e.margin) : <span className="td-muted">—</span>}
                       </td>
@@ -1318,8 +1436,9 @@ export default function ReportsPage() {
           if (!ref) continue
           const d = new Date(ref); d.setHours(0,0,0,0)
           const age = Math.floor((today.getTime() - d.getTime()) / 86400000)
-          const bucket = buckets.find(b => age >= b.min && age <= b.max)
-          if (bucket) bucket.invoices.push(inv)
+          const agingBucketIndex = buckets.findIndex(b => age >= b.min && age <= b.max)
+          if (agingBucketIndex < 0) continue
+          buckets[agingBucketIndex]!.invoices.push(inv)
         }
         const hasAging = buckets.some(b => b.invoices.length > 0)
         if (!hasAging) return null
