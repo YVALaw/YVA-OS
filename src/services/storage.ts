@@ -89,6 +89,143 @@ async function insertMany<T extends Record<string, unknown>>(table: string, item
   if (error) throw formatSupabaseError('Insert into', table, error)
 }
 
+// ─── User-scoped session cache ───────────────────────────────────────────────
+
+type StorageCache = {
+  version: number
+  userId: string
+  loadedAt: number
+  updatedAt: number
+  employees?: Employee[]
+  clients?: Client[]
+  projects?: Project[]
+  invoices?: Invoice[]
+  candidates?: Candidate[]
+  expenses?: Expense[]
+  generalExpenses?: Expense[]
+  tasks?: Task[]
+  settings?: AppSettings
+}
+
+const STORAGE_CACHE_VERSION = 1
+const STORAGE_CACHE_PREFIX = 'yva-os-data-cache'
+let _storageCacheUserId: string | null = null
+let _storageCache: StorageCache | null = null
+let _warmCachePromise: Promise<void> | null = null
+
+function canUseSessionStorage(): boolean {
+  return typeof window !== 'undefined' && typeof window.sessionStorage !== 'undefined'
+}
+
+function storageCacheKey(userId = _storageCacheUserId): string {
+  return `${STORAGE_CACHE_PREFIX}:v${STORAGE_CACHE_VERSION}:${userId || 'anonymous'}`
+}
+
+function cloneForCache<T>(value: T): T {
+  if (value == null) return value
+  try {
+    if (typeof structuredClone === 'function') return structuredClone(value)
+  } catch {
+    // Fall back to JSON cloning below.
+  }
+  return JSON.parse(JSON.stringify(value)) as T
+}
+
+function readStorageCache(userId: string): StorageCache | null {
+  if (!canUseSessionStorage()) return null
+  try {
+    const raw = window.sessionStorage.getItem(storageCacheKey(userId))
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as StorageCache
+    if (parsed.version !== STORAGE_CACHE_VERSION || parsed.userId !== userId) return null
+    return parsed
+  } catch {
+    return null
+  }
+}
+
+function writeStorageCache(): void {
+  if (!canUseSessionStorage() || !_storageCache) return
+  try {
+    window.sessionStorage.setItem(storageCacheKey(_storageCache.userId), JSON.stringify(_storageCache))
+  } catch {
+    // Storage may be unavailable or full; in-memory cache still works for this session.
+  }
+}
+
+function ensureStorageCache(): StorageCache | null {
+  if (!_storageCacheUserId) return null
+  if (!_storageCache) {
+    _storageCache = {
+      version: STORAGE_CACHE_VERSION,
+      userId: _storageCacheUserId,
+      loadedAt: Date.now(),
+      updatedAt: Date.now(),
+    }
+  }
+  return _storageCache
+}
+
+function patchStorageCache(patch: Partial<Omit<StorageCache, 'version' | 'userId' | 'loadedAt' | 'updatedAt'>>): void {
+  const cache = ensureStorageCache()
+  if (!cache) return
+  Object.assign(cache, cloneForCache(patch), { updatedAt: Date.now() })
+  writeStorageCache()
+}
+
+function getCachedValue<K extends keyof StorageCache>(key: K): StorageCache[K] | undefined {
+  const value = _storageCache?.[key]
+  return value == null ? undefined : cloneForCache(value)
+}
+
+export function configureStorageCache(userId: string | null): void {
+  if (!userId) {
+    clearStorageCache()
+    return
+  }
+  if (_storageCacheUserId === userId && _storageCache) return
+  _storageCacheUserId = userId
+  _storageCache = readStorageCache(userId) || {
+    version: STORAGE_CACHE_VERSION,
+    userId,
+    loadedAt: Date.now(),
+    updatedAt: Date.now(),
+  }
+  invalidateSnapshotCache()
+}
+
+export function clearStorageCache(userId?: string | null): void {
+  const targetUserId = userId || _storageCacheUserId
+  if (canUseSessionStorage()) {
+    try {
+      if (targetUserId) window.sessionStorage.removeItem(storageCacheKey(targetUserId))
+    } catch {
+      // Ignore storage cleanup failures.
+    }
+  }
+  _storageCacheUserId = null
+  _storageCache = null
+  _warmCachePromise = null
+  invalidateSnapshotCache()
+}
+
+export function warmAppDataCache(): Promise<void> {
+  if (_warmCachePromise) return _warmCachePromise
+  _warmCachePromise = (async () => {
+    await Promise.allSettled([
+      loadSnapshot(true),
+      loadCandidates(true),
+      loadGeneralExpenses(true),
+      loadTasks(true),
+      loadSettings(true),
+    ])
+    await loadExpenses(true).catch(() => undefined)
+  })().finally(() => {
+    _warmCachePromise = null
+  })
+  return _warmCachePromise
+}
+
 function isMissingColumnError(error: { message?: string; details?: string; hint?: string; code?: string }): boolean {
   const text = [error.message, error.details, error.hint, error.code].filter(Boolean).join(' ').toLowerCase()
   return text.includes('recurrence_') || text.includes('column') && text.includes('schema cache')
@@ -165,40 +302,70 @@ function materializeRecurringExpenses(expenses: Expense[]): Expense[] {
 
 // ─── Employees ────────────────────────────────────────────────────────────────
 
-export async function loadEmployees(): Promise<Employee[]> {
-  return fetchAll<Employee>('employees')
+export async function loadEmployees(force = false): Promise<Employee[]> {
+  if (!force) {
+    const cached = getCachedValue('employees')
+    if (cached) return cached
+  }
+  const employees = await fetchAll<Employee>('employees')
+  patchStorageCache({ employees })
+  return employees
 }
 export async function saveEmployees(employees: Employee[]): Promise<void> {
-  invalidateSnapshotCache(); return syncAll('employees', employees)
+  invalidateSnapshotCache()
+  await syncAll('employees', employees)
+  patchStorageCache({ employees })
 }
 
 // ─── Clients ──────────────────────────────────────────────────────────────────
 
-export async function loadClients(): Promise<Client[]> {
-  return fetchAll<Client>('clients')
+export async function loadClients(force = false): Promise<Client[]> {
+  if (!force) {
+    const cached = getCachedValue('clients')
+    if (cached) return cached
+  }
+  const clients = await fetchAll<Client>('clients')
+  patchStorageCache({ clients })
+  return clients
 }
 export async function saveClients(clients: Client[]): Promise<void> {
-  invalidateSnapshotCache(); return syncAll('clients', clients)
+  invalidateSnapshotCache()
+  await syncAll('clients', clients)
+  patchStorageCache({ clients })
 }
 
 // ─── Projects ─────────────────────────────────────────────────────────────────
 
-export async function loadProjects(): Promise<Project[]> {
-  return fetchAll<Project>('projects')
+export async function loadProjects(force = false): Promise<Project[]> {
+  if (!force) {
+    const cached = getCachedValue('projects')
+    if (cached) return cached
+  }
+  const projects = await fetchAll<Project>('projects')
+  patchStorageCache({ projects })
+  return projects
 }
 export async function saveProjects(projects: Project[]): Promise<void> {
-  invalidateSnapshotCache(); return syncAll('projects', projects)
+  invalidateSnapshotCache()
+  await syncAll('projects', projects)
+  patchStorageCache({ projects })
 }
 
 // ─── Invoices ─────────────────────────────────────────────────────────────────
 
-export async function loadInvoices(): Promise<Invoice[]> {
+export async function loadInvoices(force = false): Promise<Invoice[]> {
+  if (!force) {
+    const cached = getCachedValue('invoices')
+    if (cached) return cached
+  }
   const { data, error } = await supabase
     .from('invoices')
     .select('*')
     .order('created_at', { ascending: false })
   if (error) throw formatSupabaseError('Load from', 'invoices', error)
-  return (data || []).map(row => toCamel<Invoice>(row as Record<string, unknown>))
+  const invoices = (data || []).map(row => toCamel<Invoice>(row as Record<string, unknown>))
+  patchStorageCache({ invoices })
+  return invoices
 }
 export async function saveInvoices(invoices: Invoice[]): Promise<void> {
   invalidateSnapshotCache()
@@ -206,16 +373,24 @@ export async function saveInvoices(invoices: Invoice[]): Promise<void> {
     ...invoice,
     employeePayments: invoice.employeePayments ?? {},
   }))
-  return syncAll('invoices', normalized)
+  await syncAll('invoices', normalized)
+  patchStorageCache({ invoices: normalized })
 }
 
 // ─── Candidates ───────────────────────────────────────────────────────────────
 
-export async function loadCandidates(): Promise<Candidate[]> {
-  return fetchAll<Candidate>('candidates')
+export async function loadCandidates(force = false): Promise<Candidate[]> {
+  if (!force) {
+    const cached = getCachedValue('candidates')
+    if (cached) return cached
+  }
+  const candidates = await fetchAll<Candidate>('candidates')
+  patchStorageCache({ candidates })
+  return candidates
 }
 export async function saveCandidates(candidates: Candidate[]): Promise<void> {
-  return syncAll('candidates', candidates)
+  await syncAll('candidates', candidates)
+  patchStorageCache({ candidates })
 }
 
 // ─── Timesheet Automation ────────────────────────────────────────────────────
@@ -333,23 +508,41 @@ export async function saveTimesheetMappings(mappings: TimesheetMapping[]): Promi
 
 // ─── Tasks ────────────────────────────────────────────────────────────────────
 
-export async function loadTasks(): Promise<Task[]> {
-  return fetchAll<Task>('tasks')
+export async function loadTasks(force = false): Promise<Task[]> {
+  if (!force) {
+    const cached = getCachedValue('tasks')
+    if (cached) return cached
+  }
+  const tasks = await fetchAll<Task>('tasks')
+  patchStorageCache({ tasks })
+  return tasks
 }
 export async function saveTasks(tasks: Task[]): Promise<void> {
-  return syncAll('tasks', tasks)
+  await syncAll('tasks', tasks)
+  patchStorageCache({ tasks })
 }
 
 // ─── Expenses ─────────────────────────────────────────────────────────────────
 
-export async function loadExpenses(): Promise<Expense[]> {
-  return fetchAll<Expense>('expenses')
+export async function loadExpenses(force = false): Promise<Expense[]> {
+  if (!force) {
+    const cached = getCachedValue('expenses')
+    if (cached) return cached
+  }
+  const expenses = await fetchAll<Expense>('expenses')
+  patchStorageCache({ expenses })
+  return expenses
 }
 export async function saveExpenses(expenses: Expense[]): Promise<void> {
-  return syncAll('expenses', expenses)
+  await syncAll('expenses', expenses)
+  patchStorageCache({ expenses, generalExpenses: undefined })
 }
 
-export async function loadGeneralExpenses(): Promise<Expense[]> {
+export async function loadGeneralExpenses(force = false): Promise<Expense[]> {
+  if (!force) {
+    const cached = getCachedValue('generalExpenses')
+    if (cached) return cached
+  }
   const { data, error } = await supabase
     .from('expenses')
     .select('*')
@@ -368,6 +561,7 @@ export async function loadGeneralExpenses(): Promise<Expense[]> {
       await insertMany('expenses', generated.map(stripExpenseRecurrenceFields) as unknown as Record<string, unknown>[])
     }
   }
+  patchStorageCache({ generalExpenses: materialized, expenses: undefined })
   return materialized
 }
 export async function saveGeneralExpenses(expenses: Expense[]): Promise<void> {
@@ -392,7 +586,10 @@ export async function saveGeneralExpenses(expenses: Expense[]): Promise<void> {
     if (error) throw formatSupabaseError('Delete from', 'expenses', error)
   }
 
-  if (normalized.length === 0) return
+  if (normalized.length === 0) {
+    patchStorageCache({ generalExpenses: [], expenses: undefined })
+    return
+  }
 
   const rows = normalized.map(expense => {
     const row = toSnake(expense as unknown as Record<string, unknown>)
@@ -405,7 +602,10 @@ export async function saveGeneralExpenses(expenses: Expense[]): Promise<void> {
   })
 
   const { error } = await supabase.from('expenses').upsert(rows)
-  if (!error) return
+  if (!error) {
+    patchStorageCache({ generalExpenses: normalized, expenses: undefined })
+    return
+  }
   if (!isMissingColumnError(error)) throw formatSupabaseError('Save to', 'expenses', error)
 
   const fallbackRows = normalized.map(expense => {
@@ -419,6 +619,7 @@ export async function saveGeneralExpenses(expenses: Expense[]): Promise<void> {
   })
   const { error: fallbackError } = await supabase.from('expenses').upsert(fallbackRows)
   if (fallbackError) throw formatSupabaseError('Save to', 'expenses', fallbackError)
+  patchStorageCache({ generalExpenses: normalized, expenses: undefined })
 }
 
 // ─── Activity Log ─────────────────────────────────────────────────────────────
@@ -476,12 +677,19 @@ const DEFAULT_SETTINGS: AppSettings = {
   timesheetReminderMinute: 0,
 }
 
-export async function loadSettings(): Promise<AppSettings> {
+export async function loadSettings(force = false): Promise<AppSettings> {
+  if (!force) {
+    const cached = getCachedValue('settings')
+    if (cached) return cached
+  }
   const { data, error } = await supabase.from('settings').select('*').eq('id', 1).single()
   if (error) throw formatSupabaseError('Load from', 'settings', error)
-  if (!data) return DEFAULT_SETTINGS
+  if (!data) {
+    patchStorageCache({ settings: DEFAULT_SETTINGS })
+    return DEFAULT_SETTINGS
+  }
   const row = data as Record<string, unknown>
-  return {
+  const settings = {
     usdToDop:               (row.usd_to_dop as number) ?? 0,
     companyName:            (row.company_name as string) ?? 'YVA Staffing',
     companyEmail:           (row.company_email as string) ?? '',
@@ -503,6 +711,8 @@ export async function loadSettings(): Promise<AppSettings> {
     timesheetReminderMinute: row.timesheet_reminder_minute != null ? (row.timesheet_reminder_minute as number) : 0,
     timesheetReminderLastSentAt: (row.timesheet_reminder_last_sent_at as string | undefined),
   }
+  patchStorageCache({ settings })
+  return settings
 }
 
 export async function saveSettings(s: AppSettings): Promise<void> {
@@ -529,6 +739,7 @@ export async function saveSettings(s: AppSettings): Promise<void> {
     timesheet_reminder_last_sent_at: s.timesheetReminderLastSentAt ?? null,
   }).eq('id', 1)
   if (error) throw formatSupabaseError('Save to', 'settings', error)
+  patchStorageCache({ settings: s })
 }
 
 // ─── Snapshot cache ───────────────────────────────────────────────────────────
@@ -540,17 +751,29 @@ export function invalidateSnapshotCache() { _snapCache = null }
 
 // ─── Snapshot (loads all core data in parallel) ───────────────────────────────
 
-export async function loadSnapshot(): Promise<DataSnapshot> {
-  if (_snapCache && Date.now() - _snapCache.at < SNAP_TTL) return _snapCache.data
+export async function loadSnapshot(force = false): Promise<DataSnapshot> {
+  if (!force && _snapCache && Date.now() - _snapCache.at < SNAP_TTL) return cloneForCache(_snapCache.data)
+  if (!force) {
+    const employees = getCachedValue('employees')
+    const projects = getCachedValue('projects')
+    const clients = getCachedValue('clients')
+    const invoices = getCachedValue('invoices')
+    if (employees && projects && clients && invoices) {
+      const invoiceCounter = await loadInvoiceCounter()
+      const data = { employees, projects, clients, invoices, invoiceCounter }
+      _snapCache = { data: cloneForCache(data), at: Date.now() }
+      return data
+    }
+  }
   const [employees, projects, clients, invoices, invoiceCounter] = await Promise.all([
-    loadEmployees(),
-    loadProjects(),
-    loadClients(),
-    loadInvoices(),
+    loadEmployees(force),
+    loadProjects(force),
+    loadClients(force),
+    loadInvoices(force),
     loadInvoiceCounter(),
   ])
   const data = { employees, projects, clients, invoices, invoiceCounter }
-  _snapCache = { data, at: Date.now() }
+  _snapCache = { data: cloneForCache(data), at: Date.now() }
   return data
 }
 

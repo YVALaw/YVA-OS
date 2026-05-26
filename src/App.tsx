@@ -18,7 +18,14 @@ import SettingsPage from './pages/SettingsPage'
 import CandidatesPage from './pages/CandidatesPage'
 import CandidateProfilePage from './pages/CandidateProfilePage'
 import GeneralExpensesPage from './pages/GeneralExpensesPage'
-import { loadSettings, saveSettings, loadInvoices } from './services/storage'
+import {
+  clearStorageCache,
+  configureStorageCache,
+  loadSettings,
+  saveSettings,
+  loadInvoices,
+  warmAppDataCache,
+} from './services/storage'
 import { RoleProvider, useRole } from './context/RoleContext'
 import type { UserRole } from './lib/roles'
 import { can } from './lib/roles'
@@ -56,14 +63,29 @@ export default function App() {
   const [session, setSession] = useState<Session | null | undefined>(undefined)
 
   useEffect(() => {
+    let warmedUserId: string | null = null
+    const handleSession = (nextSession: Session | null) => {
+      setSession(nextSession)
+      const userId = nextSession?.user.id
+      if (!userId) {
+        warmedUserId = null
+        clearStorageCache()
+        return
+      }
+      configureStorageCache(userId)
+      if (warmedUserId === userId) return
+      warmedUserId = userId
+      void warmAppDataCache()
+      void maybeFireReminder()
+    }
+
     // Get initial session
     supabase.auth.getSession().then(({ data }) => {
-      setSession(data.session)
-      if (data.session) void maybeFireReminder()
+      handleSession(data.session)
     })
     // Listen for auth changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session)
+      handleSession(session)
     })
     return () => subscription.unsubscribe()
   }, [])
