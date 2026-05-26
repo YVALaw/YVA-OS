@@ -89,6 +89,23 @@ function getEmployeeInvoices(empName: string, invoices: Invoice[], from?: string
   }).sort(compareInvoicesDesc)
 }
 
+function getCurrentMonthBounds(): { from: string; to: string } {
+  const now = new Date()
+  const from = new Date(now.getFullYear(), now.getMonth(), 1)
+  const to = new Date(now.getFullYear(), now.getMonth() + 1, 0)
+  return {
+    from: from.toISOString().slice(0, 10),
+    to: to.toISOString().slice(0, 10),
+  }
+}
+
+function invoiceOverlapsRange(inv: Invoice, from: string, to: string): boolean {
+  const start = inv.billingStart || inv.date || inv.billingEnd || ''
+  const end = inv.billingEnd || inv.date || inv.billingStart || ''
+  if (!start && !end) return false
+  return end >= from && start <= to
+}
+
 function compareInvoicesDesc(a: Invoice, b: Invoice): number {
   const aNum = parseInvoiceNumber(a.number)
   const bNum = parseInvoiceNumber(b.number)
@@ -662,8 +679,15 @@ export default function EmployeesPage() {
     onboarding: employees.filter(employee => (employee.status || '').toLowerCase() === 'onboarding').length,
     'on hold': employees.filter(employee => (employee.status || '').toLowerCase() === 'on hold').length,
   }), [employees])
+  const currentMonth = useMemo(() => getCurrentMonthBounds(), [])
   const normalizedEmployees = useMemo(() => filtered.map(employee => {
-    const empInvoices = invoices.filter(inv => (inv.items || []).some(item => item.employeeName?.toLowerCase() === employee.name.toLowerCase()))
+    const empInvoices = invoices.filter(inv =>
+      invoiceOverlapsRange(inv, currentMonth.from, currentMonth.to) &&
+      (inv.items || []).some(item =>
+        (item.employeeId && item.employeeId === employee.id) ||
+        item.employeeName?.toLowerCase() === employee.name.toLowerCase(),
+      ),
+    )
     const summary = summarizeEmployeeInvoices(employee, empInvoices)
     const assignedProjects = projects.filter(project => (project.employeeIds || []).includes(employee.id))
     return {
@@ -678,7 +702,7 @@ export default function EmployeesPage() {
       projectNames: assignedProjects.map(project => project.name),
       projectIdsList: assignedProjects.map(project => project.id),
     }
-  }), [filtered, invoices, projects])
+  }), [currentMonth.from, currentMonth.to, filtered, invoices, projects])
   const totalHoursLogged = Math.round(normalizedEmployees.reduce((sum, employee) => sum + employee.hoursMtd, 0))
   const totalPayrollMtd = normalizedEmployees.reduce((sum, employee) => sum + employee.earned, 0)
   const projectColumns = useMemo(() => ([
