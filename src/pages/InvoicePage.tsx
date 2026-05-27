@@ -461,18 +461,30 @@ export default function InvoicePage() {
     setNewStatus((inv.status as InvoiceStatus) || 'draft')
     setNewAmountPaid(inv.amountPaid != null ? String(inv.amountPaid) : '')
   }
-  function applyStatusChange(targetId: string, status: InvoiceStatus, amountPaid?: string) {
-    const amtPaid = status === 'partial' ? (parseFloat(amountPaid || '') || 0) : undefined
-    void persist(invoices.map((inv) => {
+  async function applyStatusChange(targetId: string, status: InvoiceStatus, amountPaid?: string): Promise<boolean> {
+    const nextInvoices = invoices.map((inv) => {
       if (inv.id !== targetId) return inv
       const histEntry = { status, changedAt: Date.now() }
+      const subtotal = Number(inv.subtotal) || 0
+      const amtPaid =
+        status === 'paid'
+          ? subtotal
+          : status === 'partial'
+            ? Math.min(subtotal, Math.max(0, parseFloat(amountPaid || '') || 0))
+            : undefined
       return {
         ...inv, status, amountPaid: amtPaid, updatedAt: Date.now(),
         statusHistory: [...(inv.statusHistory || []), histEntry],
       }
-    }))
+    })
+    const ok = await persist(nextInvoices)
+    if (ok) {
+      const updated = nextInvoices.find(inv => inv.id === targetId)
+      if (updated) showToast(status === 'paid' ? `Payment recorded for ${updated.number}` : `Invoice ${updated.number} marked ${status}`)
+    }
     setEditId(null)
     setStatusMenuOpenId(null)
+    return ok
   }
 
   function handleInlineStatusSelect(inv: Invoice, nextStatus: InvoiceStatus) {
@@ -480,7 +492,7 @@ export default function InvoicePage() {
     setStatusMenuOpenId(null)
     setNewStatus(nextStatus)
     if (nextStatus !== 'partial') {
-      applyStatusChange(inv.id, nextStatus)
+      void applyStatusChange(inv.id, nextStatus)
     }
   }
 
@@ -818,7 +830,7 @@ export default function InvoicePage() {
                                         />
                                         <div style={{ display: 'flex', gap: 6 }}>
                                           <button type="button" className="proto-btn proto-btn-ghost" onClick={() => { setEditId(null); setStatusMenuOpenId(null) }}>Cancel</button>
-                                          <button type="button" className="proto-btn proto-btn-primary" onClick={() => applyStatusChange(invoice.id, 'partial', newAmountPaid)}>Save</button>
+                                          <button type="button" className="proto-btn proto-btn-primary" onClick={() => void applyStatusChange(invoice.id, 'partial', newAmountPaid)}>Save</button>
                                         </div>
                                       </>
                                     ) : null}
@@ -910,21 +922,27 @@ export default function InvoicePage() {
           })
           const subtotal = Number(openInvoice.subtotal) || 0
           const outstanding = Math.max(0, subtotal - (Number(openInvoice.amountPaid) || 0))
-          const actions = [
-            {
-              label: openInvoice.status === 'draft' ? 'Send to client' : openInvoice.status === 'overdue' ? 'Send reminder' : 'Record payment',
-              icon: openInvoice.status === 'draft' ? 'send' : openInvoice.status === 'overdue' ? 'mail' : 'check',
-              onClick: () => {
-                if (openInvoice.status === 'draft') {
-                  if (openInvoice.clientEmail) void handleInvoiceEmail(openInvoice)
-                } else if (openInvoice.status === 'overdue') {
-                  if (openInvoice.clientEmail) void handleReminderEmail(openInvoice)
-                } else {
-                  openStatusEdit(openInvoice)
-                }
-              },
+          const primaryAction = {
+            label:
+              openInvoice.status === 'draft'
+                ? 'Send to client'
+                : openInvoice.status === 'overdue'
+                  ? 'Send reminder'
+                  : openInvoice.status === 'paid'
+                    ? 'Payment recorded'
+                    : 'Record payment',
+            icon: openInvoice.status === 'draft' ? 'send' : openInvoice.status === 'overdue' ? 'mail' : 'check',
+            disabled: openInvoice.status === 'paid',
+            onClick: () => {
+              if (openInvoice.status === 'draft') {
+                if (openInvoice.clientEmail) void handleInvoiceEmail(openInvoice)
+              } else if (openInvoice.status === 'overdue') {
+                if (openInvoice.clientEmail) void handleReminderEmail(openInvoice)
+              } else if (openInvoice.status !== 'paid') {
+                void applyStatusChange(openInvoice.id, 'paid')
+              }
             },
-          ] as const
+          } as const
           return (
             <>
               <div style={{ padding: '18px 22px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -949,9 +967,9 @@ export default function InvoicePage() {
                     <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 6 }}>Of {protoCurrency(subtotal)} total · {protoCurrency(Number(openInvoice.amountPaid) || 0)} paid</div>
                   ) : null}
                   <div style={{ display: 'flex', gap: 8, marginTop: 14, flexWrap: 'wrap' }}>
-                    <button type="button" className="proto-btn proto-btn-primary" style={{ flex: 1 }} onClick={actions[0].onClick}>
-                      <ProtoIcon name={actions[0].icon} size={13} />
-                      {actions[0].label}
+                    <button type="button" className="proto-btn proto-btn-primary" style={{ flex: 1 }} onClick={primaryAction.onClick} disabled={primaryAction.disabled}>
+                      <ProtoIcon name={primaryAction.icon} size={13} />
+                      {primaryAction.label}
                     </button>
                     <button type="button" className="proto-btn" onClick={() => setPreviewInv(openInvoice)}>
                       <ProtoIcon name="eye" size={13} />

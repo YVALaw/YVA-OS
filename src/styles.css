@@ -41,6 +41,39 @@ a { color: inherit; text-decoration: none; }
 button { font-family: inherit; font-size: inherit; }
 input, select, textarea { font-family: inherit; font-size: inherit; }
 
+a[href],
+button:not(:disabled),
+select:not(:disabled),
+input[type="button"]:not(:disabled),
+input[type="checkbox"]:not(:disabled),
+input[type="radio"]:not(:disabled),
+input[type="submit"]:not(:disabled),
+label[for],
+summary,
+[role="button"],
+[tabindex]:not([tabindex="-1"]),
+.clickable,
+.proto-plain-button,
+.proto-link-button,
+.proto-list-row,
+.proto-attention-button,
+.proto-kpi,
+.kpi-card[style],
+.entity-card,
+.kanban-card,
+.project-detail-person,
+.invoice-group-header,
+.proto-table tbody tr {
+  cursor: pointer;
+}
+
+button:disabled,
+input:disabled,
+select:disabled,
+textarea:disabled {
+  cursor: not-allowed;
+}
+
 /* ── LAYOUT ── */
 .shell {
   display: grid;
@@ -861,6 +894,7 @@ input, select, textarea { font-family: inherit; font-size: inherit; }
   background: transparent;
   color: inherit;
   box-shadow: none;
+  cursor: pointer;
 }
 
 .invoice-status-button:hover,
@@ -910,6 +944,7 @@ input, select, textarea { font-family: inherit; font-size: inherit; }
   font-weight: 800;
   letter-spacing: .04em;
   text-transform: uppercase;
+  cursor: pointer;
 }
 
 .invoice-status-option:hover,
@@ -2244,12 +2279,18 @@ input, select, textarea { font-family: inherit; font-size: inherit; }
   letter-spacing: 0.02em;
   white-space: nowrap;
   transition: background .15s ease, border-color .15s ease, color .15s ease;
+  cursor: pointer;
 }
 
-.proto-btn:hover {
+.proto-btn:hover:not(:disabled) {
   background: #1f2434;
   border-color: rgba(255,255,255,0.12);
   color: #f1f5f9;
+}
+
+.proto-btn:disabled {
+  opacity: .55;
+  cursor: not-allowed;
 }
 
 .proto-btn-ghost {
@@ -2257,7 +2298,7 @@ input, select, textarea { font-family: inherit; font-size: inherit; }
   border-color: transparent;
 }
 
-.proto-btn-ghost:hover {
+.proto-btn-ghost:hover:not(:disabled) {
   background: #181c28;
   border-color: rgba(255,255,255,0.06);
 }
@@ -2269,7 +2310,7 @@ input, select, textarea { font-family: inherit; font-size: inherit; }
   font-weight: 800;
 }
 
-.proto-btn-primary:hover {
+.proto-btn-primary:hover:not(:disabled) {
   background: #67e8f9;
   border-color: #67e8f9;
   color: #07090f;
