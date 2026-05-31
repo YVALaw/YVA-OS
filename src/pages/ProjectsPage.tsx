@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import type { Client, Employee, Expense, Invoice, Project, Task, TaskStatus } from '../data/types'
 import { loadExpenses, loadSnapshot, loadTasks, saveExpenses, saveProjects, saveTasks } from '../services/storage'
-import { formatMoney } from '../utils/money'
+import { formatHourlyRate, formatMoney } from '../utils/money'
 import {
   Avatar,
   Drawer,
@@ -355,7 +355,7 @@ export default function ProjectsPage() {
                         <div>
                           <div className="proto-eyebrow" style={{ fontSize: 9 }}>Rate</div>
                           <div className="proto-mono" style={{ fontSize: 12, color: 'var(--text)', fontWeight: 700, marginTop: 2 }}>
-                            {project.rate != null ? `${protoCurrency(Number(project.rate))}/hr` : '—'}
+                            {project.rate != null ? `${formatHourlyRate(project.rate)}/hr` : '—'}
                           </div>
                         </div>
                         <div>
@@ -437,7 +437,7 @@ export default function ProjectsPage() {
                           )}
                         </div>
                       </td>
-                      <td className="proto-mono" style={{ textAlign: 'right', fontWeight: 700 }}>{project.rate != null ? protoCurrency(Number(project.rate)) : '—'}</td>
+                      <td className="proto-mono" style={{ textAlign: 'right', fontWeight: 700 }}>{project.rate != null ? formatHourlyRate(project.rate) : '—'}</td>
                       <td className="proto-mono" style={{ textAlign: 'right' }}>{Math.round(stats.hoursMtd).toLocaleString()}</td>
                       <td className="proto-mono" style={{ textAlign: 'right', color: 'var(--accent)', fontWeight: 700 }}>{formatMoney(stats.billedMtd)}</td>
                     </tr>
@@ -501,11 +501,11 @@ export default function ProjectsPage() {
             </div>
             <div className="proto-profile-row">
               <label className="proto-profile-label">Rate</label>
-              <input className="proto-input" type="number" value={form.rate} onChange={e => setForm(prev => ({ ...prev, rate: e.target.value }))} placeholder="12" />
+              <input className="proto-input" type="number" inputMode="decimal" step="0.01" value={form.rate} onChange={e => setForm(prev => ({ ...prev, rate: e.target.value }))} placeholder="12.00" />
             </div>
             <div className="proto-profile-row">
               <label className="proto-profile-label">Budget</label>
-              <input className="proto-input" type="number" value={form.budget} onChange={e => setForm(prev => ({ ...prev, budget: e.target.value }))} placeholder="0" />
+              <input className="proto-input" type="number" inputMode="decimal" step="0.01" value={form.budget} onChange={e => setForm(prev => ({ ...prev, budget: e.target.value }))} placeholder="0.00" />
             </div>
             <div className="proto-profile-row">
               <label className="proto-profile-label">Start date</label>
@@ -684,7 +684,7 @@ function ProjectDrawer({
       <div className="project-detail-body">
         <div className="project-detail-metrics">
           {[
-            { label: 'Hourly Rate', value: project.rate != null ? `${protoCurrency(Number(project.rate))}/hr` : '—', color: 'var(--accent)' },
+            { label: 'Hourly Rate', value: project.rate != null ? `${formatHourlyRate(project.rate)}/hr` : '—', color: 'var(--accent)' },
             { label: 'Hours · MTD', value: `${Math.round(stats.hoursMtd).toLocaleString()}h`, sub: `${team.length} people`, color: '#60a5fa' },
             { label: 'Billed · lifetime', value: formatMoney(stats.billedLifetime), sub: `${Math.round(totalHoursLifetime).toLocaleString()}h total`, color: '#10b981' },
           ].map(card => (

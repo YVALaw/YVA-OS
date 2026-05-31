@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import type { Client, Employee, Expense, Invoice, Project, Task, TaskStatus } from '../data/types'
 import { loadExpenses, loadSnapshot, loadTasks, saveExpenses, saveProjects, saveTasks as saveTasksToStorage } from '../services/storage'
-import { formatMoney } from '../utils/money'
+import { formatHourlyRate, formatMoney } from '../utils/money'
 import {
   Avatar,
   Modal,
@@ -347,7 +347,7 @@ export default function ProjectProfilePage() {
       <div className="proto-page-body">
         <div className="project-detail-metrics" style={{ marginBottom: 16 }}>
           {[
-            { label: 'Hourly Rate', value: project.rate != null ? `${protoCurrency(Number(project.rate))}/hr` : '—', color: 'var(--accent)' },
+            { label: 'Hourly Rate', value: project.rate != null ? `${formatHourlyRate(project.rate)}/hr` : '—', color: 'var(--accent)' },
             { label: 'Hours · MTD', value: `${Math.round(stats.hoursMtd).toLocaleString()}h`, sub: `${assignedEmployees.length} people`, color: '#60a5fa' },
             { label: 'Billed · lifetime', value: formatMoney(stats.billedLifetime), sub: `${Math.round(totalHoursLifetime).toLocaleString()}h total`, color: '#10b981' },
           ].map(card => (
@@ -402,15 +402,15 @@ export default function ProjectProfilePage() {
               <div className="proto-profile-row">
                 <label className="proto-profile-label">Rate</label>
                 {editing ? (
-                  <input className="proto-input" type="number" value={form.rate} onChange={e => setForm(prev => ({ ...prev, rate: e.target.value }))} />
+                  <input className="proto-input" type="number" inputMode="decimal" step="0.01" value={form.rate} onChange={e => setForm(prev => ({ ...prev, rate: e.target.value }))} />
                 ) : (
-                  <span className="proto-profile-value">{project.rate != null ? `${protoCurrency(Number(project.rate))}/hr` : '—'}</span>
+                  <span className="proto-profile-value">{project.rate != null ? `${formatHourlyRate(project.rate)}/hr` : '—'}</span>
                 )}
               </div>
               <div className="proto-profile-row">
                 <label className="proto-profile-label">Budget</label>
                 {editing ? (
-                  <input className="proto-input" type="number" value={form.budget} onChange={e => setForm(prev => ({ ...prev, budget: e.target.value }))} />
+                  <input className="proto-input" type="number" inputMode="decimal" step="0.01" value={form.budget} onChange={e => setForm(prev => ({ ...prev, budget: e.target.value }))} />
                 ) : (
                   <span className="proto-profile-value">{project.budget != null ? formatMoney(project.budget) : '—'}</span>
                 )}
@@ -621,7 +621,7 @@ export default function ProjectProfilePage() {
               {editing ? (
                 <div style={{ display: 'grid', gap: 8, marginBottom: 10 }}>
                   <input className="proto-input" value={expForm.description} onChange={e => setExpForm(prev => ({ ...prev, description: e.target.value }))} placeholder="Description" />
-                  <input className="proto-input" type="number" value={expForm.amount} onChange={e => setExpForm(prev => ({ ...prev, amount: e.target.value }))} placeholder="Amount" />
+                  <input className="proto-input" type="number" inputMode="decimal" step="0.01" value={expForm.amount} onChange={e => setExpForm(prev => ({ ...prev, amount: e.target.value }))} placeholder="Amount" />
                   <input className="proto-input" type="date" value={expForm.date} onChange={e => setExpForm(prev => ({ ...prev, date: e.target.value }))} />
                   <input className="proto-input" value={expForm.category} onChange={e => setExpForm(prev => ({ ...prev, category: e.target.value }))} placeholder="Category" />
                   <button type="button" className="proto-btn proto-btn-ghost" onClick={() => void addExpense()} disabled={!expForm.description.trim() || !expForm.amount}>

@@ -3,6 +3,18 @@ export function formatMoney(n: number): string {
   return num.toLocaleString('en-US', { style: 'currency', currency: 'USD' })
 }
 
+export function formatHourlyRate(value: string | number | null | undefined): string {
+  if (value === '' || value == null) return ''
+  const num = typeof value === 'number' ? value : Number(String(value).replace(',', '.'))
+  if (!Number.isFinite(num)) return ''
+  return num.toLocaleString('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })
+}
+
 export function fmtHoursHM(h: number): string {
   const totalMinutes = Math.max(0, Math.round((Number.isFinite(h) ? h : 0) * 60))
   const hrs = Math.floor(totalMinutes / 60)

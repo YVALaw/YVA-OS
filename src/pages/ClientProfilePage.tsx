@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import type { ActivityLogEntry, Client, Invoice, Project } from '../data/types'
 import { loadActivityLog, loadSettings, loadSnapshot, saveActivityLog, saveClients } from '../services/storage'
 import { sendEmail } from '../services/gmail'
+import { formatHourlyRate } from '../utils/money'
 import { Avatar, ProtoIcon, StatusChip, colorFromString, dueLabel, protoCurrency, protoDateShort } from '../components/PrototypeKit'
 
 function uid() { return crypto.randomUUID() }
@@ -407,7 +408,7 @@ export default function ClientProfilePage() {
                       </div>
                       <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10.5, color: 'var(--muted)' }}>
                         <span>{(project.employeeIds || []).length} people · {project.status || 'planning'}</span>
-                        <span className="proto-mono">{project.rate ? `${protoCurrency(Number(project.rate))}/h` : '—'}</span>
+                        <span className="proto-mono">{project.rate ? `${formatHourlyRate(project.rate)}/h` : '—'}</span>
                       </div>
                     </button>
                   ))}

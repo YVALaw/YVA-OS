@@ -6,7 +6,7 @@ import {
   loadInvoiceCounter, saveInvoiceCounter,
   loadSnapshot, loadSettings,
 } from '../services/storage'
-import { formatMoney } from '../utils/money'
+import { formatHourlyRate, formatMoney } from '../utils/money'
 import InvoiceBuilder from '../components/InvoiceBuilder'
 import { sendEmail, type SendEmailResult } from '../services/gmail'
 import { htmlToPdfAttachment } from '../utils/pdf'
@@ -115,7 +115,7 @@ function buildInvoiceHTML(inv: Invoice, settings: AppSettings, autoPrint = false
           const h = parseInvoiceHours(it.daily?.[d] || '')
           return '<td style="text-align:center;font-size:11px;color:' + (h > 0 ? '#111' : '#ccc') + '">' + (h > 0 ? formatInvoiceHoursEntry(h) : '—') + '</td>'
         }).join('')
-        return '<tr><td style="white-space:nowrap"><strong>' + it.employeeName + '</strong>' + (it.position ? '<br><span style="font-size:10px;color:#888">' + it.position + '</span>' : '') + (it.timeEntries?.length ? '<div style="font-size:10px;color:#6b7280;line-height:1.45;margin-top:4px;white-space:pre-line">' + formatTimeEntrySummaryHtml(it.timeEntries) + '</div>' : '') + '</td>' + dayCells + '<td style="text-align:right;font-weight:700;white-space:nowrap">' + formatInvoiceHoursEntry(invoiceItemHours(it)) + 'h</td><td style="text-align:right;white-space:nowrap">$' + it.rate + '/hr</td><td style="text-align:right;font-weight:700;white-space:nowrap">$' + invoiceItemAmount(it).toFixed(2) + '</td></tr>'
+        return '<tr><td style="white-space:nowrap"><strong>' + it.employeeName + '</strong>' + (it.position ? '<br><span style="font-size:10px;color:#888">' + it.position + '</span>' : '') + (it.timeEntries?.length ? '<div style="font-size:10px;color:#6b7280;line-height:1.45;margin-top:4px;white-space:pre-line">' + formatTimeEntrySummaryHtml(it.timeEntries) + '</div>' : '') + '</td>' + dayCells + '<td style="text-align:right;font-weight:700;white-space:nowrap">' + formatInvoiceHoursEntry(invoiceItemHours(it)) + 'h</td><td style="text-align:right;white-space:nowrap">' + formatHourlyRate(it.rate) + '/hr</td><td style="text-align:right;font-weight:700;white-space:nowrap">$' + invoiceItemAmount(it).toFixed(2) + '</td></tr>'
       }).join('')
     const colSpan = allDates.length + 3
     itemsSection = `
@@ -129,7 +129,7 @@ function buildInvoiceHTML(inv: Invoice, settings: AppSettings, autoPrint = false
     </div>`
   } else {
     const bodyRows = (inv.items || []).map(it =>
-      '<tr><td><strong>' + it.employeeName + '</strong>' + (it.position ? '<br><span style="font-size:11px;color:#888">' + it.position + '</span>' : '') + (it.timeEntries?.length ? '<div style="font-size:10px;color:#6b7280;line-height:1.45;margin-top:4px;white-space:pre-line">' + formatTimeEntrySummaryHtml(it.timeEntries) + '</div>' : '') + '</td><td style="text-align:right">' + formatInvoiceHoursEntry(invoiceItemHours(it)) + 'h</td><td style="text-align:right">$' + it.rate + '/hr</td><td style="text-align:right"><strong>$' + invoiceItemAmount(it).toFixed(2) + '</strong></td></tr>'
+      '<tr><td><strong>' + it.employeeName + '</strong>' + (it.position ? '<br><span style="font-size:11px;color:#888">' + it.position + '</span>' : '') + (it.timeEntries?.length ? '<div style="font-size:10px;color:#6b7280;line-height:1.45;margin-top:4px;white-space:pre-line">' + formatTimeEntrySummaryHtml(it.timeEntries) + '</div>' : '') + '</td><td style="text-align:right">' + formatInvoiceHoursEntry(invoiceItemHours(it)) + 'h</td><td style="text-align:right">' + formatHourlyRate(it.rate) + '/hr</td><td style="text-align:right"><strong>$' + invoiceItemAmount(it).toFixed(2) + '</strong></td></tr>'
       ).join('')
     itemsSection = `
     <table>
@@ -985,7 +985,7 @@ export default function InvoicePage() {
                 <div className="proto-detail-grid" style={{ marginBottom: 14 }}>
                   {[
                     { label: 'Bill to', value: client?.company || client?.name || openInvoice.clientName || '—', sub: client?.email || openInvoice.clientEmail || '—' },
-                    { label: 'Project', value: project?.name || openInvoice.projectName || 'Unassigned', sub: `${projectPrefix(project?.name || openInvoice.projectName)} · ${project?.rate ? protoCurrency(Number(project.rate), 0) : 'Rate TBD'}/hr` },
+                    { label: 'Project', value: project?.name || openInvoice.projectName || 'Unassigned', sub: `${projectPrefix(project?.name || openInvoice.projectName)} · ${project?.rate ? formatHourlyRate(project.rate) : 'Rate TBD'}/hr` },
                     { label: 'Issued', value: protoDate(openInvoice.date), sub: openInvoice.date || 'No issue date' },
                     { label: 'Due', value: protoDate(openInvoice.dueDate), sub: dueLabel(openInvoice.dueDate) },
                   ].map(meta => (
@@ -1026,7 +1026,7 @@ export default function InvoicePage() {
                               </div>
                             </td>
                             <td style={{ textAlign: 'right' }}>{line.hours}</td>
-                            <td style={{ textAlign: 'right' }}>{protoCurrency(line.rate)}</td>
+                            <td style={{ textAlign: 'right' }}>{formatHourlyRate(line.rate)}</td>
                             <td style={{ textAlign: 'right', color: 'var(--text)', fontWeight: 700 }}>{protoCurrency(line.amount)}</td>
                             <td><StatusChip status={line.paid ? 'paid' : 'draft'} /></td>
                           </tr>

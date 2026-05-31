@@ -659,9 +659,11 @@ export default function InvoiceBuilder({ onCreated, onCancel, initialProjectId, 
                           className="form-input"
                           style={{ fontSize: 12, padding: '5px 8px', width: 64 }}
                           type="number"
+                          inputMode="decimal"
+                          step="0.01"
                           value={row.rate}
                           onChange={e => updateRow(row._id, { rate: e.target.value })}
-                          placeholder="0"
+                          placeholder="0.00"
                         />
                       </td>
                       {dates.map(d => (
@@ -727,7 +729,7 @@ export default function InvoiceBuilder({ onCreated, onCancel, initialProjectId, 
                   </div>
                   <div className="form-group" style={{ flex: 1 }}>
                     {rows.indexOf(row) === 0 && <label className="form-label">Rate/hr</label>}
-                    <input className="form-input" type="number" value={row.rate} onChange={e => updateRow(row._id, { rate: e.target.value })} placeholder="0" />
+                    <input className="form-input" type="number" inputMode="decimal" step="0.01" value={row.rate} onChange={e => updateRow(row._id, { rate: e.target.value })} placeholder="0.00" />
                   </div>
                   <div className="form-group" style={{ flex: 1 }}>
                     {rows.indexOf(row) === 0 && <label className="form-label">Total Hrs</label>}
