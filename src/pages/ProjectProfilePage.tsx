@@ -10,7 +10,6 @@ import {
   SearchField,
   StatusChip,
   colorFromString,
-  protoCurrency,
   protoDate,
   protoDateShort,
 } from '../components/PrototypeKit'
@@ -301,193 +300,206 @@ export default function ProjectProfilePage() {
 
   return (
     <div className="proto-page project-profile-page">
-      <div className="project-detail-head">
-        <div style={{ minWidth: 0 }}>
-          <button type="button" className="proto-back-link" onClick={() => navigate('/projects')} style={{ marginBottom: 12 }}>
-            <ProtoIcon name="chevronL" size={12} />
-            All projects
-          </button>
-          <div className="project-detail-title-row">
-            <span className="project-prefix-chip">{projectPrefix(project)}</span>
+      <div className="proto-profile-head project-profile-head">
+        <button type="button" className="proto-back-link proto-plain-button" onClick={() => navigate('/projects')}>
+          <ProtoIcon name="chevronL" size={12} />
+          All projects
+        </button>
+        <div className="proto-profile-row">
+          <div className="proto-profile-main">
+            <div className="project-profile-mark">{projectPrefix(project)}</div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div className="project-profile-title-line">
+                {editing ? (
+                  <input className="proto-input project-profile-title-input" value={form.name} onChange={e => setForm(prev => ({ ...prev, name: e.target.value }))} />
+                ) : (
+                  <h1 className="proto-profile-title">{project.name}</h1>
+                )}
+                <StatusChip status={project.status} filled />
+              </div>
+              <div className="proto-profile-meta">
+                <span>{projectClientName(project, clients) || 'No client assigned'}</span>
+                <span>{project.billingModel || 'hourly'}</span>
+                <span>{projectTasks.length} tasks</span>
+                <span>{assignedEmployees.length} people</span>
+              </div>
+            </div>
+          </div>
+          <div className="proto-profile-actions">
             {editing ? (
-              <input className="proto-input" value={form.name} onChange={e => setForm(prev => ({ ...prev, name: e.target.value }))} style={{ maxWidth: 360 }} />
+              <>
+                <button type="button" className="proto-btn proto-btn-primary" onClick={() => void handleSave()} disabled={!form.name.trim() || saving}>
+                  {saving ? 'Saving...' : 'Save Changes'}
+                </button>
+                <button type="button" className="proto-btn proto-btn-ghost" onClick={cancelEditing}>Cancel</button>
+              </>
             ) : (
-              <div className="project-detail-title">{project.name}</div>
+              <>
+                <button type="button" className="proto-btn proto-btn-ghost" onClick={beginEditing}>
+                  <ProtoIcon name="edit" size={12} />
+                  Edit Project
+                </button>
+                <button type="button" className="proto-btn proto-btn-danger" onClick={() => setConfirmDelete(true)}>
+                  <ProtoIcon name="trash" size={12} />
+                  Delete
+                </button>
+              </>
             )}
-            <StatusChip status={project.status} filled />
-          </div>
-          <div className="project-detail-sub">
-            {projectClientName(project, clients) || 'No client assigned'} · {project.billingModel || 'hourly'} · {projectTasks.length} tasks · {assignedEmployees.length} people
           </div>
         </div>
-        <div className="project-detail-actions">
-              {editing ? (
-                <>
-                  <button type="button" className="proto-btn proto-btn-primary" onClick={() => void handleSave()} disabled={!form.name.trim() || saving}>
-                    {saving ? 'Saving...' : 'Save Changes'}
-                  </button>
-                  <button type="button" className="proto-btn proto-btn-ghost" onClick={cancelEditing}>Cancel</button>
-                </>
-              ) : (
-                <>
-                  <button type="button" className="proto-btn proto-btn-ghost" onClick={beginEditing}>
-                    <ProtoIcon name="edit" size={12} />
-                    Edit Project
-                  </button>
-                  <button type="button" className="proto-btn proto-btn-danger" onClick={() => setConfirmDelete(true)}>
-                    <ProtoIcon name="trash" size={12} />
-                    Delete
-                  </button>
-                </>
-              )}
-        </div>
-        {saveError ? <div className="settings-notice settings-notice-error">{saveError}</div> : null}
+        {saveError ? <div className="settings-notice settings-notice-error project-profile-notice">{saveError}</div> : null}
       </div>
 
       <div className="proto-page-body">
-        <div className="project-detail-metrics" style={{ marginBottom: 16 }}>
+        <div className="proto-kpi-grid-4 project-profile-kpis" style={{ marginBottom: 14 }}>
           {[
-            { label: 'Hourly Rate', value: project.rate != null ? `${formatHourlyRate(project.rate)}/hr` : '—', color: 'var(--accent)' },
-            { label: 'Hours · MTD', value: `${Math.round(stats.hoursMtd).toLocaleString()}h`, sub: `${assignedEmployees.length} people`, color: '#60a5fa' },
-            { label: 'Billed · lifetime', value: formatMoney(stats.billedLifetime), sub: `${Math.round(totalHoursLifetime).toLocaleString()}h total`, color: '#10b981' },
-          ].map(card => (
-            <div key={card.label} className="project-detail-metric">
-              <div className="proto-kpi-accent" style={{ background: card.color }} />
-              <div className="proto-kpi-label">{card.label}</div>
-              <div className="proto-kpi-value">{card.value}</div>
-              {'sub' in card ? <div className="project-detail-metric-sub">{card.sub}</div> : null}
+            { label: 'Hourly Rate', value: project.rate != null ? `${formatHourlyRate(project.rate)}/hr` : '—', sub: project.billingModel || 'hourly', color: 'var(--gold)' },
+            { label: 'Hours MTD', value: `${Math.round(stats.hoursMtd).toLocaleString()}h`, sub: `${assignedEmployees.length} people`, color: '#60a5fa' },
+            { label: 'Billed Lifetime', value: formatMoney(stats.billedLifetime), sub: `${Math.round(totalHoursLifetime).toLocaleString()}h total`, color: '#10b981' },
+            { label: 'Expenses', value: formatMoney(stats.expenseTotal), sub: `${projectExpenses.length} entries`, color: '#f87171' },
+          ].map(metric => (
+            <div key={metric.label} className="proto-kpi">
+              <div className="proto-kpi-accent" style={{ background: metric.color }} />
+              <div className="proto-kpi-label">{metric.label}</div>
+              <div className="proto-kpi-value" style={{ marginTop: 8 }}>{metric.value}</div>
+              <div className="project-profile-kpi-sub">{metric.sub}</div>
             </div>
           ))}
         </div>
 
-        <div className="proto-two-col">
+        <div className="proto-two-col project-profile-grid">
           <div className="proto-sidebar-stack">
-            <div className="proto-list-card">
+            <div className="card proto-list-card project-profile-section">
               <div className="proto-list-card-head">
-                <span>Project Details</span>
+                <div className="proto-section-title">Project Details</div>
               </div>
-              <div className="proto-profile-row">
-                <label className="proto-profile-label">Client</label>
-                {editing ? (
-                  <select className="proto-input" value={form.clientId} onChange={e => setForm(prev => ({ ...prev, clientId: e.target.value }))}>
-                    <option value="">No client</option>
-                    {clients.map(client => <option key={client.id} value={client.id}>{client.company || client.name}</option>)}
-                  </select>
-                ) : (
-                  <span className="proto-profile-value">{projectClientName(project, clients) || '—'}</span>
-                )}
-              </div>
-              <div className="proto-profile-row">
-                <label className="proto-profile-label">Status</label>
-                {editing ? (
-                  <select className="proto-input" value={form.status} onChange={e => setForm(prev => ({ ...prev, status: e.target.value as (typeof STAGES)[number] }))}>
-                    {STAGES.map(stage => <option key={stage} value={stage}>{stage}</option>)}
-                  </select>
-                ) : (
-                  <span className="proto-profile-value"><StatusChip status={project.status} /></span>
-                )}
-              </div>
-              <div className="proto-profile-row">
-                <label className="proto-profile-label">Billing model</label>
-                {editing ? (
-                  <select className="proto-input" value={form.billingModel} onChange={e => setForm(prev => ({ ...prev, billingModel: e.target.value }))}>
-                    <option value="hourly">Hourly</option>
-                    <option value="fixed">Fixed</option>
-                    <option value="retainer">Retainer</option>
-                  </select>
-                ) : (
-                  <span className="proto-profile-value">{project.billingModel || 'hourly'}</span>
-                )}
-              </div>
-              <div className="proto-profile-row">
-                <label className="proto-profile-label">Rate</label>
-                {editing ? (
-                  <input className="proto-input" type="number" inputMode="decimal" step="0.01" value={form.rate} onChange={e => setForm(prev => ({ ...prev, rate: e.target.value }))} />
-                ) : (
-                  <span className="proto-profile-value">{project.rate != null ? `${formatHourlyRate(project.rate)}/hr` : '—'}</span>
-                )}
-              </div>
-              <div className="proto-profile-row">
-                <label className="proto-profile-label">Budget</label>
-                {editing ? (
-                  <input className="proto-input" type="number" inputMode="decimal" step="0.01" value={form.budget} onChange={e => setForm(prev => ({ ...prev, budget: e.target.value }))} />
-                ) : (
-                  <span className="proto-profile-value">{project.budget != null ? formatMoney(project.budget) : '—'}</span>
-                )}
-              </div>
-              <div className="proto-profile-row">
-                <label className="proto-profile-label">Start date</label>
-                {editing ? (
-                  <input className="proto-input" type="date" value={form.startDate} onChange={e => setForm(prev => ({ ...prev, startDate: e.target.value }))} />
-                ) : (
-                  <span className="proto-profile-value">{protoDate(project.startDate)}</span>
-                )}
-              </div>
-              <div className="proto-profile-row">
-                <label className="proto-profile-label">End date</label>
-                {editing ? (
-                  <input className="proto-input" type="date" value={form.endDate} onChange={e => setForm(prev => ({ ...prev, endDate: e.target.value }))} />
-                ) : (
-                  <span className="proto-profile-value">{protoDate(project.endDate)}</span>
-                )}
-              </div>
-              <div className="proto-profile-row" style={{ alignItems: 'flex-start' }}>
-                <label className="proto-profile-label">Description</label>
-                {editing ? (
-                  <textarea className="proto-input" rows={3} value={form.description} onChange={e => setForm(prev => ({ ...prev, description: e.target.value }))} />
-                ) : (
-                  <span className="proto-profile-value" style={{ whiteSpace: 'pre-wrap' }}>{project.description || '—'}</span>
-                )}
-              </div>
-              <div className="proto-profile-row" style={{ alignItems: 'flex-start' }}>
-                <label className="proto-profile-label">Project needs</label>
-                {editing ? (
-                  <textarea className="proto-input" rows={3} value={form.projectNeeds} onChange={e => setForm(prev => ({ ...prev, projectNeeds: e.target.value }))} />
-                ) : (
-                  <span className="proto-profile-value" style={{ whiteSpace: 'pre-wrap' }}>{project.projectNeeds || '—'}</span>
-                )}
-              </div>
-              <div className="proto-profile-row" style={{ alignItems: 'flex-start' }}>
-                <label className="proto-profile-label">Notes</label>
-                {editing ? (
-                  <textarea className="proto-input" rows={3} value={form.notes} onChange={e => setForm(prev => ({ ...prev, notes: e.target.value }))} />
-                ) : (
-                  <span className="proto-profile-value" style={{ whiteSpace: 'pre-wrap' }}>{project.notes || '—'}</span>
-                )}
-              </div>
-              <div className="proto-profile-row" style={{ alignItems: 'flex-start' }}>
-                <label className="proto-profile-label">Links</label>
-                {editing ? (
-                  <div style={{ display: 'grid', gap: 8, width: '100%' }}>
-                    {form.links.map((link, index) => (
-                      <div key={`${link.label}-${index}`} className="proto-list-row">
-                        <a href={link.url} target="_blank" rel="noreferrer" style={{ color: 'var(--accent)' }}>{link.label}</a>
-                        <button type="button" className="proto-btn proto-btn-ghost proto-btn-icon" onClick={() => removeLink(index)}>
-                          <ProtoIcon name="close" size={10} />
-                        </button>
-                      </div>
-                    ))}
-                    <div style={{ display: 'grid', gap: 8 }}>
-                      <input className="proto-input" value={newLinkLabel} onChange={e => setNewLinkLabel(e.target.value)} placeholder="Label" />
-                      <input className="proto-input" value={newLinkUrl} onChange={e => setNewLinkUrl(e.target.value)} placeholder="https://..." />
-                      <button type="button" className="proto-btn proto-btn-ghost" onClick={addLink} disabled={!newLinkLabel.trim() || !newLinkUrl.trim()}>Add link</button>
+              <div className="project-profile-detail-grid">
+                <div className="proto-detail-cell">
+                  <div className="proto-eyebrow">Client</div>
+                  {editing ? (
+                    <select className="proto-input" value={form.clientId} onChange={e => setForm(prev => ({ ...prev, clientId: e.target.value }))}>
+                      <option value="">No client</option>
+                      {clients.map(client => <option key={client.id} value={client.id}>{client.company || client.name}</option>)}
+                    </select>
+                  ) : (
+                    <div className="project-profile-detail-value">{projectClientName(project, clients) || '—'}</div>
+                  )}
+                </div>
+                <div className="proto-detail-cell">
+                  <div className="proto-eyebrow">Status</div>
+                  {editing ? (
+                    <select className="proto-input" value={form.status} onChange={e => setForm(prev => ({ ...prev, status: e.target.value as (typeof STAGES)[number] }))}>
+                      {STAGES.map(stage => <option key={stage} value={stage}>{stage}</option>)}
+                    </select>
+                  ) : (
+                    <div className="project-profile-detail-value"><StatusChip status={project.status} /></div>
+                  )}
+                </div>
+                <div className="proto-detail-cell">
+                  <div className="proto-eyebrow">Billing Model</div>
+                  {editing ? (
+                    <select className="proto-input" value={form.billingModel} onChange={e => setForm(prev => ({ ...prev, billingModel: e.target.value }))}>
+                      <option value="hourly">Hourly</option>
+                      <option value="fixed">Fixed</option>
+                      <option value="retainer">Retainer</option>
+                    </select>
+                  ) : (
+                    <div className="project-profile-detail-value">{project.billingModel || 'hourly'}</div>
+                  )}
+                </div>
+                <div className="proto-detail-cell">
+                  <div className="proto-eyebrow">Rate</div>
+                  {editing ? (
+                    <input className="proto-input" type="number" inputMode="decimal" step="0.01" value={form.rate} onChange={e => setForm(prev => ({ ...prev, rate: e.target.value }))} />
+                  ) : (
+                    <div className="project-profile-detail-value">{project.rate != null ? `${formatHourlyRate(project.rate)}/hr` : '—'}</div>
+                  )}
+                </div>
+                <div className="proto-detail-cell">
+                  <div className="proto-eyebrow">Budget</div>
+                  {editing ? (
+                    <input className="proto-input" type="number" inputMode="decimal" step="0.01" value={form.budget} onChange={e => setForm(prev => ({ ...prev, budget: e.target.value }))} />
+                  ) : (
+                    <div className="project-profile-detail-value">{project.budget != null ? formatMoney(project.budget) : '—'}</div>
+                  )}
+                </div>
+                <div className="proto-detail-cell">
+                  <div className="proto-eyebrow">Timeline</div>
+                  {editing ? (
+                    <div className="project-profile-inline-inputs">
+                      <input className="proto-input" type="date" value={form.startDate} onChange={e => setForm(prev => ({ ...prev, startDate: e.target.value }))} />
+                      <input className="proto-input" type="date" value={form.endDate} onChange={e => setForm(prev => ({ ...prev, endDate: e.target.value }))} />
                     </div>
-                  </div>
-                ) : (
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                    {(project.links || []).length === 0 ? <span className="proto-profile-value">—</span> : (project.links || []).map(link => <a key={link.label} href={link.url} target="_blank" rel="noreferrer" className="proto-tag">{link.label}</a>)}
-                  </div>
-                )}
+                  ) : (
+                    <div className="project-profile-detail-value">{protoDate(project.startDate)} to {protoDate(project.endDate)}</div>
+                  )}
+                </div>
               </div>
             </div>
 
-            <div className="proto-list-card">
+            <div className="card proto-list-card project-profile-section">
               <div className="proto-list-card-head">
-                <span>Team</span>
+                <div className="proto-section-title">Project Notes</div>
+              </div>
+              <div className="project-profile-notes-grid">
+                <div className="project-profile-note">
+                  <div className="proto-eyebrow">Description</div>
+                  {editing ? (
+                    <textarea className="proto-input" rows={4} value={form.description} onChange={e => setForm(prev => ({ ...prev, description: e.target.value }))} />
+                  ) : (
+                    <div className="project-profile-note-copy">{project.description || '—'}</div>
+                  )}
+                </div>
+                <div className="project-profile-note">
+                  <div className="proto-eyebrow">Project Needs</div>
+                  {editing ? (
+                    <textarea className="proto-input" rows={4} value={form.projectNeeds} onChange={e => setForm(prev => ({ ...prev, projectNeeds: e.target.value }))} />
+                  ) : (
+                    <div className="project-profile-note-copy">{project.projectNeeds || '—'}</div>
+                  )}
+                </div>
+                <div className="project-profile-note">
+                  <div className="proto-eyebrow">Internal Notes</div>
+                  {editing ? (
+                    <textarea className="proto-input" rows={4} value={form.notes} onChange={e => setForm(prev => ({ ...prev, notes: e.target.value }))} />
+                  ) : (
+                    <div className="project-profile-note-copy">{project.notes || '—'}</div>
+                  )}
+                </div>
+                <div className="project-profile-note">
+                  <div className="proto-eyebrow">Links</div>
+                  {editing ? (
+                    <div className="project-profile-link-editor">
+                      {form.links.map((link, index) => (
+                        <div key={`${link.label}-${index}`} className="project-profile-link-row">
+                          <a href={link.url} target="_blank" rel="noreferrer">{link.label}</a>
+                          <button type="button" className="proto-btn proto-btn-ghost proto-btn-icon" onClick={() => removeLink(index)}>
+                            <ProtoIcon name="close" size={10} />
+                          </button>
+                        </div>
+                      ))}
+                      <div className="project-profile-inline-inputs">
+                        <input className="proto-input" value={newLinkLabel} onChange={e => setNewLinkLabel(e.target.value)} placeholder="Label" />
+                        <input className="proto-input" value={newLinkUrl} onChange={e => setNewLinkUrl(e.target.value)} placeholder="https://..." />
+                      </div>
+                      <button type="button" className="proto-btn proto-btn-ghost" onClick={addLink} disabled={!newLinkLabel.trim() || !newLinkUrl.trim()}>Add link</button>
+                    </div>
+                  ) : (
+                    <div className="project-profile-link-list">
+                      {(project.links || []).length === 0 ? <span className="project-profile-note-copy">—</span> : (project.links || []).map(link => <a key={link.label} href={link.url} target="_blank" rel="noreferrer" className="proto-tag">{link.label}</a>)}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <div className="card proto-list-card project-profile-section">
+              <div className="proto-list-card-head">
+                <div className="proto-section-title">Team</div>
               </div>
               {editing ? (
-                <>
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 10 }}>
+                <div className="project-profile-card-body">
+                  <div className="project-profile-selected-team">
                     {form.employeeIds.length === 0 ? <span style={{ fontSize: 12, color: 'var(--muted)' }}>No team assigned.</span> : form.employeeIds.map(employeeId => {
                       const employee = employees.find(item => item.id === employeeId)
                       return employee ? (
@@ -501,7 +513,7 @@ export default function ProjectProfilePage() {
                     })}
                   </div>
                   <SearchField value={empSearch} onChange={setEmpSearch} placeholder="Search team member..." minWidth={0} />
-                  <div style={{ display: 'grid', gap: 6, marginTop: 10, maxHeight: 220, overflow: 'auto' }}>
+                  <div className="project-team-search-list">
                     {filteredSearchEmployees
                       .filter(employee => !form.employeeIds.includes(employee.id))
                       .slice(0, 8)
@@ -509,8 +521,7 @@ export default function ProjectProfilePage() {
                         <button
                           key={employee.id}
                           type="button"
-                          className="proto-plain-button"
-                          style={{ justifyContent: 'space-between' }}
+                          className="proto-plain-button project-team-add-row"
                           onClick={() => addEmployee(employee.id)}
                         >
                           <span>{employee.name}</span>
@@ -518,21 +529,21 @@ export default function ProjectProfilePage() {
                         </button>
                       ))}
                   </div>
-                </>
+                </div>
               ) : (
-                <div style={{ display: 'grid', gap: 8 }}>
+                <div className="project-team-list">
                   {assignedEmployees.length === 0 ? (
                     <div className="proto-empty">No team assigned yet</div>
                   ) : assignedEmployees.map(employee => (
-                    <button key={employee.id} type="button" className="proto-list-row" onClick={() => navigate('/employees/' + employee.id)}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <button key={employee.id} type="button" className="project-team-row" onClick={() => navigate('/employees/' + employee.id)}>
+                      <div className="project-team-person">
                         <Avatar name={employee.name} color={colorFromString(employee.name)} size="sm" />
-                        <div>
-                          <div style={{ fontSize: 12.5, fontWeight: 700 }}>{employee.name}</div>
-                          <div style={{ fontSize: 11, color: 'var(--muted)' }}>{employee.role || 'Team member'}{employee.payRate ? ` · ${protoCurrency(Number(employee.payRate))}/hr` : ''}</div>
+                        <div style={{ minWidth: 0 }}>
+                          <div className="project-team-name">{employee.name}</div>
+                          <div className="project-team-meta">{employee.role || 'Team member'}{employee.payRate ? ` · ${formatHourlyRate(employee.payRate)}/hr` : ''}</div>
                         </div>
                       </div>
-                      <span className="proto-mono" style={{ fontSize: 10, color: 'var(--muted)' }}>{employee.status || 'Active'}</span>
+                      <span className="project-team-status">{employee.status || 'Active'}</span>
                     </button>
                   ))}
                 </div>
@@ -541,12 +552,12 @@ export default function ProjectProfilePage() {
           </div>
 
           <div className="proto-sidebar-stack">
-            <div className="proto-list-card">
+            <div className="card proto-list-card project-profile-section">
               <div className="proto-list-card-head">
-                <span>Tasks</span>
+                <div className="proto-section-title">Tasks</div>
                 <span className="proto-mono" style={{ fontSize: 10, color: 'var(--muted)' }}>{projectTasks.length}</span>
               </div>
-              <div style={{ display: 'grid', gap: 8 }}>
+              <div className="project-profile-card-body">
                 {editing ? (
                   <div style={{ display: 'grid', gap: 8, marginBottom: 10 }}>
                     <input className="proto-input" value={taskForm.title} onChange={e => setTaskForm(prev => ({ ...prev, title: e.target.value }))} placeholder="Task title" />
@@ -582,9 +593,9 @@ export default function ProjectProfilePage() {
               </div>
             </div>
 
-            <div className="proto-list-card">
+            <div className="card proto-list-card project-profile-section">
               <div className="proto-list-card-head">
-                <span>Invoices</span>
+                <div className="proto-section-title">Invoices</div>
                 <span className="proto-mono" style={{ fontSize: 10, color: 'var(--muted)' }}>{projectInvoices.length}</span>
               </div>
               {projectInvoices.length === 0 ? (
@@ -613,13 +624,13 @@ export default function ProjectProfilePage() {
               )}
             </div>
 
-            <div className="proto-list-card">
+            <div className="card proto-list-card project-profile-section">
               <div className="proto-list-card-head">
-                <span>Expenses</span>
+                <div className="proto-section-title">Expenses</div>
                 <span className="proto-mono" style={{ fontSize: 10, color: 'var(--muted)' }}>{projectExpenses.length}</span>
               </div>
               {editing ? (
-                <div style={{ display: 'grid', gap: 8, marginBottom: 10 }}>
+                <div className="project-profile-card-body">
                   <input className="proto-input" value={expForm.description} onChange={e => setExpForm(prev => ({ ...prev, description: e.target.value }))} placeholder="Description" />
                   <input className="proto-input" type="number" inputMode="decimal" step="0.01" value={expForm.amount} onChange={e => setExpForm(prev => ({ ...prev, amount: e.target.value }))} placeholder="Amount" />
                   <input className="proto-input" type="date" value={expForm.date} onChange={e => setExpForm(prev => ({ ...prev, date: e.target.value }))} />

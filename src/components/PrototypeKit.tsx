@@ -281,7 +281,7 @@ export function BarChart({
   accentMonth,
   height = 200,
 }: {
-  data: { label: string; billed: number; collected: number }[]
+  data: { label: string; fullLabel?: string; billed: number; collected: number; netEarnings?: number }[]
   accentMonth?: string
   height?: number
 }) {
@@ -295,8 +295,10 @@ export function BarChart({
         const billedHeight = (item.billed / max) * 100
         const collectedHeight = (item.collected / max) * 100
         const current = item.label === accentMonth
+        const netEarnings = item.netEarnings ?? item.billed - item.collected
+        const collectionRate = item.billed > 0 ? Math.round((item.collected / item.billed) * 100) : 0
         return (
-          <div key={item.label} className="proto-bar-chart-col">
+          <div key={item.label} className="proto-bar-chart-col" tabIndex={0} aria-label={`${item.fullLabel || item.label}: ${protoCurrency(item.billed)} billed, ${protoCurrency(item.collected)} collected, ${protoCurrency(netEarnings)} net earnings`}>
             <div className={`proto-bar-chart-value${current ? ' current' : ''}`}>{protoCurrency(item.billed / 1000, 1)}k</div>
             <div className="proto-bar-chart-bars">
               <div
@@ -306,6 +308,13 @@ export function BarChart({
               <div className="proto-bar-chart-bar muted" style={{ height: `${collectedHeight}%` }} />
             </div>
             <div className={`proto-bar-chart-label${current ? ' current' : ''}`}>{item.label.toUpperCase()}</div>
+            <div className="proto-bar-chart-tooltip" role="tooltip">
+              <div className="proto-bar-chart-tooltip-title">{item.fullLabel || item.label}</div>
+              <div className="proto-bar-chart-tooltip-row"><span>Billed</span><strong>{protoCurrency(item.billed)}</strong></div>
+              <div className="proto-bar-chart-tooltip-row"><span>Collected</span><strong>{protoCurrency(item.collected)}</strong></div>
+              <div className="proto-bar-chart-tooltip-row"><span>Net earnings</span><strong>{protoCurrency(netEarnings)}</strong></div>
+              <div className="proto-bar-chart-tooltip-note">{collectionRate}% collected</div>
+            </div>
           </div>
         )
       })}

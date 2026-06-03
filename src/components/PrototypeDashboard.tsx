@@ -83,13 +83,14 @@ function invoiceOutstanding(invoice: Invoice): number {
 }
 
 function getLastSixMonths() {
-  const values: { key: string; label: string }[] = []
+  const values: { key: string; label: string; fullLabel: string }[] = []
   const now = new Date()
   for (let i = 5; i >= 0; i -= 1) {
     const date = new Date(now.getFullYear(), now.getMonth() - i, 1)
     values.push({
       key: monthKey(date),
       label: date.toLocaleString('en-US', { month: 'short' }),
+      fullLabel: date.toLocaleString('en-US', { month: 'long', year: 'numeric' }),
     })
   }
   return values
@@ -156,9 +157,20 @@ export default function PrototypeDashboard({
         if (status === 'paid') return sum + invoiceAmount(invoice)
         return sum + Math.min(invoiceAmount(invoice), Math.max(0, Number(invoice.amountPaid) || 0))
       }, 0)
-      return { label: month.label, billed, collected }
+      const payroll = monthInvoices.reduce((sum, invoice) => sum + (invoice.items || []).reduce((itemTotal, item) => {
+        const employee = store.employees.find(entry =>
+          (item.employeeId && entry.id === item.employeeId) ||
+          entry.name?.toLowerCase() === item.employeeName?.toLowerCase(),
+        )
+        return itemTotal + payrollFromInvoiceItem(item, employee).totalPay
+      }, 0), 0)
+      const expenses = generalExpenses
+        .filter(expense => expense.date?.startsWith(month.key))
+        .reduce((sum, expense) => sum + (Number(expense.amount) || 0), 0)
+      const netEarnings = billed - payroll - expenses
+      return { label: month.label, fullLabel: month.fullLabel, billed, collected, netEarnings }
     })
-  }, [store.invoices])
+  }, [generalExpenses, store.employees, store.invoices])
 
   const topClients = useMemo(() => {
     const map = new Map<string, { id?: string; name: string; total: number }>()
@@ -351,7 +363,7 @@ export default function PrototypeDashboard({
       up: netEarnings >= 0,
       sub: `Payroll ${protoCurrency(totalPayroll)} + ops ${protoCurrency(operatingExpenses)}`,
       accent: '#10b981',
-      spark: trendData.map(item => item.billed - (item.collected * 0.35)),
+      spark: trendData.map(item => item.netEarnings || 0),
       onClick: () => setActiveKpi('net' as const),
     },
     {
