@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
-import type { AppSettings, Client, Invoice, Project } from '../data/types'
+import type { AppSettings, Client, Employee, Invoice, Project } from '../data/types'
 import {
   loadInvoices, saveInvoices,
   loadInvoiceCounter, saveInvoiceCounter,
@@ -12,6 +12,8 @@ import { sendEmail, type SendEmailResult } from '../services/gmail'
 import { htmlToPdfAttachment } from '../utils/pdf'
 import { formatInvoiceHoursEntry, invoiceItemAmount, invoiceItemHours, parseInvoiceHours } from '../utils/invoiceHours'
 import { formatTimeEntrySummaryHtml } from '../utils/timesheet'
+import { formatEmailList } from '../utils/email'
+import { payrollFromInvoiceItem } from '../utils/payroll'
 import {
   Avatar,
   Drawer,
@@ -115,7 +117,7 @@ function buildInvoiceHTML(inv: Invoice, settings: AppSettings, autoPrint = false
           const h = parseInvoiceHours(it.daily?.[d] || '')
           return '<td style="text-align:center;font-size:11px;color:' + (h > 0 ? '#111' : '#ccc') + '">' + (h > 0 ? formatInvoiceHoursEntry(h) : '—') + '</td>'
         }).join('')
-        return '<tr><td style="white-space:nowrap"><strong>' + it.employeeName + '</strong>' + (it.position ? '<br><span style="font-size:10px;color:#888">' + it.position + '</span>' : '') + (it.timeEntries?.length ? '<div style="font-size:10px;color:#6b7280;line-height:1.45;margin-top:4px;white-space:pre-line">' + formatTimeEntrySummaryHtml(it.timeEntries) + '</div>' : '') + '</td>' + dayCells + '<td style="text-align:right;font-weight:700;white-space:nowrap">' + formatInvoiceHoursEntry(invoiceItemHours(it)) + 'h</td><td style="text-align:right;white-space:nowrap">' + formatHourlyRate(it.rate) + '/hr</td><td style="text-align:right;font-weight:700;white-space:nowrap">$' + invoiceItemAmount(it).toFixed(2) + '</td></tr>'
+        return '<tr><td style="white-space:nowrap"><strong>' + it.employeeName + '</strong>' + (it.projectName ? '<br><span style="font-size:10px;color:#666">' + it.projectName + '</span>' : '') + (it.position ? '<br><span style="font-size:10px;color:#888">' + it.position + '</span>' : '') + (it.timeEntries?.length ? '<div style="font-size:10px;color:#6b7280;line-height:1.45;margin-top:4px;white-space:pre-line">' + formatTimeEntrySummaryHtml(it.timeEntries) + '</div>' : '') + '</td>' + dayCells + '<td style="text-align:right;font-weight:700;white-space:nowrap">' + formatInvoiceHoursEntry(invoiceItemHours(it)) + 'h</td><td style="text-align:right;white-space:nowrap">' + formatHourlyRate(it.rate) + '/hr</td><td style="text-align:right;font-weight:700;white-space:nowrap">$' + invoiceItemAmount(it).toFixed(2) + '</td></tr>'
       }).join('')
     const colSpan = allDates.length + 3
     itemsSection = `
@@ -129,7 +131,7 @@ function buildInvoiceHTML(inv: Invoice, settings: AppSettings, autoPrint = false
     </div>`
   } else {
     const bodyRows = (inv.items || []).map(it =>
-      '<tr><td><strong>' + it.employeeName + '</strong>' + (it.position ? '<br><span style="font-size:11px;color:#888">' + it.position + '</span>' : '') + (it.timeEntries?.length ? '<div style="font-size:10px;color:#6b7280;line-height:1.45;margin-top:4px;white-space:pre-line">' + formatTimeEntrySummaryHtml(it.timeEntries) + '</div>' : '') + '</td><td style="text-align:right">' + formatInvoiceHoursEntry(invoiceItemHours(it)) + 'h</td><td style="text-align:right">' + formatHourlyRate(it.rate) + '/hr</td><td style="text-align:right"><strong>$' + invoiceItemAmount(it).toFixed(2) + '</strong></td></tr>'
+      '<tr><td><strong>' + it.employeeName + '</strong>' + (it.projectName ? '<br><span style="font-size:11px;color:#666">' + it.projectName + '</span>' : '') + (it.position ? '<br><span style="font-size:11px;color:#888">' + it.position + '</span>' : '') + (it.timeEntries?.length ? '<div style="font-size:10px;color:#6b7280;line-height:1.45;margin-top:4px;white-space:pre-line">' + formatTimeEntrySummaryHtml(it.timeEntries) + '</div>' : '') + '</td><td style="text-align:right">' + formatInvoiceHoursEntry(invoiceItemHours(it)) + 'h</td><td style="text-align:right">' + formatHourlyRate(it.rate) + '/hr</td><td style="text-align:right"><strong>$' + invoiceItemAmount(it).toFixed(2) + '</strong></td></tr>'
       ).join('')
     itemsSection = `
     <table>
@@ -240,7 +242,7 @@ async function emailInvoice(inv: Invoice, settings: AppSettings): Promise<SendEm
   const subject = `Invoice ${inv.number} — ${settings.companyName || 'YVA Staffing'}`
   const body    = applyInvoiceTemplate(settings.invoiceEmailTemplate || DEFAULT_INVOICE_EMAIL, inv, settings)
   const attachment = await htmlToPdfAttachment(`${inv.number || 'invoice'}.pdf`, buildInvoiceHTML(inv, settings, false))
-  return sendEmail(to, subject, body, { attachments: [attachment] })
+  return sendEmail(to, subject, body, { attachments: [attachment], cc: inv.clientCcEmails || [] })
 }
 
 // ── Payment reminder email ──────────────────────────────────
@@ -249,7 +251,7 @@ async function reminderEmail(inv: Invoice, settings: AppSettings): Promise<SendE
   const subject = `Payment Reminder — Invoice ${inv.number} — ${settings.companyName || 'YVA Staffing'}`
   const body    = applyInvoiceTemplate(settings.reminderEmailTemplate || DEFAULT_REMINDER_EMAIL, inv, settings)
   const attachment = await htmlToPdfAttachment(`${inv.number || 'invoice'}.pdf`, buildInvoiceHTML(inv, settings, false))
-  return sendEmail(to, subject, body, { attachments: [attachment] })
+  return sendEmail(to, subject, body, { attachments: [attachment], cc: inv.clientCcEmails || [] })
 }
 
 type QuickForm = {
@@ -269,9 +271,11 @@ export default function InvoicePage() {
   const navigate = useNavigate()
   const [invoices,    setInvoices]    = useState<Invoice[]>([])
   const [clients,     setClients]     = useState<Client[]>([])
+  const [employees,   setEmployees]   = useState<Employee[]>([])
   const [allProjects, setAllProjects] = useState<Project[]>([])
   const [settings,    setSettings]    = useState<AppSettings>({ usdToDop: 0 })
   const [builderOpen, setBuilderOpen] = useState(false)
+  const [builderClientId, setBuilderClientId] = useState<string | undefined>()
   const [builderProjectId, setBuilderProjectId] = useState<string | undefined>()
   const [editingInvoice, setEditingInvoice] = useState<Invoice | undefined>()
   const [sendConfirmInv, setSendConfirmInv] = useState<Invoice | null>(null)
@@ -303,6 +307,7 @@ export default function InvoicePage() {
     loadSnapshot().then(snap => {
       setInvoices(snap.invoices)
       setClients(snap.clients)
+      setEmployees(snap.employees)
       setAllProjects(snap.projects)
       // If navigated here with ?q=, expand all project groups so the invoice is visible
       if (urlQ) {
@@ -324,14 +329,32 @@ export default function InvoicePage() {
         ? nextStatus as InvoiceStatus
         : 'all',
     )
-    if (params.get('new') === '1') setBuilderOpen(true)
+    if (params.get('new') === '1') {
+      setBuilderClientId(params.get('client') || undefined)
+      setBuilderOpen(true)
+    }
   }, [location.search])
 
   useEffect(() => {
-    if (!urlQ || !invoices.length) return
-    const match = invoices.find(inv => (inv.number || '').toLowerCase() === urlQ.toLowerCase())
-    if (match) setOpenInvId(match.id)
-  }, [invoices, urlQ])
+    if (!invoices.length) return
+    const params = new URLSearchParams(location.search)
+    const query = params.get('q') || ''
+    const editParam = params.get('edit') || ''
+    const previewParam = params.get('preview') || ''
+
+    if (query) {
+      const match = invoices.find(inv => (inv.number || '').toLowerCase() === query.toLowerCase())
+      if (match) setOpenInvId(match.id)
+    }
+    if (editParam && !builderOpen) {
+      const match = invoices.find(inv => inv.id === editParam)
+      if (match) openEditInvoice(match)
+    }
+    if (previewParam && !previewInv) {
+      const match = invoices.find(inv => inv.id === previewParam)
+      if (match) setPreviewInv(match)
+    }
+  }, [builderOpen, invoices, location.search, previewInv])
 
   async function persist(next: Invoice[]): Promise<boolean> {
     try {
@@ -357,23 +380,56 @@ export default function InvoicePage() {
     return `${noun} draft opened for ${recipient}. PDF downloaded to attach manually.${reason}`
   }
 
+  function invoiceRecipient(inv: Invoice): string {
+    return inv.clientCcEmails?.length
+      ? `${inv.clientEmail} (cc ${formatEmailList(inv.clientCcEmails)})`
+      : inv.clientEmail || ''
+  }
+
   async function handleInvoiceEmail(inv: Invoice, noun = `Invoice ${inv.number}`) {
     if (!inv.clientEmail) return
     const result = await emailInvoice(inv, settings)
-    showToast(describeEmailResult(result, noun, inv.clientEmail))
+    showToast(describeEmailResult(result, noun, invoiceRecipient(inv)))
   }
 
   async function handleReminderEmail(inv: Invoice) {
     if (!inv.clientEmail) return
     const result = await reminderEmail(inv, settings)
-    showToast(describeEmailResult(result, `Reminder for ${inv.number}`, inv.clientEmail))
+    showToast(describeEmailResult(result, `Reminder for ${inv.number}`, invoiceRecipient(inv)))
   }
 
-  function openBuilder(projectId?: string) { setBuilderProjectId(projectId); setBuilderOpen(true) }
+  function clearInvoiceUrlParams(keys: string[]) {
+    const params = new URLSearchParams(location.search)
+    let changed = false
+    for (const key of keys) {
+      if (params.has(key)) {
+        params.delete(key)
+        changed = true
+      }
+    }
+    if (changed) {
+      navigate({ pathname: location.pathname, search: params.toString() ? `?${params.toString()}` : '' }, { replace: true })
+    }
+  }
+
+  function closeInvoicePreview() {
+    setPreviewInv(null)
+    clearInvoiceUrlParams(['preview'])
+  }
+
+  function openBuilder(projectId?: string, clientId?: string) { setBuilderProjectId(projectId); setBuilderClientId(clientId); setBuilderOpen(true) }
   function openEditInvoice(inv: Invoice) { setEditingInvoice(inv); setBuilderProjectId(inv.projectId || undefined); setBuilderOpen(true) }
+  function startEditInvoice(inv: Invoice) {
+    setOpenInvId(null)
+    setPreviewInv(null)
+    clearInvoiceUrlParams(['preview', 'q'])
+    openEditInvoice(inv)
+  }
   async function closeBuilder(inv?: Invoice) {
-    const fresh = await loadInvoices()
-    setInvoices(fresh)
+    const fresh = await loadInvoices(true)
+    setInvoices(inv && fresh.some(entry => entry.id === inv.id)
+      ? fresh.map(entry => entry.id === inv.id ? { ...entry, ...inv } : entry)
+      : fresh)
     if (inv) {
       const key = inv.projectId || inv.projectName || '__unassigned__'
       setExpanded(prev => {
@@ -384,8 +440,10 @@ export default function InvoicePage() {
       showToast(`Invoice ${inv.number} saved`)
     }
     setBuilderOpen(false)
+    setBuilderClientId(undefined)
     setBuilderProjectId(undefined)
     setEditingInvoice(undefined)
+    clearInvoiceUrlParams(['edit', 'new'])
     if (inv && inv.status === 'draft') setSendConfirmInv(inv)
   }
 
@@ -414,6 +472,7 @@ export default function InvoicePage() {
       dueDate: form.dueDate || undefined,
       clientName: form.clientName,
       clientEmail: client?.email,
+      clientCcEmails: client?.ccEmails?.length ? client.ccEmails : undefined,
       projectId: proj?.id || null,
       projectName: proj?.name || undefined,
       subtotal: parseFloat(form.subtotal) || 0,
@@ -438,7 +497,7 @@ export default function InvoicePage() {
     setQuickProjectId(undefined)
     if (inv.clientEmail) {
       const result = await emailInvoice(inv, settings)
-      showToast(describeEmailResult(result, `Invoice ${inv.number}`, inv.clientEmail))
+      showToast(describeEmailResult(result, `Invoice ${inv.number}`, invoiceRecipient(inv)))
     }
   }
 
@@ -841,7 +900,9 @@ export default function InvoicePage() {
                                   </button>
                                 )}
                               </td>
-                              <td style={{ textAlign: 'right', color: 'var(--dim)' }}><ProtoIcon name="chevronR" size={12} /></td>
+                              <td style={{ textAlign: 'right' }}>
+                                <button type="button" className="proto-btn proto-btn-ghost" style={{ height: 28 }} onClick={(event) => { event.stopPropagation(); startEditInvoice(invoice) }}>Edit</button>
+                              </td>
                             </tr>
                           )
                         })}
@@ -866,6 +927,7 @@ export default function InvoicePage() {
                   <th>Hours</th>
                   <th style={{ textAlign: 'right' }}>Amount</th>
                   <th>Status</th>
+                  <th>Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -890,6 +952,9 @@ export default function InvoicePage() {
                       <td style={{ color: 'var(--muted)' }}>{hours > 0 ? `${hours}h` : '—'}</td>
                       <td style={{ color: 'var(--text)', textAlign: 'right', fontWeight: 700 }}>{protoCurrency(Number(invoice.subtotal) || 0)}</td>
                       <td><StatusChip status={invoice.status} /></td>
+                      <td>
+                        <button type="button" className="proto-btn proto-btn-ghost" style={{ height: 28 }} onClick={(event) => { event.stopPropagation(); startEditInvoice(invoice) }}>Edit</button>
+                      </td>
                     </tr>
                   )
                 })}
@@ -922,6 +987,14 @@ export default function InvoicePage() {
           })
           const subtotal = Number(openInvoice.subtotal) || 0
           const outstanding = Math.max(0, subtotal - (Number(openInvoice.amountPaid) || 0))
+          const employeePayroll = (openInvoice.items || []).reduce((sum, item) => {
+            const employee = employees.find(entry =>
+              (item.employeeId && entry.id === item.employeeId) ||
+              entry.name.toLowerCase() === item.employeeName.toLowerCase(),
+            )
+            return sum + payrollFromInvoiceItem(item, employee).totalPay
+          }, 0)
+          const netEarnings = subtotal - employeePayroll
           const primaryAction = {
             label:
               openInvoice.status === 'draft'
@@ -963,6 +1036,16 @@ export default function InvoicePage() {
                   <div className="proto-mono" style={{ fontSize: 38, fontWeight: 700, color: 'var(--text)', letterSpacing: '-0.02em', lineHeight: 1 }}>
                     {protoCurrency(outstanding)}<span style={{ fontSize: 14, color: 'var(--dim)', marginLeft: 8, fontWeight: 600 }}>USD</span>
                   </div>
+                  <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--border)', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                    <div>
+                      <div className="proto-eyebrow" style={{ marginBottom: 4 }}>Employee Pay</div>
+                      <div className="proto-mono" style={{ fontSize: 16, fontWeight: 700, color: 'var(--muted)' }}>{protoCurrency(employeePayroll)}</div>
+                    </div>
+                    <div>
+                      <div className="proto-eyebrow" style={{ marginBottom: 4 }}>Net Earnings</div>
+                      <div className="proto-mono" style={{ fontSize: 16, fontWeight: 800, color: netEarnings >= 0 ? '#22c55e' : '#f87171' }}>{protoCurrency(netEarnings)}</div>
+                    </div>
+                  </div>
                   {Number(openInvoice.amountPaid) > 0 ? (
                     <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 6 }}>Of {protoCurrency(subtotal)} total · {protoCurrency(Number(openInvoice.amountPaid) || 0)} paid</div>
                   ) : null}
@@ -970,6 +1053,10 @@ export default function InvoicePage() {
                     <button type="button" className="proto-btn proto-btn-primary" style={{ flex: 1 }} onClick={primaryAction.onClick} disabled={primaryAction.disabled}>
                       <ProtoIcon name={primaryAction.icon} size={13} />
                       {primaryAction.label}
+                    </button>
+                    <button type="button" className="proto-btn" onClick={() => startEditInvoice(openInvoice)}>
+                      <ProtoIcon name="edit" size={13} />
+                      Edit
                     </button>
                     <button type="button" className="proto-btn" onClick={() => setPreviewInv(openInvoice)}>
                       <ProtoIcon name="eye" size={13} />
@@ -1080,7 +1167,7 @@ export default function InvoicePage() {
               <button className="modal-close btn-icon" onClick={() => closeBuilder()}>✕</button>
             </div>
             <div className="builder-modal-body">
-              <InvoiceBuilder onCreated={closeBuilder} onCancel={() => closeBuilder()} initialProjectId={builderProjectId} editInvoice={editingInvoice} />
+              <InvoiceBuilder onCreated={closeBuilder} onCancel={() => closeBuilder()} initialClientId={builderClientId} initialProjectId={builderProjectId} editInvoice={editingInvoice} />
             </div>
           </div>
         </div>
@@ -1156,7 +1243,8 @@ export default function InvoicePage() {
               </p>
               {sendConfirmInv.clientEmail ? (
                 <p style={{ fontSize: 13, color: 'var(--muted)' }}>
-                  Send to <strong>{sendConfirmInv.clientEmail}</strong> now?
+                  Send to <strong>{sendConfirmInv.clientEmail}</strong>
+                  {sendConfirmInv.clientCcEmails?.length ? <> with CC <strong>{formatEmailList(sendConfirmInv.clientCcEmails)}</strong></> : null} now?
                 </p>
               ) : (
                 <p style={{ fontSize: 13, color: 'var(--muted)' }}>No client email on file. Mark as sent manually when ready.</p>
@@ -1172,7 +1260,7 @@ export default function InvoicePage() {
                 if (!ok) return
                 if (sendConfirmInv.clientEmail) {
                   const result = await emailInvoice(sendConfirmInv, settings)
-                  showToast(describeEmailResult(result, `Invoice ${sendConfirmInv.number}`, sendConfirmInv.clientEmail))
+                  showToast(describeEmailResult(result, `Invoice ${sendConfirmInv.number}`, invoiceRecipient(sendConfirmInv)))
                 } else {
                   showToast(`Invoice ${sendConfirmInv.number} marked as sent`)
                 }
@@ -1200,7 +1288,7 @@ export default function InvoicePage() {
 
       {/* Invoice Preview Modal */}
       {previewInv && (
-        <div className="modal-overlay" onClick={() => setPreviewInv(null)}>
+        <div className="modal-overlay" onClick={closeInvoicePreview}>
           <div style={{ background: 'var(--surface)', borderRadius: 12, width: '90vw', maxWidth: 820, maxHeight: '90vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }} onClick={e => e.stopPropagation()}>
             <div className="modal-header" style={{ padding: '14px 20px' }}>
               <div>
@@ -1208,8 +1296,9 @@ export default function InvoicePage() {
                 <div style={{ fontSize: 12, color: 'var(--muted)' }}>{previewInv.clientName}</div>
               </div>
               <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <button className="btn-ghost btn-sm" onClick={() => startEditInvoice(previewInv)}>Edit</button>
                 <button className="btn-primary btn-sm" onClick={() => printInvoice(previewInv, settings)}>⎙ Print / PDF</button>
-                <button className="modal-close btn-icon" onClick={() => setPreviewInv(null)}>✕</button>
+                <button className="modal-close btn-icon" onClick={closeInvoicePreview}>✕</button>
               </div>
             </div>
             <iframe

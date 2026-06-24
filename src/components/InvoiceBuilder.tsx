@@ -8,6 +8,7 @@ import {
 } from '../services/storage'
 import { formatInvoiceHoursEntry, parseInvoiceHours } from '../utils/invoiceHours'
 import { computePayrollBreakdown, computePremiumAdjustedAmount, employeePremiumConfig, normalizeClockInput } from '../utils/payroll'
+import { formatEmailList } from '../utils/email'
 
 function projectPrefix(name: string): string {
   return name.split(/\s+/).map(w => w[0] || '').join('').toUpperCase().slice(0, 5)
@@ -48,6 +49,7 @@ function parseHours(val: string): number {
 
 type BuilderRow = {
   _id: string
+  projectId?: string
   employeeId?: string
   employeeName: string
   position: string
@@ -70,17 +72,18 @@ function rowAmount(row: BuilderRow, dates: string[]): number {
 }
 
 function emptyRow(): BuilderRow {
-  return { _id: uid(), employeeId: undefined, employeeName: '', position: '', rate: '', hoursManual: '', shiftStart: '', shiftEnd: '', daily: {} }
+  return { _id: uid(), projectId: undefined, employeeId: undefined, employeeName: '', position: '', rate: '', hoursManual: '', shiftStart: '', shiftEnd: '', daily: {} }
 }
 
 type Props = {
   onCreated: (inv: Invoice) => void
   onCancel: () => void
+  initialClientId?: string
   initialProjectId?: string
   editInvoice?: Invoice
 }
 
-export default function InvoiceBuilder({ onCreated, onCancel, initialProjectId, editInvoice }: Props) {
+export default function InvoiceBuilder({ onCreated, onCancel, initialClientId, initialProjectId, editInvoice }: Props) {
   const [employees, setEmployees] = useState<Employee[]>([])
   const [clients,   setClients]   = useState<Client[]>([])
   const [projects,  setProjects]  = useState<Project[]>([])
@@ -99,7 +102,7 @@ export default function InvoiceBuilder({ onCreated, onCancel, initialProjectId, 
     void loadSettings().then(setSettings)
   }, [])
 
-  const [clientId,     setClientId]     = useState('')
+  const [clientId,     setClientId]     = useState(initialClientId || '')
   const [projectId,    setProjectId]    = useState(initialProjectId || '')
 
   // Once projects load, auto-set clientId from initialProjectId
@@ -109,6 +112,16 @@ export default function InvoiceBuilder({ onCreated, onCancel, initialProjectId, 
       if (proj?.clientId) setClientId(proj.clientId)
     }
   }, [projects])
+
+  useEffect(() => {
+    if (!initialClientId || initialProjectId || projects.length === 0 || projectId) return
+    const clientProjects = projects.filter(p => p.clientId === initialClientId)
+    const firstProjectId = clientProjects[0]?.id || ''
+    if (firstProjectId) {
+      setProjectId(firstProjectId)
+      setRows(prev => prev.map(row => row.projectId ? row : { ...row, projectId: firstProjectId }))
+    }
+  }, [initialClientId, initialProjectId, projects, projectId])
 
   // Populate all fields when editing an existing invoice
   const editLoaded = useRef(false)
@@ -126,6 +139,7 @@ export default function InvoiceBuilder({ onCreated, onCancel, initialProjectId, 
     if (editInvoice.items && editInvoice.items.length > 0) {
       setRows(editInvoice.items.map(it => ({
         _id: uid(),
+        projectId: it.projectId || editInvoice.projectId || undefined,
         employeeId: it.employeeId,
         employeeName: it.employeeName,
         position: it.position || '',
@@ -144,7 +158,9 @@ export default function InvoiceBuilder({ onCreated, onCancel, initialProjectId, 
     setClientId(newClientId)
     // Auto-select first project linked to this client
     const clientProjects = projects.filter(p => p.clientId === newClientId)
-    setProjectId(clientProjects.length > 0 ? clientProjects[0].id : '')
+    const nextProjectId = clientProjects.length > 0 ? clientProjects[0].id : ''
+    setProjectId(nextProjectId)
+    setRows(prev => prev.map(row => row.projectId ? row : { ...row, projectId: nextProjectId || undefined }))
     // Auto-fill due date from payment terms (e.g. "Net 30" → +30 days)
     if (!dueDate) {
       const client = clients.find(c => c.id === newClientId)
@@ -170,9 +186,18 @@ export default function InvoiceBuilder({ onCreated, onCancel, initialProjectId, 
 
   const selectedClient  = clients.find(c => c.id === clientId)
   const selectedProject = projects.find(p => p.id === projectId)
-  const projectEmployees = selectedProject?.employeeIds?.length
-    ? employees.filter(e => selectedProject.employeeIds!.includes(e.id))
-    : employees
+  const clientProjects = projects.filter(p => !clientId || p.clientId === clientId)
+
+  function rowProject(row: BuilderRow): Project | undefined {
+    return projects.find(p => p.id === row.projectId) || selectedProject
+  }
+
+  function rowEmployees(row: BuilderRow): Employee[] {
+    const project = rowProject(row)
+    return project?.employeeIds?.length
+      ? employees.filter(e => project.employeeIds!.includes(e.id))
+      : employees
+  }
 
   useEffect(() => {
     if (!selectedProject) return
@@ -309,11 +334,35 @@ export default function InvoiceBuilder({ onCreated, onCancel, initialProjectId, 
     setRows(prev => prev.map(r => r._id === rowId ? { ...r, daily: { ...r.daily, [date]: val } } : r))
   }
 
+  function handleDefaultProjectSelect(nextProjectId: string) {
+    setProjectId(nextProjectId)
+    setRows(prev => prev.map(row => row.projectId ? row : { ...row, projectId: nextProjectId || undefined }))
+  }
+
+  function handleRowProjectSelect(rowId: string, nextProjectId: string) {
+    const project = projects.find(p => p.id === nextProjectId)
+    setRows(prev => prev.map(row => {
+      if (row._id !== rowId) return row
+      const employeeStillFits = row.employeeId && project?.employeeIds?.length
+        ? project.employeeIds.includes(row.employeeId)
+        : true
+      return {
+        ...row,
+        projectId: nextProjectId || undefined,
+        employeeId: employeeStillFits ? row.employeeId : undefined,
+        employeeName: employeeStillFits ? row.employeeName : '',
+        rate: project?.rate != null && project.rate !== '' ? String(project.rate) : row.rate,
+      }
+    }))
+  }
+
   function handleEmpSelect(rowId: string, name: string) {
+    const row = rows.find(entry => entry._id === rowId)
+    const project = row ? rowProject(row) : selectedProject
     const emp = employees.find(e => e.name === name)
     // Use the project billing rate for client invoices; fall back to employee pay rate if no project rate set
-    const billingRate = selectedProject?.rate != null && selectedProject.rate !== ''
-      ? String(selectedProject.rate)
+    const billingRate = project?.rate != null && project.rate !== ''
+      ? String(project.rate)
       : emp?.payRate != null ? String(emp.payRate) : ''
     updateRow(rowId, {
       employeeId: emp?.id,
@@ -374,10 +423,13 @@ export default function InvoiceBuilder({ onCreated, onCancel, initialProjectId, 
           .filter(r => r.employeeName.trim())
           .map(r => {
             const employee = employees.find(e => e.id === r.employeeId) || employees.find(e => e.name === r.employeeName)
+            const project = rowProject(r)
             const totals = rowComp(r, dates)
             const shift = totals.shift
             return {
               employeeId: employee?.id,
+              projectId: project?.id,
+              projectName: project?.name,
               employeeName: r.employeeName,
               position:     r.position || undefined,
               hoursTotal:   formatInvoiceHoursEntry(totals.hours),
@@ -416,23 +468,27 @@ export default function InvoiceBuilder({ onCreated, onCancel, initialProjectId, 
             dueDate:       dueDate || undefined,
             clientName:    selectedClient?.name    || editInvoice.clientName || '',
             clientEmail:   selectedClient?.email   || editInvoice.clientEmail || '',
+            clientCcEmails: selectedClient?.ccEmails?.length ? selectedClient.ccEmails : editInvoice.clientCcEmails,
             clientAddress: selectedClient?.address || editInvoice.clientAddress || '',
             billingStart:  billingStart || undefined,
             billingEnd:    billingEnd   || undefined,
-            projectId:     selectedProject?.id   ?? editInvoice.projectId ?? null,
-            projectName:   selectedProject?.name ?? editInvoice.projectName ?? '',
+            projectId:     invoiceProjectForItems(items)?.id ?? null,
+            projectName:   invoiceProjectNameForItems(items),
             subtotal:      grandTotal,
             notes:         notes || undefined,
             items,
             updatedAt:     Date.now(),
           }
-          const existing = await loadInvoices()
-          await saveInvoices(existing.map(i => i.id === inv.id ? inv : i))
+          const existing = await loadInvoices(true)
+          if (!existing.some(i => i.id === inv.id)) throw new Error('Original invoice was not found.')
+          const nextInvoices = existing.map(i => i.id === inv.id ? inv : i)
+          await saveInvoices(nextInvoices)
           if (pendingProjectsUpdate) {
             await saveProjects(pendingProjectsUpdate)
           }
-          const fresh = await loadInvoices()
-          if (!fresh.some(i => i.id === inv.id)) throw new Error('Invoice update did not persist.')
+          const fresh = await loadInvoices(true)
+          const persisted = fresh.find(i => i.id === inv.id)
+          if (!persisted || persisted.updatedAt !== inv.updatedAt) throw new Error('Invoice update did not persist.')
           onCreated(inv)
           return
         }
@@ -465,11 +521,12 @@ export default function InvoiceBuilder({ onCreated, onCancel, initialProjectId, 
           dueDate:       dueDate || undefined,
           clientName:    selectedClient?.name    || '',
           clientEmail:   selectedClient?.email   || '',
+          clientCcEmails: selectedClient?.ccEmails?.length ? selectedClient.ccEmails : undefined,
           clientAddress: selectedClient?.address || '',
           billingStart:  billingStart || undefined,
           billingEnd:    billingEnd   || undefined,
-          projectId:     selectedProject?.id   || null,
-          projectName:   selectedProject?.name || '',
+          projectId:     invoiceProjectForItems(items)?.id || null,
+          projectName:   invoiceProjectNameForItems(items),
           status:        'draft',
           subtotal:      grandTotal,
           notes:         notes || undefined,
@@ -478,9 +535,9 @@ export default function InvoiceBuilder({ onCreated, onCancel, initialProjectId, 
           updatedAt:     Date.now(),
         }
 
-        const existing = await loadInvoices()
+        const existing = await loadInvoices(true)
         await saveInvoices([inv, ...existing])
-        const fresh = await loadInvoices()
+        const fresh = await loadInvoices(true)
         if (!fresh.some(i => i.id === inv.id)) throw new Error('Invoice creation did not persist.')
         setInvoices(fresh)
         if (pendingProjectsUpdate) {
@@ -502,6 +559,19 @@ export default function InvoiceBuilder({ onCreated, onCancel, initialProjectId, 
   const dopStr = settings.usdToDop > 0
     ? ` · RD$${(grandTotal * settings.usdToDop).toLocaleString('en-US', { maximumFractionDigits: 0 })}`
     : ''
+
+  function invoiceProjectForItems(items: InvoiceItem[]): Project | undefined {
+    const ids = Array.from(new Set(items.map(item => item.projectId).filter(Boolean)))
+    if (ids.length === 1) return projects.find(project => project.id === ids[0])
+    return selectedProject
+  }
+
+  function invoiceProjectNameForItems(items: InvoiceItem[]): string {
+    const names = Array.from(new Set(items.map(item => item.projectName).filter(Boolean)))
+    if (names.length === 0) return selectedProject?.name || ''
+    if (names.length === 1) return names[0] || ''
+    return 'Multiple projects'
+  }
 
   return (
     <div className="invoice-builder">
@@ -526,12 +596,10 @@ export default function InvoiceBuilder({ onCreated, onCancel, initialProjectId, 
             </select>
           </div>
           <div className="form-group">
-            <label className="form-label">Project</label>
-            <select className="form-select" value={projectId} onChange={e => setProjectId(e.target.value)}>
+            <label className="form-label">Default Project</label>
+            <select className="form-select" value={projectId} onChange={e => handleDefaultProjectSelect(e.target.value)}>
               <option value="">— No project —</option>
-              {projects
-                .filter(p => !clientId || p.clientId === clientId)
-                .map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+              {clientProjects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
             </select>
           </div>
           <div className="form-group">
@@ -559,6 +627,7 @@ export default function InvoiceBuilder({ onCreated, onCancel, initialProjectId, 
               <>
                 <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--soft)' }}>{selectedClient.name}</div>
                 {selectedClient.email   && <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2 }}>{selectedClient.email}</div>}
+                {selectedClient.ccEmails?.length ? <div style={{ fontSize: 11, color: 'var(--muted)' }}>CC: {formatEmailList(selectedClient.ccEmails)}</div> : null}
                 {selectedClient.address && <div style={{ fontSize: 11, color: 'var(--muted)' }}>{selectedClient.address}</div>}
                 {selectedProject && (
                   <div style={{ fontSize: 11, color: 'var(--gold)', marginTop: 4 }}>
@@ -614,6 +683,7 @@ export default function InvoiceBuilder({ onCreated, onCancel, initialProjectId, 
             <table className="builder-daily-table">
               <thead>
                 <tr>
+                  <th style={{ minWidth: 150 }}>Project</th>
                   <th style={{ minWidth: 160 }}>Employee</th>
                   <th style={{ minWidth: 120 }}>Position</th>
                   <th style={{ minWidth: 72 }}>Rate/hr</th>
@@ -638,11 +708,22 @@ export default function InvoiceBuilder({ onCreated, onCancel, initialProjectId, 
                         <select
                           className="form-select"
                           style={{ fontSize: 12, padding: '5px 8px' }}
+                          value={row.projectId || projectId}
+                          onChange={e => handleRowProjectSelect(row._id, e.target.value)}
+                        >
+                          <option value="">— Project —</option>
+                          {clientProjects.map(project => <option key={project.id} value={project.id}>{project.name}</option>)}
+                        </select>
+                      </td>
+                      <td>
+                        <select
+                          className="form-select"
+                          style={{ fontSize: 12, padding: '5px 8px' }}
                           value={row.employeeName}
                           onChange={e => handleEmpSelect(row._id, e.target.value)}
                         >
                           <option value="">— Select —</option>
-                          {projectEmployees.map(e => <option key={e.id} value={e.name}>{e.name}</option>)}
+                          {rowEmployees(row).map(e => <option key={e.id} value={e.name}>{e.name}</option>)}
                         </select>
                       </td>
                       <td>
@@ -717,10 +798,17 @@ export default function InvoiceBuilder({ onCreated, onCancel, initialProjectId, 
               return (
                 <div key={row._id} className="builder-simple-row">
                   <div className="form-group" style={{ flex: 2 }}>
+                    {rows.indexOf(row) === 0 && <label className="form-label">Project</label>}
+                    <select className="form-select" value={row.projectId || projectId} onChange={e => handleRowProjectSelect(row._id, e.target.value)}>
+                      <option value="">— Select project —</option>
+                      {clientProjects.map(project => <option key={project.id} value={project.id}>{project.name}</option>)}
+                    </select>
+                  </div>
+                  <div className="form-group" style={{ flex: 2 }}>
                     {rows.indexOf(row) === 0 && <label className="form-label">Employee</label>}
                     <select className="form-select" value={row.employeeName} onChange={e => handleEmpSelect(row._id, e.target.value)}>
                       <option value="">— Select employee —</option>
-                      {projectEmployees.map(e => <option key={e.id} value={e.name}>{e.name}</option>)}
+                      {rowEmployees(row).map(e => <option key={e.id} value={e.name}>{e.name}</option>)}
                     </select>
                   </div>
                   <div className="form-group" style={{ flex: 2 }}>

@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import type { ActivityLogEntry, Client, Invoice, Project } from '../data/types'
-import { loadActivityLog, loadSettings, loadSnapshot, saveActivityLog, saveClients } from '../services/storage'
+import type { ActivityLogEntry, Client, Employee, Invoice, Project } from '../data/types'
+import { loadActivityLog, loadSettings, loadSnapshot, saveActivityLog, saveClients, saveProjects } from '../services/storage'
 import { sendEmail } from '../services/gmail'
+import { formatEmailList, parseEmailList } from '../utils/email'
 import { formatHourlyRate } from '../utils/money'
 import { Avatar, ProtoIcon, StatusChip, colorFromString, dueLabel, protoCurrency, protoDateShort } from '../components/PrototypeKit'
 
@@ -17,6 +18,19 @@ const STAGES = [
 ]
 
 type LinkEntry = { label: string; url: string }
+type NewProjectForm = {
+  name: string
+  rate: string
+  notes: string
+  employeeIds: string[]
+}
+
+const EMPTY_PROJECT_FORM: NewProjectForm = {
+  name: '',
+  rate: '',
+  notes: '',
+  employeeIds: [],
+}
 
 export default function ClientProfilePage() {
   const { id } = useParams<{ id: string }>()
@@ -25,14 +39,18 @@ export default function ClientProfilePage() {
   const [clients, setClientsState] = useState<Client[]>([])
   const [invoices, setInvoices] = useState<Invoice[]>([])
   const [projects, setProjects] = useState<Project[]>([])
+  const [employees, setEmployees] = useState<Employee[]>([])
   const [activityLog, setActivityLog] = useState<ActivityLogEntry[]>([])
   const [editing, setEditing] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const [projectModal, setProjectModal] = useState(false)
   const [activityNote, setActivityNote] = useState('')
+  const [projectForm, setProjectForm] = useState<NewProjectForm>(EMPTY_PROJECT_FORM)
   const [form, setForm] = useState({
     name: '',
     company: '',
     email: '',
+    ccEmails: '',
     phone: '',
     address: '',
     timezone: '',
@@ -52,6 +70,7 @@ export default function ClientProfilePage() {
       setClientsState(snapshot.clients)
       setInvoices(snapshot.invoices)
       setProjects(snapshot.projects)
+      setEmployees(snapshot.employees)
     })
   }, [])
 
@@ -70,6 +89,7 @@ export default function ClientProfilePage() {
       name: client.name ?? '',
       company: client.company ?? '',
       email: client.email ?? '',
+      ccEmails: formatEmailList(client.ccEmails),
       phone: client.phone ?? '',
       address: client.address ?? '',
       timezone: client.timezone ?? '',
@@ -118,11 +138,17 @@ export default function ClientProfilePage() {
 
   function handleSave() {
     if (!form.name.trim()) return
+    const cc = parseEmailList(form.ccEmails)
+    if (cc.invalid.length > 0) {
+      alert(`Invalid CC email${cc.invalid.length === 1 ? '' : 's'}: ${cc.invalid.join(', ')}`)
+      return
+    }
     persistUpdate({
       ...clientNN,
       name: form.name,
       company: form.company || undefined,
       email: form.email || undefined,
+      ccEmails: cc.emails.length ? cc.emails : undefined,
       phone: form.phone || undefined,
       address: form.address || undefined,
       timezone: form.timezone || undefined,
@@ -146,6 +172,30 @@ export default function ClientProfilePage() {
     setClientsState(next)
     void saveClients(next)
     navigate('/clients')
+  }
+
+  async function saveClientProject() {
+    if (!projectForm.name.trim()) return
+    const nextProject: Project = {
+      id: uid(),
+      name: projectForm.name.trim(),
+      clientId: clientNN.id,
+      rate: projectForm.rate ? Number(projectForm.rate) : undefined,
+      status: 'active',
+      billingModel: 'hourly',
+      notes: projectForm.notes || undefined,
+      employeeIds: projectForm.employeeIds,
+    }
+    const next = [...projects, nextProject]
+    setProjects(next)
+    try {
+      await saveProjects(next)
+      setProjectForm(EMPTY_PROJECT_FORM)
+      setProjectModal(false)
+    } catch (error) {
+      setProjects(projects)
+      alert(error instanceof Error ? error.message : 'Project could not be saved.')
+    }
   }
 
   function addLink() {
@@ -195,7 +245,7 @@ export default function ClientProfilePage() {
     } else {
       bodyText = `Hi ${clientNN.name},\n\nThis is a friendly reminder that you have ${unpaidInvs.length === 1 ? 'an outstanding invoice' : `${unpaidInvs.length} outstanding invoices`} totaling $${totalOwed.toFixed(2)}:\n\n${invoiceList}\n\nPlease let us know when we can expect payment.\n\n${settings.emailSignature || companyName}`
     }
-    sendEmail(clientNN.email || '', `Outstanding Balance Reminder — ${companyName}`, bodyText)
+    sendEmail(clientNN.email || '', `Outstanding Balance Reminder — ${companyName}`, bodyText, { cc: clientNN.ccEmails || [] })
   }
 
   const daysToRenew = clientNN.contractEnd ? dueLabel(clientNN.contractEnd) : null
@@ -230,9 +280,14 @@ export default function ClientProfilePage() {
             </div>
           </div>
           <div className="proto-profile-actions">
-            {clientNN.email ? <button type="button" className="proto-btn" onClick={() => window.location.href = `mailto:${clientNN.email}`}><ProtoIcon name="mail" size={13} /> Email</button> : null}
+            {clientNN.email ? <button type="button" className="proto-btn" onClick={() => {
+              const params = new URLSearchParams()
+              if (clientNN.ccEmails?.length) params.set('cc', formatEmailList(clientNN.ccEmails))
+              window.location.href = `mailto:${clientNN.email}${params.toString() ? `?${params.toString()}` : ''}`
+            }}><ProtoIcon name="mail" size={13} /> Email</button> : null}
             {clientNN.phone ? <button type="button" className="proto-btn" onClick={() => window.location.href = `tel:${clientNN.phone}`}><ProtoIcon name="phone" size={13} /> Call</button> : null}
-            <button type="button" className="proto-btn proto-btn-primary" onClick={() => navigate('/invoice?new=1')}><ProtoIcon name="plus" size={13} /> New Invoice</button>
+            <button type="button" className="proto-btn" onClick={() => { setProjectForm(EMPTY_PROJECT_FORM); setProjectModal(true) }}><ProtoIcon name="plus" size={13} /> New Project</button>
+            <button type="button" className="proto-btn proto-btn-primary" onClick={() => navigate(`/invoice?new=1&client=${encodeURIComponent(clientNN.id)}`)}><ProtoIcon name="plus" size={13} /> New Invoice</button>
             <button type="button" className="proto-btn" onClick={() => setEditing(current => !current)}><ProtoIcon name="edit" size={13} /> {editing ? 'Close Edit' : 'Edit'}</button>
             <button type="button" className="proto-btn proto-btn-danger" onClick={() => setConfirmDelete(true)}><ProtoIcon name="trash" size={13} /> Delete</button>
           </div>
@@ -272,6 +327,10 @@ export default function ClientProfilePage() {
                 <div className="form-group">
                   <label className="form-label">Email</label>
                   <input className="form-input" type="email" value={form.email} onChange={(event) => setForm(current => ({ ...current, email: event.target.value }))} />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">CC Emails</label>
+                  <input className="form-input" value={form.ccEmails} onChange={(event) => setForm(current => ({ ...current, ccEmails: event.target.value }))} placeholder="ops@client.com, accounting@client.com" />
                 </div>
                 <div className="form-group">
                   <label className="form-label">Phone</label>
@@ -350,6 +409,7 @@ export default function ClientProfilePage() {
                       <th>Date</th>
                       <th style={{ textAlign: 'right' }}>Amount</th>
                       <th>Status</th>
+                      <th>Actions</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -360,10 +420,16 @@ export default function ClientProfilePage() {
                         <td className="proto-mono" style={{ color: 'var(--muted)' }}>{protoDateShort(invoice.date)}</td>
                         <td className="proto-mono" style={{ textAlign: 'right', fontWeight: 700, color: 'var(--text)' }}>{protoCurrency(Number(invoice.subtotal) || 0)}</td>
                         <td><StatusChip status={(invoice.status || 'draft').toLowerCase()} /></td>
+                        <td>
+                          <div style={{ display: 'flex', gap: 6 }}>
+                            <button type="button" className="proto-btn proto-btn-ghost" style={{ height: 28 }} onClick={(event) => { event.stopPropagation(); navigate(`/invoice?preview=${encodeURIComponent(invoice.id)}`) }}>Preview</button>
+                            <button type="button" className="proto-btn proto-btn-ghost" style={{ height: 28 }} onClick={(event) => { event.stopPropagation(); navigate(`/invoice?edit=${encodeURIComponent(invoice.id)}`) }}>Edit</button>
+                          </div>
+                        </td>
                       </tr>
                     ))}
                     {clientInvoices.length === 0 ? (
-                      <tr><td colSpan={5} style={{ textAlign: 'center', color: 'var(--muted)' }}>No invoices yet</td></tr>
+                      <tr><td colSpan={6} style={{ textAlign: 'center', color: 'var(--muted)' }}>No invoices yet</td></tr>
                     ) : null}
                   </tbody>
                 </table>
@@ -374,6 +440,7 @@ export default function ClientProfilePage() {
                 <div className="proto-detail-grid">
                   {[
                     { label: 'Email', value: client.email || '—' },
+                    { label: 'Invoice CC', value: client.ccEmails?.length ? formatEmailList(client.ccEmails) : '—' },
                     { label: 'Phone', value: client.phone || '—' },
                     { label: 'Address', value: client.address || '—' },
                     { label: 'Timezone', value: client.timezone || '—' },
@@ -395,7 +462,10 @@ export default function ClientProfilePage() {
               <div className="card proto-list-card">
                 <div className="proto-list-card-head">
                   <div className="proto-section-title">Active Projects</div>
-                  <button type="button" className="proto-btn proto-btn-primary" onClick={() => navigate('/projects')}>Open Projects</button>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button type="button" className="proto-btn proto-btn-primary" onClick={() => { setProjectForm(EMPTY_PROJECT_FORM); setProjectModal(true) }}>New Project</button>
+                    <button type="button" className="proto-btn proto-btn-ghost" onClick={() => navigate('/projects')}>Open Projects</button>
+                  </div>
                 </div>
                 <div>
                   {clientProjects.length === 0 ? (
@@ -464,6 +534,64 @@ export default function ClientProfilePage() {
             <div className="proto-modal-foot">
               <button type="button" className="proto-btn" onClick={() => setConfirmDelete(false)}>Cancel</button>
               <button type="button" className="proto-btn proto-btn-danger" onClick={handleDelete}>Delete</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {projectModal && (
+        <div className="proto-modal-scrim" onClick={() => setProjectModal(false)}>
+          <div className="proto-modal-panel" style={{ width: 560 }} onClick={(event) => event.stopPropagation()}>
+            <div className="proto-modal-head">
+              <div>
+                <div className="proto-modal-title">New Project</div>
+                <div className="proto-modal-subtitle">{clientNN.company || clientNN.name}</div>
+              </div>
+            </div>
+            <div className="proto-modal-body">
+              <div className="form-grid-2">
+                <div className="form-group form-group-full">
+                  <label className="form-label">Project Name *</label>
+                  <input className="form-input" value={projectForm.name} onChange={(event) => setProjectForm(current => ({ ...current, name: event.target.value }))} placeholder="Intake Specialist" />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Hourly Rate</label>
+                  <input className="form-input" type="number" inputMode="decimal" step="0.01" value={projectForm.rate} onChange={(event) => setProjectForm(current => ({ ...current, rate: event.target.value }))} placeholder="10.00" />
+                </div>
+                <div className="form-group form-group-full">
+                  <label className="form-label">Team</label>
+                  <div style={{ display: 'grid', gap: 6, maxHeight: 180, overflow: 'auto' }}>
+                    {employees.map(employee => {
+                      const selected = projectForm.employeeIds.includes(employee.id)
+                      return (
+                        <button
+                          key={employee.id}
+                          type="button"
+                          className="proto-btn proto-btn-ghost"
+                          style={{ justifyContent: 'space-between' }}
+                          onClick={() => setProjectForm(current => ({
+                            ...current,
+                            employeeIds: selected
+                              ? current.employeeIds.filter(employeeId => employeeId !== employee.id)
+                              : [...current.employeeIds, employee.id],
+                          }))}
+                        >
+                          <span>{employee.name}</span>
+                          <span style={{ color: selected ? 'var(--gold)' : 'var(--muted)', fontSize: 11 }}>{selected ? 'Selected' : employee.role || 'Team'}</span>
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+                <div className="form-group form-group-full">
+                  <label className="form-label">Notes</label>
+                  <textarea className="form-textarea" rows={3} value={projectForm.notes} onChange={(event) => setProjectForm(current => ({ ...current, notes: event.target.value }))} placeholder="Scope, role details, billing notes..." />
+                </div>
+              </div>
+            </div>
+            <div className="proto-modal-foot">
+              <button type="button" className="proto-btn" onClick={() => setProjectModal(false)}>Cancel</button>
+              <button type="button" className="proto-btn proto-btn-primary" onClick={() => void saveClientProject()} disabled={!projectForm.name.trim()}>Add Project</button>
             </div>
           </div>
         </div>

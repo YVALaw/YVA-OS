@@ -7,6 +7,7 @@ import { sendEmail, type SendEmailResult } from '../services/gmail'
 import { formatMoney, fmtHoursHM } from '../utils/money'
 import { htmlToPdfAttachment } from '../utils/pdf'
 import { employeePremiumConfig, normalizeClockInput, payrollFromInvoiceItem } from '../utils/payroll'
+import { formatEmailList, parseEmailList } from '../utils/email'
 import { Avatar, ProtoIcon, StatusChip, colorFromString, protoCurrency } from '../components/PrototypeKit'
 
 function uid() { return crypto.randomUUID() }
@@ -197,7 +198,7 @@ async function emailStatement(emp: Employee, empInvoices: Invoice[], dateFrom: s
     `${(emp.name || 'employee').replace(/\s+/g, '-').toLowerCase()}-statement.pdf`,
     buildPayslipHTML(emp, empInvoices, dateFrom, dateTo, settings),
   )
-  return sendEmail(emp.email || '', subject, bodyText, { attachments: [attachment] })
+  return sendEmail(emp.email || '', subject, bodyText, { attachments: [attachment], cc: emp.ccEmails || [] })
 }
 
 async function printPayslip(emp: Employee, empInvoices: Invoice[], dateFrom: string, dateTo: string) {
@@ -227,7 +228,7 @@ export default function EmployeeProfilePage() {
 
   const [editing, setEditing] = useState(false)
   const [form, setForm] = useState({
-    name: '', email: '', phone: '', payRate: '', defaultShiftStart: '', defaultShiftEnd: '', premiumEnabled: false, premiumStartTime: '21:00', premiumPercent: '15', role: '',
+    name: '', email: '', ccEmails: '', phone: '', payRate: '', defaultShiftStart: '', defaultShiftEnd: '', premiumEnabled: false, premiumStartTime: '21:00', premiumPercent: '15', role: '',
     employmentType: '', location: '', timezone: '', startYear: '', status: 'Active', notes: '',
   })
   const [attachments, setAttachments] = useState<Attachment[]>([])
@@ -239,6 +240,7 @@ export default function EmployeeProfilePage() {
       setForm({
         name:           emp.name ?? '',
         email:          emp.email ?? '',
+        ccEmails:       formatEmailList(emp.ccEmails),
         phone:          emp.phone ?? '',
         payRate:        emp.payRate != null ? String(emp.payRate) : '',
         defaultShiftStart: emp.defaultShiftStart ?? '',
@@ -267,6 +269,9 @@ export default function EmployeeProfilePage() {
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo,   setDateTo]   = useState('')
   const [toast, setToast] = useState<string | null>(null)
+  const [previewHtml, setPreviewHtml] = useState<string | null>(null)
+  const [previewTitle, setPreviewTitle] = useState('')
+  const [previewInvoices, setPreviewInvoices] = useState<Invoice[]>([])
 
   if (!emp) {
     return (
@@ -306,6 +311,10 @@ export default function EmployeeProfilePage() {
     return `Statement draft opened for ${recipient}. PDF downloaded to attach manually.${reason}`
   }
 
+  function statementRecipient(): string {
+    return empNN.ccEmails?.length ? `${empNN.email} (cc ${formatEmailList(empNN.ccEmails)})` : empNN.email || ''
+  }
+
   async function markPaid(inv: Invoice) {
     const payAmount = getEmployeeInvoiceItems(empNN, inv).reduce((sum, item) => sum + payrollFromInvoiceItem(item, empNN).totalPay, 0)
     const existingPayments = { ...(inv.employeePayments || {}) }
@@ -337,7 +346,15 @@ export default function EmployeeProfilePage() {
   async function handleStatementEmail(targetInvoices: Invoice[]) {
     if (!empNN.email || targetInvoices.length === 0) return
     const result = await emailStatement(empNN, targetInvoices, dateFrom, dateTo)
-    showToast(describeEmailResult(result, empNN.email))
+    showToast(describeEmailResult(result, statementRecipient()))
+  }
+
+  async function openStatementPreview(targetInvoices: Invoice[], title: string) {
+    if (targetInvoices.length === 0) return
+    const settings = await loadSettings()
+    setPreviewInvoices(targetInvoices)
+    setPreviewTitle(title)
+    setPreviewHtml(buildPayslipHTML(empNN, targetInvoices, dateFrom, dateTo, settings))
   }
 
   const assignedProjects = projects.filter(p => (p.employeeIds || []).includes(empNN.id))
@@ -350,10 +367,16 @@ export default function EmployeeProfilePage() {
 
   async function handleSave() {
     if (!form.name.trim()) return
+    const cc = parseEmailList(form.ccEmails)
+    if (cc.invalid.length > 0) {
+      alert(`Invalid CC email${cc.invalid.length === 1 ? '' : 's'}: ${cc.invalid.join(', ')}`)
+      return
+    }
     const updated: Employee = {
       ...empNN,
       name: form.name,
       email: form.email || undefined,
+      ccEmails: cc.emails.length ? cc.emails : undefined,
       phone: form.phone || undefined,
       payRate: form.payRate ? Number(form.payRate) : undefined,
       defaultShiftStart: form.defaultShiftStart || undefined,
@@ -400,6 +423,7 @@ export default function EmployeeProfilePage() {
     setForm({
       name: empNN.name,
       email: empNN.email ?? '',
+      ccEmails: formatEmailList(empNN.ccEmails),
       phone: empNN.phone ?? '',
       payRate: empNN.payRate != null ? String(empNN.payRate) : '',
       defaultShiftStart: empNN.defaultShiftStart ?? '',
@@ -576,6 +600,10 @@ export default function EmployeeProfilePage() {
                     <input className="form-input form-input-sm" type="email" value={form.email} onChange={e => setForm(f => ({...f, email: e.target.value}))} placeholder="email@example.com" />
                   </div>
                   <div className="profile-field">
+                    <span className="profile-field-label">CC Emails</span>
+                    <input className="form-input form-input-sm" value={form.ccEmails} onChange={e => setForm(f => ({...f, ccEmails: e.target.value}))} placeholder="payroll@yvastaffing.net, manager@example.com" />
+                  </div>
+                  <div className="profile-field">
                     <span className="profile-field-label">Phone</span>
                     <input className="form-input form-input-sm" value={form.phone} onChange={e => setForm(f => ({...f, phone: e.target.value}))} placeholder="+1 555 000 0000" />
                   </div>
@@ -634,6 +662,7 @@ export default function EmployeeProfilePage() {
                     { label: 'Status',          value: empNN.status || 'Active' },
                     { label: 'Employment Type', value: empNN.employmentType },
                     { label: 'Email',           value: empNN.email },
+                    { label: 'Statement CC',    value: empNN.ccEmails?.length ? formatEmailList(empNN.ccEmails) : undefined },
                     { label: 'Phone',           value: empNN.phone },
                     { label: 'Pay Rate',        value: empNN.payRate ? `$${empNN.payRate}/hr` : undefined },
                     { label: 'Default Shift',   value: empNN.defaultShiftStart || empNN.defaultShiftEnd ? `${empNN.defaultShiftStart || '—'} to ${empNN.defaultShiftEnd || '—'}` : undefined },
@@ -758,6 +787,10 @@ export default function EmployeeProfilePage() {
 
           {/* Action buttons */}
           <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+            <button className="btn-ghost btn-sm" onClick={() => { void openStatementPreview(empInvoices, 'Statement') }}
+              disabled={empInvoices.length === 0}>
+              Preview
+            </button>
             <button className="btn-ghost btn-sm" onClick={() => { void handleStatementEmail(empInvoices) }}
               disabled={empInvoices.length === 0 || !empNN.email}
               title={!empNN.email ? 'No email on file' : ''}>
@@ -817,6 +850,7 @@ export default function EmployeeProfilePage() {
                             <span style={{ fontSize: 11, color: '#22c55e', fontWeight: 600 }}>
                                 ✓ Paid {payment?.paidDate ? new Date(payment.paidDate + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : ''}
                             </span>
+                            <button className="btn-ghost btn-sm" style={{ fontSize: 10, padding: '2px 8px' }} onClick={() => { void openStatementPreview([inv], inv.number) }}>Preview</button>
                             <button className="btn-ghost btn-sm" style={{ fontSize: 10, padding: '2px 8px' }} onClick={() => { void handleStatementEmail([inv]) }}>Email</button>
                             <button className="btn-ghost btn-sm" style={{ fontSize: 10, padding: '2px 8px' }} onClick={() => markPending(inv)}>Undo</button>
                           </>
@@ -826,6 +860,7 @@ export default function EmployeeProfilePage() {
                               onClick={() => { void markPaid(inv) }}>
                               Mark as Paid
                             </button>
+                            <button className="btn-ghost btn-sm" style={{ fontSize: 10, padding: '2px 8px' }} onClick={() => { void openStatementPreview([inv], inv.number) }}>Preview</button>
                             <button className="btn-ghost btn-sm" style={{ fontSize: 10, padding: '2px 8px' }} onClick={() => { void handleStatementEmail([inv]) }}>Email</button>
                           </>
                         )}
@@ -881,6 +916,24 @@ export default function EmployeeProfilePage() {
         </div>
       </div>
       </div>
+
+      {previewHtml && (
+        <div className="modal-overlay" onClick={() => setPreviewHtml(null)}>
+          <div style={{ background: 'var(--surface)', borderRadius: 12, width: '90vw', maxWidth: 820, maxHeight: '90vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }} onClick={e => e.stopPropagation()}>
+            <div className="modal-header" style={{ padding: '14px 20px' }}>
+              <div>
+                <h2 className="modal-title">Preview — {previewTitle}</h2>
+                <div style={{ fontSize: 12, color: 'var(--muted)' }}>{empNN.name}</div>
+              </div>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <button className="btn-primary btn-sm" onClick={() => printPayslip(empNN, previewInvoices, dateFrom, dateTo)}>Print / PDF</button>
+                <button className="modal-close btn-icon" onClick={() => setPreviewHtml(null)}>✕</button>
+              </div>
+            </div>
+            <iframe srcDoc={previewHtml} style={{ flex: 1, border: 'none', background: '#fff', minHeight: 500 }} title="Statement Preview" />
+          </div>
+        </div>
+      )}
 
       {/* Mark as Paid modal */}
       {toast && (

@@ -2,6 +2,7 @@ import type { AppSettings } from '../data/types'
 import { loadSettings, saveSettings } from './storage'
 import { supabase } from '../lib/supabase'
 import { attachmentBase64ForMime, attachmentBase64ToBlob, type EmailAttachment } from '../utils/pdf'
+import { formatEmailList } from '../utils/email'
 
 type GmailUserData = {
   gmailAccessToken?: string
@@ -169,10 +170,11 @@ export async function disconnectGmail(): Promise<void> {
 }
 
 // ── Sending ───────────────────────────────────────────────────
-function buildRaw(to: string, subject: string, body: string, from: string): string {
+function buildRaw(to: string, subject: string, body: string, from: string, cc: string[] = []): string {
   const msg = [
     `From: ${from}`,
     `To: ${to}`,
+    ...(cc.length > 0 ? [`Cc: ${formatEmailList(cc)}`] : []),
     `Subject: ${encodeMimeHeader(subject)}`,
     'MIME-Version: 1.0',
     'Content-Type: text/plain; charset=utf-8',
@@ -204,11 +206,13 @@ function buildRawWithAttachments(
   body: string,
   from: string,
   attachments: EmailAttachment[],
+  cc: string[] = [],
 ): string {
   const boundary = `yva-os-${crypto.randomUUID()}`
   const parts = [
     `From: ${from}`,
     `To: ${to}`,
+    ...(cc.length > 0 ? [`Cc: ${formatEmailList(cc)}`] : []),
     `Subject: ${encodeMimeHeader(subject)}`,
     'MIME-Version: 1.0',
     `Content-Type: multipart/mixed; boundary="${boundary}"`,
@@ -253,6 +257,7 @@ export async function sendGmailMessage(
   subject: string,
   body: string,
   attachments: EmailAttachment[] = [],
+  cc: string[] = [],
 ): Promise<void> {
   const userData = await getGmailUserData()
   if (!userData.gmailEmail) throw new Error('Gmail not connected.')
@@ -260,8 +265,8 @@ export async function sendGmailMessage(
   if (!token) throw new Error('Gmail session expired — please reconnect in Settings.')
 
   const raw = attachments.length > 0
-    ? buildRawWithAttachments(to, subject, body, userData.gmailEmail, attachments)
-    : buildRaw(to, subject, body, userData.gmailEmail)
+    ? buildRawWithAttachments(to, subject, body, userData.gmailEmail, attachments, cc)
+    : buildRaw(to, subject, body, userData.gmailEmail, cc)
 
   const res = await fetch(SEND_ENDPOINT, {
     method:  'POST',
@@ -279,15 +284,16 @@ export async function sendEmail(
   to: string,
   subject: string,
   body: string,
-  options?: { attachments?: EmailAttachment[] },
+  options?: { attachments?: EmailAttachment[]; cc?: string[] },
 ): Promise<SendEmailResult> {
   if (!to) return { mode: 'mailto', attached: false }
   const attachments = options?.attachments || []
+  const cc = options?.cc || []
   let fallbackReason: string | undefined
   const connected = await isGmailConnected()
   if (connected) {
     try {
-      await sendGmailMessage(to, subject, body, attachments)
+      await sendGmailMessage(to, subject, body, attachments, cc)
       return { mode: 'gmail', attached: attachments.length > 0 }
     } catch (err) {
       console.error('Gmail send failed, falling back to mailto:', err)
@@ -299,8 +305,8 @@ export async function sendEmail(
   if (attachments.length > 0) {
     for (const attachment of attachments) downloadAttachment(attachment)
   }
-  // Mailto fallback
-  window.location.href =
-    `mailto:${to}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`
+  const params = new URLSearchParams({ subject, body })
+  if (cc.length > 0) params.set('cc', formatEmailList(cc))
+  window.location.href = `mailto:${to}?${params.toString()}`
   return { mode: 'mailto', attached: false, fallbackReason }
 }

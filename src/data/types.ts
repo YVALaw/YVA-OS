@@ -14,6 +14,7 @@ export type Employee = {
   name: string
   employeeNumber?: string
   email?: string
+  ccEmails?: string[]
   phone?: string
   payRate?: string | number
   defaultShiftStart?: string
@@ -37,6 +38,7 @@ export type Client = {
   name: string
   company?: string
   email?: string
+  ccEmails?: string[]
   phone?: string
   address?: string
   timezone?: string
@@ -85,6 +87,8 @@ export type Expense = {
 export type InvoiceItem = {
   employeeId?: string
   employeeName: string
+  projectId?: string
+  projectName?: string
   position?: string
   hoursTotal: number | string
   rate: number
@@ -122,6 +126,7 @@ export type Invoice = {
   dueDate?: string
   clientName?: string
   clientEmail?: string
+  clientCcEmails?: string[]
   clientAddress?: string
   billingStart?: string
   billingEnd?: string

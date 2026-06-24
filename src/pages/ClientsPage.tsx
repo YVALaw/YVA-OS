@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import type { ActivityLogEntry, Client, Invoice, Project } from '../data/types'
 import { loadSnapshot, saveClients, loadActivityLog, saveActivityLog, loadSettings } from '../services/storage'
 import { sendEmail } from '../services/gmail'
+import { formatEmailList, parseEmailList } from '../utils/email'
 import { Avatar, KanbanColumn, KanbanItem, ProtoIcon, SearchField, StatusChip, ToggleGroup, colorFromString, dueLabel, protoCurrency, protoDateShort, useKanbanDnd } from '../components/PrototypeKit'
 function uid() { return crypto.randomUUID() }
 
@@ -48,12 +49,12 @@ function stageBadge(s?: string): string {
 
 type LinkEntry = { label: string; url: string }
 type FormData  = {
-  name: string; company: string; email: string; phone: string; address: string
+  name: string; company: string; email: string; ccEmails: string; phone: string; address: string
   timezone: string; defaultRate: string; paymentTerms: string; tags: string
   notes: string; status: string; contractEnd: string; links: LinkEntry[]
 }
 const EMPTY: FormData = {
-  name: '', company: '', email: '', phone: '', address: '',
+  name: '', company: '', email: '', ccEmails: '', phone: '', address: '',
   timezone: '', defaultRate: '', paymentTerms: '', tags: '', notes: '',
   status: 'active', contractEnd: '', links: [],
 }
@@ -119,7 +120,7 @@ export default function ClientsPage() {
   function openAdd() { setForm({ ...EMPTY }); setEditId(null); setModal('add'); setNewLinkLabel(''); setNewLinkUrl('') }
   function openEdit(c: Client) {
     setForm({
-      name: c.name, company: c.company ?? '', email: c.email ?? '',
+      name: c.name, company: c.company ?? '', email: c.email ?? '', ccEmails: formatEmailList(c.ccEmails),
       phone: c.phone ?? '', address: c.address ?? '',
       timezone: c.timezone ?? '', defaultRate: c.defaultRate != null ? String(c.defaultRate) : '',
       paymentTerms: c.paymentTerms ?? '', tags: c.tags ?? '',
@@ -130,8 +131,14 @@ export default function ClientsPage() {
   }
   function saveForm() {
     if (!form.name.trim()) return
+    const cc = parseEmailList(form.ccEmails)
+    if (cc.invalid.length > 0) {
+      alert(`Invalid CC email${cc.invalid.length === 1 ? '' : 's'}: ${cc.invalid.join(', ')}`)
+      return
+    }
     const data: Partial<Client> = {
       name: form.name, company: form.company || undefined, email: form.email || undefined,
+      ccEmails: cc.emails.length ? cc.emails : undefined,
       phone: form.phone || undefined, address: form.address || undefined,
       timezone: form.timezone || undefined,
       defaultRate: form.defaultRate ? Number(form.defaultRate) : undefined,
@@ -211,7 +218,7 @@ export default function ClientsPage() {
         `Hi ${c.name},\n\nThis is a friendly reminder that you have ${unpaidInvs.length === 1 ? 'an outstanding invoice' : `${unpaidInvs.length} outstanding invoices`} totaling $${totalOwed.toFixed(2)}:\n\n${invoiceList}\n\nPlease let us know when we can expect payment or if you have any questions.\n\n${settings.emailSignature || companyName}`
     }
     const subject = `Outstanding Balance Reminder — ${companyName}`
-    sendEmail(c.email || '', subject, bodyText)
+    sendEmail(c.email || '', subject, bodyText, { cc: c.ccEmails || [] })
   }
 
   const stageCounts = useMemo(() => ({
@@ -450,6 +457,10 @@ export default function ClientsPage() {
                   <div className="form-group">
                     <label className="form-label">Email</label>
                     <input className="form-input" type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="billing@client.com" />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">CC Emails</label>
+                    <input className="form-input" value={form.ccEmails} onChange={(e) => setForm({ ...form, ccEmails: e.target.value })} placeholder="ops@client.com, accounting@client.com" />
                   </div>
                   <div className="form-group">
                     <label className="form-label">Phone</label>
