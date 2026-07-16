@@ -31,6 +31,17 @@ export type Employee = {
   notes?: string
   photoUrl?: string
   attachments?: Attachment[]
+  paymentAdjustments?: EmployeePaymentAdjustment[]
+}
+
+export type EmployeePaymentAdjustment = {
+  id: string
+  type: 'bonus' | 'deduction'
+  amount: number
+  date: string
+  reason: string
+  applied?: boolean
+  createdAt: number
 }
 
 export type Client = {
