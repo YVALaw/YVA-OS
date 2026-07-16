@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import type { Attachment, Employee, Invoice, Project } from '../data/types'
+import type { Attachment, Employee, EmployeePaymentAdjustment, Invoice, Project } from '../data/types'
 import { loadSnapshot, saveEmployees, saveInvoices, loadSettings } from '../services/storage'
 import { uploadFile, deleteFile } from '../services/fileStorage'
 import { sendEmail, type SendEmailResult } from '../services/gmail'
@@ -117,14 +117,51 @@ function summarizeEmployeeInvoices(emp: Employee, invoices: Invoice[]) {
   }, { hours: 0, regularHours: 0, premiumHours: 0, totalPay: 0 })
 }
 
-function buildPayslipHTML(emp: Employee, empInvoices: Invoice[], dateFrom: string, dateTo: string, settings: Awaited<ReturnType<typeof loadSettings>>) {
+function parseAdjustmentAmount(value: string | number | undefined): number {
+  const amount = typeof value === 'number' ? value : Number(String(value || '').replace(',', '.'))
+  return Number.isFinite(amount) ? Math.abs(amount) : 0
+}
+
+function filterStatementAdjustments(emp: Employee, from?: string, to?: string) {
+  return (emp.paymentAdjustments || [])
+    .filter(adj => {
+      if (adj.applied === false) return false
+      if (from && adj.date && adj.date < from) return false
+      if (to && adj.date && adj.date > to) return false
+      return true
+    })
+    .sort((a, b) => (a.date || '').localeCompare(b.date || ''))
+}
+
+function adjustmentSignedAmount(adj: EmployeePaymentAdjustment): number {
+  const amount = parseAdjustmentAmount(adj.amount)
+  return adj.type === 'deduction' ? -amount : amount
+}
+
+function sumAdjustments(adjustments: EmployeePaymentAdjustment[]): number {
+  return adjustments.reduce((sum, adj) => sum + adjustmentSignedAmount(adj), 0)
+}
+
+function escapeStatementHtml(value: string): string {
+  return value.replace(/[&<>"']/g, character => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#039;',
+  })[character] || character)
+}
+
+function buildPayslipHTML(emp: Employee, empInvoices: Invoice[], dateFrom: string, dateTo: string, settings: Awaited<ReturnType<typeof loadSettings>>, statementAdjustments = filterStatementAdjustments(emp, dateFrom || undefined, dateTo || undefined)) {
   const payRate  = Number(emp.payRate) || 0
   const premiumConfig = employeePremiumConfig(emp)
   const dopRate  = settings.usdToDop || 0
   const summary = summarizeEmployeeInvoices(emp, empInvoices)
   const totalHours = summary.hours
   const totalUSD = summary.totalPay
-  const totalDOP = dopRate > 0 ? totalUSD * dopRate : 0
+  const adjustmentTotal = sumAdjustments(statementAdjustments)
+  const netUSD = totalUSD + adjustmentTotal
+  const totalDOP = dopRate > 0 ? netUSD * dopRate : 0
   function ph(v: string): number {
     if (!v) return 0; const s = v.trim().replace(',','.')
     if (s.includes(':')) { const [h,m]=s.split(':'); return (parseInt(h)||0)+(parseInt(m)||0)/60 }
@@ -166,16 +203,21 @@ function buildPayslipHTML(emp: Employee, empInvoices: Invoice[], dateFrom: strin
   }).join('<hr style="border:none;border-top:1px solid #eee;margin:0 0 16px">')
 
   const period   = dateFrom && dateTo ? `${dateFrom} – ${dateTo}` : dateFrom || dateTo || 'All time'
-  return `<!DOCTYPE html><html><head><title>Statement — ${emp.name}</title><style>@page{size:Letter;margin:.5in}html,body{margin:0;padding:0;background:#fff}body{font-family:Arial,sans-serif;color:#111}.statement-page{width:8.5in;min-height:11in;margin:0 auto;padding:.6in;box-sizing:border-box;background:#fff}.header{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:28px;border-bottom:2px solid #f5b533;padding-bottom:16px}.logo{height:48px}h2{margin:0;font-size:22px;color:#f5b533}.meta{font-size:12px;color:#999;margin-top:4px}.kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:24px}.kpi{background:#f9f9f9;border-radius:8px;padding:14px;text-align:center}.kpi-v{font-size:20px;font-weight:800;color:#111}.kpi-l{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:#999;margin-top:4px}table{width:100%;border-collapse:collapse;font-size:12px}th{text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:#999;padding:8px 8px;border-bottom:2px solid #eee}td{padding:8px;border-bottom:1px solid #eee}.footer{margin-top:32px;font-size:11px;color:#999;border-top:1px solid #eee;padding-top:12px;text-align:center}@media print{body{margin:0}.statement-page{margin:0}}</style></head><body><div class="statement-page" data-pdf-page><div class="header"><img src="${window.location.origin}/yva-logo.png" class="logo" onerror="this.style.display='none'" /><div style="text-align:right"><h2>EARNINGS STATEMENT</h2><div class="meta">${emp.name}${emp.employeeNumber?` · ${emp.employeeNumber}`:''}</div><div class="meta">Period: ${period}</div><div class="meta">Generated: ${new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})}</div></div></div><div class="kpis"><div class="kpi"><div class="kpi-v">${empInvoices.length}</div><div class="kpi-l">Invoices</div></div><div class="kpi"><div class="kpi-v">${totalHours.toFixed(1)}h</div><div class="kpi-l">Total Hours</div></div><div class="kpi"><div class="kpi-v">${payRate>0?'$'+payRate+'/hr':'—'}</div><div class="kpi-l">Base Rate</div></div>${summary.premiumHours>0?`<div class="kpi"><div class="kpi-v">${summary.premiumHours.toFixed(1)}h</div><div class="kpi-l">Premium Hours (+${premiumConfig.percent}%)</div></div>`:''}<div class="kpi"><div class="kpi-v">${payRate>0?'$'+totalUSD.toFixed(2):'—'}</div><div class="kpi-l">Total Earned (USD)</div></div>${totalDOP>0?`<div class="kpi"><div class="kpi-v">RD$${totalDOP.toLocaleString('en-US',{maximumFractionDigits:0})}</div><div class="kpi-l">Total Earned (DOP @ ${dopRate})</div></div>`:''}</div>${sections?sections+'<div style="text-align:right;font-weight:800;font-size:13px;padding:10px 0;border-top:2px solid #111;margin-top:4px">Total &nbsp;&nbsp; '+totalHours.toFixed(1)+'h &nbsp;&nbsp; '+(payRate>0?'$'+totalUSD.toFixed(2):'—')+'</div>'+(summary.premiumHours>0?'<div style="text-align:right;font-size:11px;color:#666">Regular: '+summary.regularHours.toFixed(2)+'h · Premium: '+summary.premiumHours.toFixed(2)+'h at +'+premiumConfig.percent+'%</div>':''):'<p style="color:#999;text-align:center;padding:24px">No invoice data for this period.</p>'}<div class="footer">YVA Staffing · Bilingual Virtual Professionals · yvastaffing.net</div></div></body></html>`
+  const adjustmentRows = statementAdjustments.map(adj => '<tr><td style="font-weight:700;padding:8px 6px">'+(adj.type === 'bonus' ? 'Bonus' : 'Deduction')+'</td><td style="color:#666;padding:8px 6px">'+escapeStatementHtml(adj.date || '—')+'</td><td style="color:#666;padding:8px 6px">'+escapeStatementHtml(adj.reason || 'Adjustment')+'</td><td style="text-align:right;font-weight:700;padding:8px 6px;color:'+(adj.type === 'deduction' ? '#dc2626' : '#16a34a')+'">'+(adj.type === 'deduction' ? '-' : '+')+'$'+parseAdjustmentAmount(adj.amount).toFixed(2)+'</td></tr>').join('')
+  const adjustmentSection = statementAdjustments.length > 0 ? '<h3 style="font-size:13px;margin:18px 0 6px">Adjustments</h3><table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:12px"><thead><tr><th>Type</th><th>Date</th><th>Reason</th><th style="text-align:right">Amount</th></tr></thead><tbody>'+adjustmentRows+'</tbody></table>' : ''
+  const netPaySection = statementAdjustments.length > 0 ? '<div style="text-align:right;font-weight:800;font-size:14px;padding:2px 0">Net Pay &nbsp;&nbsp; $'+netUSD.toFixed(2)+'</div>' : ''
+  return `<!DOCTYPE html><html><head><title>Statement — ${emp.name}</title><style>@page{size:Letter;margin:.5in}html,body{margin:0;padding:0;background:#fff}body{font-family:Arial,sans-serif;color:#111}.statement-page{width:8.5in;min-height:11in;margin:0 auto;padding:.6in;box-sizing:border-box;background:#fff}.header{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:28px;border-bottom:2px solid #f5b533;padding-bottom:16px}.logo{height:48px}h2{margin:0;font-size:22px;color:#f5b533}.meta{font-size:12px;color:#999;margin-top:4px}.kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:24px}.kpi{background:#f9f9f9;border-radius:8px;padding:14px;text-align:center}.kpi-v{font-size:20px;font-weight:800;color:#111}.kpi-l{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:#999;margin-top:4px}table{width:100%;border-collapse:collapse;font-size:12px}th{text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:#999;padding:8px 8px;border-bottom:2px solid #eee}td{padding:8px;border-bottom:1px solid #eee}.footer{margin-top:32px;font-size:11px;color:#999;border-top:1px solid #eee;padding-top:12px;text-align:center}@media print{body{margin:0}.statement-page{margin:0}}</style></head><body><div class="statement-page" data-pdf-page><div class="header"><img src="${window.location.origin}/yva-logo.png" class="logo" onerror="this.style.display='none'" /><div style="text-align:right"><h2>EARNINGS STATEMENT</h2><div class="meta">${emp.name}${emp.employeeNumber?` · ${emp.employeeNumber}`:''}</div><div class="meta">Period: ${period}</div><div class="meta">Generated: ${new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})}</div></div></div><div class="kpis"><div class="kpi"><div class="kpi-v">${empInvoices.length}</div><div class="kpi-l">Invoices</div></div><div class="kpi"><div class="kpi-v">${totalHours.toFixed(1)}h</div><div class="kpi-l">Total Hours</div></div><div class="kpi"><div class="kpi-v">${payRate>0?'$'+payRate+'/hr':'—'}</div><div class="kpi-l">Base Rate</div></div>${summary.premiumHours>0?`<div class="kpi"><div class="kpi-v">${summary.premiumHours.toFixed(1)}h</div><div class="kpi-l">Premium Hours (+${premiumConfig.percent}%)</div></div>`:''}<div class="kpi"><div class="kpi-v">${payRate>0?'$'+totalUSD.toFixed(2):'—'}</div><div class="kpi-l">Gross Earned (USD)</div></div>${statementAdjustments.length>0?`<div class="kpi"><div class="kpi-v">${adjustmentTotal<0?'-':'+'}$${Math.abs(adjustmentTotal).toFixed(2)}</div><div class="kpi-l">Adjustments</div></div><div class="kpi"><div class="kpi-v">$${netUSD.toFixed(2)}</div><div class="kpi-l">Net Pay (USD)</div></div>`:''}${totalDOP>0?`<div class="kpi"><div class="kpi-v">RD$${totalDOP.toLocaleString('en-US',{maximumFractionDigits:0})}</div><div class="kpi-l">Net Pay (DOP @ ${dopRate})</div></div>`:''}</div>${sections?sections+adjustmentSection+'<div style="text-align:right;font-weight:800;font-size:13px;padding:10px 0;border-top:2px solid #111;margin-top:4px">Gross &nbsp;&nbsp; '+totalHours.toFixed(1)+'h &nbsp;&nbsp; '+(payRate>0?'$'+totalUSD.toFixed(2):'—')+'</div>'+netPaySection+(summary.premiumHours>0?'<div style="text-align:right;font-size:11px;color:#666">Regular: '+summary.regularHours.toFixed(2)+'h · Premium: '+summary.premiumHours.toFixed(2)+'h at +'+premiumConfig.percent+'%</div>':''):'<p style="color:#999;text-align:center;padding:24px">No invoice data for this period.</p>'}<div class="footer">YVA Staffing · Bilingual Virtual Professionals · yvastaffing.net</div></div></body></html>`
 }
 
-async function emailStatement(emp: Employee, empInvoices: Invoice[], dateFrom: string, dateTo: string) {
+async function emailStatement(emp: Employee, empInvoices: Invoice[], dateFrom: string, dateTo: string, statementAdjustments = filterStatementAdjustments(emp, dateFrom || undefined, dateTo || undefined)) {
   const settings = await loadSettings()
   const dopRate  = settings.usdToDop || 0
   const summary = summarizeEmployeeInvoices(emp, empInvoices)
   const totalHours = summary.hours
   const totalUSD = summary.totalPay
-  const totalDOP = dopRate > 0 ? totalUSD * dopRate : 0
+  const adjustmentTotal = sumAdjustments(statementAdjustments)
+  const netUSD = totalUSD + adjustmentTotal
+  const totalDOP = dopRate > 0 ? netUSD * dopRate : 0
   const period   = dateFrom && dateTo ? `${dateFrom} – ${dateTo}` : dateFrom || dateTo || 'All time'
   const companyName = settings.companyName || 'YVA Staffing'
   const subject  = `Your Earnings Statement — ${period} — ${companyName}`
@@ -189,23 +231,25 @@ async function emailStatement(emp: Employee, empInvoices: Invoice[], dateFrom: s
     bodyText =
       `Hi ${emp.name},\n\nHere is your earnings summary for the period ${period}:\n\n` +
       `  Total Hours: ${totalHours.toFixed(1)}h\n` +
-      `  Total Earned: $${totalUSD.toFixed(2)} USD` +
+      `  Gross Earned: $${totalUSD.toFixed(2)} USD\n` +
+      (statementAdjustments.length > 0 ? `  Adjustments: ${adjustmentTotal < 0 ? '-' : '+'}$${Math.abs(adjustmentTotal).toFixed(2)} USD\n` : '') +
+      `  Net Pay: $${netUSD.toFixed(2)} USD` +
       (totalDOP > 0 ? ` / RD$${totalDOP.toLocaleString('en-US',{maximumFractionDigits:0})} DOP\n` : '\n') +
       `  Invoices: ${empInvoices.length}\n\n` +
       `Please reach out if you have any questions.\n\n${settings.emailSignature || companyName}`
   }
   const attachment = await htmlToPdfAttachment(
     `${(emp.name || 'employee').replace(/\s+/g, '-').toLowerCase()}-statement.pdf`,
-    buildPayslipHTML(emp, empInvoices, dateFrom, dateTo, settings),
+    buildPayslipHTML(emp, empInvoices, dateFrom, dateTo, settings, statementAdjustments),
   )
   return sendEmail(emp.email || '', subject, bodyText, { attachments: [attachment], cc: emp.ccEmails || [] })
 }
 
-async function printPayslip(emp: Employee, empInvoices: Invoice[], dateFrom: string, dateTo: string) {
+async function printPayslip(emp: Employee, empInvoices: Invoice[], dateFrom: string, dateTo: string, statementAdjustments = filterStatementAdjustments(emp, dateFrom || undefined, dateTo || undefined)) {
   const settings = await loadSettings()
   const win = window.open('', '_blank', 'width=800,height=600')
   if (!win) return
-  win.document.write(buildPayslipHTML(emp, empInvoices, dateFrom, dateTo, settings).replace('</body></html>', '<script>window.onload=function(){window.print()}</script></body></html>'))
+  win.document.write(buildPayslipHTML(emp, empInvoices, dateFrom, dateTo, settings, statementAdjustments).replace('</body></html>', '<script>window.onload=function(){window.print()}</script></body></html>'))
   win.document.close()
 }
 
@@ -272,6 +316,7 @@ export default function EmployeeProfilePage() {
   const [previewHtml, setPreviewHtml] = useState<string | null>(null)
   const [previewTitle, setPreviewTitle] = useState('')
   const [previewInvoices, setPreviewInvoices] = useState<Invoice[]>([])
+  const [adjustmentForm, setAdjustmentForm] = useState({ type: 'deduction' as 'bonus' | 'deduction', amount: '', date: new Date().toISOString().slice(0, 10), reason: '' })
 
   if (!emp) {
     return (
@@ -293,6 +338,11 @@ export default function EmployeeProfilePage() {
   const summary = summarizeEmployeeInvoices(empNN, empInvoices)
   const totalHours  = summary.hours
   const totalEarned  = summary.totalPay
+  const paymentAdjustments = [...(empNN.paymentAdjustments || [])]
+    .sort((a, b) => (b.date || '').localeCompare(a.date || '') || b.createdAt - a.createdAt)
+  const statementAdjustments = filterStatementAdjustments(empNN, dateFrom || undefined, dateTo || undefined)
+  const adjustmentTotal = sumAdjustments(statementAdjustments)
+  const netEarned = totalEarned + adjustmentTotal
   const paidCount    = empInvoices.filter(inv => getEmployeePaymentRecord(inv, empNN)?.status === 'paid').length
   const pendingCount = empInvoices.length - paidCount
   const totalPaid    = empInvoices.reduce((s, inv) => {
@@ -309,6 +359,46 @@ export default function EmployeeProfilePage() {
     if (result.mode === 'gmail') return `Statement sent to ${recipient} with PDF attached`
     const reason = result.fallbackReason ? ` Gmail fallback: ${result.fallbackReason}.` : ''
     return `Statement draft opened for ${recipient}. PDF downloaded to attach manually.${reason}`
+  }
+
+  async function updateEmployeePaymentAdjustments(nextAdjustments: EmployeePaymentAdjustment[]) {
+    const updated = employees.map(employee =>
+      employee.id === empNN.id ? { ...employee, paymentAdjustments: nextAdjustments } : employee,
+    )
+    setEmployeesState(updated)
+    await saveEmployees(updated)
+  }
+
+  async function addPaymentAdjustment() {
+    const amount = parseAdjustmentAmount(adjustmentForm.amount)
+    const reason = adjustmentForm.reason.trim()
+    if (amount <= 0 || !reason) {
+      showToast('Enter an amount and reason for the adjustment.')
+      return
+    }
+    const next: EmployeePaymentAdjustment = {
+      id: uid(),
+      type: adjustmentForm.type,
+      amount,
+      date: adjustmentForm.date || new Date().toISOString().slice(0, 10),
+      reason,
+      applied: true,
+      createdAt: Date.now(),
+    }
+    await updateEmployeePaymentAdjustments([...(empNN.paymentAdjustments || []), next])
+    setAdjustmentForm({ type: 'deduction', amount: '', date: new Date().toISOString().slice(0, 10), reason: '' })
+    showToast(`${next.type === 'bonus' ? 'Bonus' : 'Deduction'} added.`)
+  }
+
+  async function togglePaymentAdjustment(adjustmentId: string) {
+    await updateEmployeePaymentAdjustments((empNN.paymentAdjustments || []).map(adj =>
+      adj.id === adjustmentId ? { ...adj, applied: adj.applied === false } : adj,
+    ))
+  }
+
+  async function removePaymentAdjustment(adjustmentId: string) {
+    await updateEmployeePaymentAdjustments((empNN.paymentAdjustments || []).filter(adj => adj.id !== adjustmentId))
+    showToast('Adjustment removed.')
   }
 
   function statementRecipient(): string {
@@ -345,7 +435,7 @@ export default function EmployeeProfilePage() {
 
   async function handleStatementEmail(targetInvoices: Invoice[]) {
     if (!empNN.email || targetInvoices.length === 0) return
-    const result = await emailStatement(empNN, targetInvoices, dateFrom, dateTo)
+    const result = await emailStatement(empNN, targetInvoices, dateFrom, dateTo, statementAdjustments)
     showToast(describeEmailResult(result, statementRecipient()))
   }
 
@@ -354,7 +444,7 @@ export default function EmployeeProfilePage() {
     const settings = await loadSettings()
     setPreviewInvoices(targetInvoices)
     setPreviewTitle(title)
-    setPreviewHtml(buildPayslipHTML(empNN, targetInvoices, dateFrom, dateTo, settings))
+    setPreviewHtml(buildPayslipHTML(empNN, targetInvoices, dateFrom, dateTo, settings, statementAdjustments))
   }
 
   const assignedProjects = projects.filter(p => (p.employeeIds || []).includes(empNN.id))
@@ -757,8 +847,84 @@ export default function EmployeeProfilePage() {
             )}
           </div>
 
+          {/* Payment adjustments */}
+          <div style={{ borderTop: '1px solid var(--border)', borderBottom: '1px solid var(--border)', padding: '14px 0', marginBottom: 16 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>Payment Adjustments</div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: 8, marginBottom: 8 }}>
+              <div className="form-group" style={{ margin: 0 }}>
+                <label className="form-label">Type</label>
+                <select
+                  className="form-input form-input-sm"
+                  value={adjustmentForm.type}
+                  onChange={e => setAdjustmentForm(current => ({ ...current, type: e.target.value as 'bonus' | 'deduction' }))}
+                >
+                  <option value="deduction">Deduction</option>
+                  <option value="bonus">Bonus</option>
+                </select>
+              </div>
+              <div className="form-group" style={{ margin: 0 }}>
+                <label className="form-label">Amount (USD)</label>
+                <input
+                  className="form-input form-input-sm"
+                  type="number"
+                  min="0.01"
+                  step="0.01"
+                  placeholder="52.00"
+                  value={adjustmentForm.amount}
+                  onChange={e => setAdjustmentForm(current => ({ ...current, amount: e.target.value }))}
+                />
+              </div>
+              <div className="form-group" style={{ margin: 0 }}>
+                <label className="form-label">Effective date</label>
+                <input
+                  className="form-input form-input-sm"
+                  type="date"
+                  value={adjustmentForm.date}
+                  onChange={e => setAdjustmentForm(current => ({ ...current, date: e.target.value }))}
+                />
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+              <div className="form-group" style={{ flex: 1, margin: 0 }}>
+                <label className="form-label">Reason</label>
+                <input
+                  className="form-input form-input-sm"
+                  placeholder="Previous payment overage"
+                  value={adjustmentForm.reason}
+                  onChange={e => setAdjustmentForm(current => ({ ...current, reason: e.target.value }))}
+                  onKeyDown={e => { if (e.key === 'Enter') void addPaymentAdjustment() }}
+                />
+              </div>
+              <button className="btn-primary btn-sm" onClick={() => { void addPaymentAdjustment() }}>Add</button>
+            </div>
+
+            {paymentAdjustments.length > 0 && (
+              <div style={{ display: 'grid', gap: 6, marginTop: 12 }}>
+                {paymentAdjustments.map(adj => {
+                  const isIncluded = statementAdjustments.some(statementAdjustment => statementAdjustment.id === adj.id)
+                  const status = adj.applied === false ? 'Excluded' : isIncluded ? 'Included' : 'Outside period'
+                  return (
+                    <div key={adj.id} style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', padding: '8px 0', borderTop: '1px solid var(--border)', opacity: adj.applied === false ? .58 : 1 }}>
+                      <div style={{ minWidth: 0, flex: 1 }}>
+                        <div style={{ fontSize: 12, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{adj.reason}</div>
+                        <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2 }}>{adj.date || 'No date'} · {status}</div>
+                      </div>
+                      <div style={{ fontSize: 13, fontWeight: 800, color: adj.type === 'deduction' ? '#dc2626' : '#16a34a', whiteSpace: 'nowrap' }}>
+                        {adj.type === 'deduction' ? '-' : '+'}{formatMoney(parseAdjustmentAmount(adj.amount))}
+                      </div>
+                      <button className="btn-ghost btn-sm" style={{ fontSize: 11 }} onClick={() => { void togglePaymentAdjustment(adj.id) }}>
+                        {adj.applied === false ? 'Include' : 'Exclude'}
+                      </button>
+                      <button className="btn-icon btn-danger" title="Remove adjustment" onClick={() => { void removePaymentAdjustment(adj.id) }}>×</button>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+
           {/* KPI summary */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 8, marginBottom: 16 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(92px, 1fr))', gap: 8, marginBottom: 16 }}>
             <div className="settings-stat-card">
               <div className="settings-stat-count" style={{ fontSize: 16 }}>{empInvoices.length}</div>
               <div className="settings-stat-label">Invoices</div>
@@ -773,7 +939,17 @@ export default function EmployeeProfilePage() {
             </div>
             <div className="settings-stat-card">
               <div className="settings-stat-count" style={{ fontSize: 15 }}>{payRate > 0 ? formatMoney(totalEarned) : '—'}</div>
-              <div className="settings-stat-label">Total Earned</div>
+              <div className="settings-stat-label">Gross Earned</div>
+            </div>
+            <div className="settings-stat-card">
+              <div className="settings-stat-count" style={{ fontSize: 15, color: adjustmentTotal < 0 ? '#dc2626' : adjustmentTotal > 0 ? '#16a34a' : undefined }}>
+                {adjustmentTotal === 0 ? formatMoney(0) : `${adjustmentTotal < 0 ? '-' : '+'}${formatMoney(Math.abs(adjustmentTotal))}`}
+              </div>
+              <div className="settings-stat-label">Adjustments</div>
+            </div>
+            <div className="settings-stat-card" style={{ borderColor: statementAdjustments.length > 0 ? 'var(--gold)' : undefined }}>
+              <div className="settings-stat-count" style={{ fontSize: 15, color: statementAdjustments.length > 0 ? 'var(--gold)' : undefined }}>{payRate > 0 ? formatMoney(netEarned) : '—'}</div>
+              <div className="settings-stat-label">Net Pay</div>
             </div>
             <div className="settings-stat-card" style={{ borderColor: paidCount > 0 ? 'var(--gold)' : undefined }}>
               <div className="settings-stat-count" style={{ fontSize: 15, color: paidCount > 0 ? 'var(--gold)' : undefined }}>{payRate > 0 ? formatMoney(totalPaid) : paidCount}</div>
@@ -796,7 +972,7 @@ export default function EmployeeProfilePage() {
               title={!empNN.email ? 'No email on file' : ''}>
               ✉ Email Statement
             </button>
-            <button className="btn-ghost btn-sm" onClick={() => printPayslip(emp, empInvoices, dateFrom, dateTo)}
+            <button className="btn-ghost btn-sm" onClick={() => { void printPayslip(empNN, empInvoices, dateFrom, dateTo, statementAdjustments) }}
               disabled={empInvoices.length === 0}>
               ⎙ PDF Payslip
             </button>
@@ -908,8 +1084,14 @@ export default function EmployeeProfilePage() {
                   </div>
                 )
               })}
-              <div style={{ textAlign: 'right', fontWeight: 800, fontSize: 13, padding: '8px 4px', borderTop: '2px solid var(--border)', marginTop: 4 }}>
-                Total &nbsp; {fmtHoursHM(totalHours)} &nbsp;&nbsp; {payRate > 0 ? formatMoney(totalEarned) : '—'}
+              <div style={{ textAlign: 'right', fontSize: 13, padding: '8px 4px', borderTop: '2px solid var(--border)', marginTop: 4 }}>
+                <div style={{ fontWeight: 700 }}>Gross &nbsp; {fmtHoursHM(totalHours)} &nbsp;&nbsp; {payRate > 0 ? formatMoney(totalEarned) : '—'}</div>
+                {statementAdjustments.length > 0 && (
+                  <>
+                    <div style={{ color: adjustmentTotal < 0 ? '#dc2626' : '#16a34a', marginTop: 3 }}>Adjustments &nbsp; {adjustmentTotal < 0 ? '-' : '+'}{formatMoney(Math.abs(adjustmentTotal))}</div>
+                    <div style={{ fontWeight: 800, marginTop: 3 }}>Net Pay &nbsp; {formatMoney(netEarned)}</div>
+                  </>
+                )}
               </div>
             </div>
           )}
@@ -926,7 +1108,7 @@ export default function EmployeeProfilePage() {
                 <div style={{ fontSize: 12, color: 'var(--muted)' }}>{empNN.name}</div>
               </div>
               <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                <button className="btn-primary btn-sm" onClick={() => printPayslip(empNN, previewInvoices, dateFrom, dateTo)}>Print / PDF</button>
+                <button className="btn-primary btn-sm" onClick={() => { void printPayslip(empNN, previewInvoices, dateFrom, dateTo, statementAdjustments) }}>Print / PDF</button>
                 <button className="modal-close btn-icon" onClick={() => setPreviewHtml(null)}>✕</button>
               </div>
             </div>
