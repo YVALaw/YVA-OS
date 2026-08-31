@@ -313,8 +313,11 @@ export async function loadEmployees(force = false): Promise<Employee[]> {
 }
 export async function saveEmployees(employees: Employee[]): Promise<void> {
   invalidateSnapshotCache()
-  await syncAll('employees', employees)
-  patchStorageCache({ employees })
+  // payment_adjustments is NOT NULL in the DB; a batch upsert fills the column
+  // with null for any row missing the key, which rejects the whole batch.
+  const normalized = employees.map(e => ({ ...e, paymentAdjustments: e.paymentAdjustments ?? [] }))
+  await syncAll('employees', normalized)
+  patchStorageCache({ employees: normalized })
 }
 
 // ─── Clients ──────────────────────────────────────────────────────────────────

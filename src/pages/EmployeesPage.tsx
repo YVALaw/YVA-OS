@@ -649,7 +649,13 @@ export default function EmployeesPage() {
   const [filterStatus, setFilterStatus] = useState('')
   const [view, setView] = useState<'cards' | 'projects' | 'capacity' | 'table'>('projects')
 
-  function persist(next: Employee[]) { setEmployees(next); void saveEmployees(next) }
+  function persist(next: Employee[]) {
+    setEmployees(next)
+    void saveEmployees(next).catch((err) => {
+      console.error('saveEmployees failed', err)
+      alert(err instanceof Error ? err.message : 'Could not save team changes to Supabase.')
+    })
+  }
 
   function openAdd() { setForm({ ...EMPTY }); setAttachments([]); setEditId(null); setModal('add') }
   function openEdit(e: Employee) {
