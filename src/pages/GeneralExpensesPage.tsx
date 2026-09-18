@@ -15,7 +15,16 @@ export default function GeneralExpensesPage() {
   const [filterCat, setFilterCat] = useState('')
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
 
-  function persist(next: Expense[]) { setExpenses(next); void saveGeneralExpenses(next) }
+  async function persist(next: Expense[]) {
+    const previous = expenses
+    setExpenses(next)
+    try {
+      await saveGeneralExpenses(next)
+    } catch (error) {
+      setExpenses(previous)
+      alert(error instanceof Error ? error.message : 'Expense could not be saved.')
+    }
+  }
 
   function addExpense() {
     if (!form.description.trim() || !form.amount) return

@@ -124,7 +124,7 @@ export default function ClientProfilePage() {
     .reduce((sum, invoice) => sum + (Number(invoice.subtotal) || 0), 0)
   const outstanding = clientInvoices
     .filter(invoice => unpaidStatuses.has((invoice.status || '').toLowerCase()))
-    .reduce((sum, invoice) => sum + ((Number(invoice.subtotal) || 0) - (Number(invoice.amountPaid) || 0)), 0)
+    .reduce((sum, invoice) => sum + Math.max(0, (Number(invoice.subtotal) || 0) - (Number(invoice.amountPaid) || 0)), 0)
   const billedMtd = clientInvoices
     .filter(invoice => (invoice.date || '').slice(0, 7) === new Date().toISOString().slice(0, 7))
     .reduce((sum, invoice) => sum + (Number(invoice.subtotal) || 0), 0)
@@ -232,7 +232,7 @@ export default function ClientProfilePage() {
     const settings = await loadSettings()
     const unpaidInvs = clientInvoices.filter(invoice => unpaidStatuses.has((invoice.status || '').toLowerCase()))
     if (unpaidInvs.length === 0) return
-    const totalOwed = unpaidInvs.reduce((sum, invoice) => sum + ((Number(invoice.subtotal) || 0) - (Number(invoice.amountPaid) || 0)), 0)
+    const totalOwed = unpaidInvs.reduce((sum, invoice) => sum + Math.max(0, (Number(invoice.subtotal) || 0) - (Number(invoice.amountPaid) || 0)), 0)
     const companyName = settings.companyName || 'YVA Staffing'
     const invoiceList = unpaidInvs.map(invoice => `  • ${invoice.number} — $${(Number(invoice.subtotal) || 0).toFixed(2)}`).join('\n')
     let bodyText: string

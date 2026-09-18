@@ -115,7 +115,18 @@ export default function ClientsPage() {
     })
   }
 
-  function persist(next: Client[]) { setClients(next); void saveClients(next) }
+  // Roll the optimistic update back and say so if Supabase rejects the write -
+  // dropping the promise made a failed save look successful until a refresh.
+  async function persist(next: Client[]) {
+    const previous = clients
+    setClients(next)
+    try {
+      await saveClients(next)
+    } catch (error) {
+      setClients(previous)
+      alert(error instanceof Error ? error.message : 'Changes could not be saved.')
+    }
+  }
 
   function openAdd() { setForm({ ...EMPTY }); setEditId(null); setModal('add'); setNewLinkLabel(''); setNewLinkUrl('') }
   function openEdit(c: Client) {
@@ -192,7 +203,7 @@ export default function ClientsPage() {
     const unpaidStatuses = new Set(['sent', 'viewed', 'overdue', 'partial'])
     return invoices
       .filter(inv => inv.clientName === name && unpaidStatuses.has((inv.status || '').toLowerCase()))
-      .reduce((s, inv) => s + ((Number(inv.subtotal) || 0) - (Number(inv.amountPaid) || 0)), 0)
+      .reduce((s, inv) => s + Math.max(0, (Number(inv.subtotal) || 0) - (Number(inv.amountPaid) || 0)), 0)
   }
   async function sendClientReminder(c: Client) {
     const settings = await loadSettings()
@@ -201,7 +212,7 @@ export default function ClientsPage() {
       return inv.clientName === c.name && unpaidStatuses.has((inv.status || '').toLowerCase())
     })
     if (unpaidInvs.length === 0) return
-    const totalOwed = unpaidInvs.reduce((s, inv) => s + ((Number(inv.subtotal) || 0) - (Number(inv.amountPaid) || 0)), 0)
+    const totalOwed = unpaidInvs.reduce((s, inv) => s + Math.max(0, (Number(inv.subtotal) || 0) - (Number(inv.amountPaid) || 0)), 0)
     const companyName = settings.companyName || 'YVA Staffing'
     const invoiceList = unpaidInvs.map(inv => `  • ${inv.number} — $${(Number(inv.subtotal) || 0).toFixed(2)}`).join('\n')
 

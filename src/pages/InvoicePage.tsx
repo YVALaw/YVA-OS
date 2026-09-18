@@ -7,6 +7,7 @@ import {
   loadSnapshot, loadSettings,
 } from '../services/storage'
 import { formatHourlyRate, formatMoney } from '../utils/money'
+import { escapeHtml } from '../utils/html'
 import InvoiceBuilder from '../components/InvoiceBuilder'
 import { sendEmail, type SendEmailResult } from '../services/gmail'
 import { htmlToPdfAttachment } from '../utils/pdf'
@@ -117,7 +118,7 @@ function buildInvoiceHTML(inv: Invoice, settings: AppSettings, autoPrint = false
           const h = parseInvoiceHours(it.daily?.[d] || '')
           return '<td style="text-align:center;font-size:11px;color:' + (h > 0 ? '#111' : '#ccc') + '">' + (h > 0 ? formatInvoiceHoursEntry(h) : '—') + '</td>'
         }).join('')
-        return '<tr><td style="white-space:nowrap"><strong>' + it.employeeName + '</strong>' + (it.projectName ? '<br><span style="font-size:10px;color:#666">' + it.projectName + '</span>' : '') + (it.position ? '<br><span style="font-size:10px;color:#888">' + it.position + '</span>' : '') + (it.timeEntries?.length ? '<div style="font-size:10px;color:#6b7280;line-height:1.45;margin-top:4px;white-space:pre-line">' + formatTimeEntrySummaryHtml(it.timeEntries) + '</div>' : '') + '</td>' + dayCells + '<td style="text-align:right;font-weight:700;white-space:nowrap">' + formatInvoiceHoursEntry(invoiceItemHours(it)) + 'h</td><td style="text-align:right;white-space:nowrap">' + formatHourlyRate(it.rate) + '/hr</td><td style="text-align:right;font-weight:700;white-space:nowrap">$' + invoiceItemAmount(it).toFixed(2) + '</td></tr>'
+        return '<tr><td style="white-space:nowrap"><strong>' + escapeHtml(it.employeeName) + '</strong>' + (it.projectName ? '<br><span style="font-size:10px;color:#666">' + escapeHtml(it.projectName) + '</span>' : '') + (it.position ? '<br><span style="font-size:10px;color:#888">' + escapeHtml(it.position) + '</span>' : '') + (it.timeEntries?.length ? '<div style="font-size:10px;color:#6b7280;line-height:1.45;margin-top:4px;white-space:pre-line">' + formatTimeEntrySummaryHtml(it.timeEntries) + '</div>' : '') + '</td>' + dayCells + '<td style="text-align:right;font-weight:700;white-space:nowrap">' + formatInvoiceHoursEntry(invoiceItemHours(it)) + 'h</td><td style="text-align:right;white-space:nowrap">' + formatHourlyRate(it.rate) + '/hr</td><td style="text-align:right;font-weight:700;white-space:nowrap">$' + invoiceItemAmount(it).toFixed(2) + '</td></tr>'
       }).join('')
     const colSpan = allDates.length + 3
     itemsSection = `
@@ -131,7 +132,7 @@ function buildInvoiceHTML(inv: Invoice, settings: AppSettings, autoPrint = false
     </div>`
   } else {
     const bodyRows = (inv.items || []).map(it =>
-      '<tr><td><strong>' + it.employeeName + '</strong>' + (it.projectName ? '<br><span style="font-size:11px;color:#666">' + it.projectName + '</span>' : '') + (it.position ? '<br><span style="font-size:11px;color:#888">' + it.position + '</span>' : '') + (it.timeEntries?.length ? '<div style="font-size:10px;color:#6b7280;line-height:1.45;margin-top:4px;white-space:pre-line">' + formatTimeEntrySummaryHtml(it.timeEntries) + '</div>' : '') + '</td><td style="text-align:right">' + formatInvoiceHoursEntry(invoiceItemHours(it)) + 'h</td><td style="text-align:right">' + formatHourlyRate(it.rate) + '/hr</td><td style="text-align:right"><strong>$' + invoiceItemAmount(it).toFixed(2) + '</strong></td></tr>'
+      '<tr><td><strong>' + escapeHtml(it.employeeName) + '</strong>' + (it.projectName ? '<br><span style="font-size:11px;color:#666">' + escapeHtml(it.projectName) + '</span>' : '') + (it.position ? '<br><span style="font-size:11px;color:#888">' + escapeHtml(it.position) + '</span>' : '') + (it.timeEntries?.length ? '<div style="font-size:10px;color:#6b7280;line-height:1.45;margin-top:4px;white-space:pre-line">' + formatTimeEntrySummaryHtml(it.timeEntries) + '</div>' : '') + '</td><td style="text-align:right">' + formatInvoiceHoursEntry(invoiceItemHours(it)) + 'h</td><td style="text-align:right">' + formatHourlyRate(it.rate) + '/hr</td><td style="text-align:right"><strong>$' + invoiceItemAmount(it).toFixed(2) + '</strong></td></tr>'
       ).join('')
     itemsSection = `
     <table>
@@ -170,35 +171,35 @@ function buildInvoiceHTML(inv: Invoice, settings: AppSettings, autoPrint = false
       <div>
         <img src="${window.location.origin}/yva-logo.png" class="logo" onerror="this.style.display='none'" />
         <div class="from-info">
-          <div><strong>${companyName}</strong></div>
-          <div>${companyAddress}</div>
-          <div>${companyEmail}</div>
-          <div>${companyPhone}</div>
+          <div><strong>${escapeHtml(companyName)}</strong></div>
+          <div>${escapeHtml(companyAddress)}</div>
+          <div>${escapeHtml(companyEmail)}</div>
+          <div>${escapeHtml(companyPhone)}</div>
         </div>
       </div>
       <div style="text-align:right">
         <div class="inv-title">INVOICE</div>
-        <div class="inv-num">${inv.number}</div>
+        <div class="inv-num">${escapeHtml(inv.number)}</div>
       </div>
     </div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-bottom:32px">
       <div class="section">
         <div class="label">Bill To</div>
-        <div class="value">${inv.clientName || '—'}</div>
-        ${inv.clientEmail ? `<div style="font-size:13px;color:#666">${inv.clientEmail}</div>` : ''}
-        ${inv.clientAddress ? `<div style="font-size:13px;color:#666;white-space:pre-line">${inv.clientAddress}</div>` : ''}
+        <div class="value">${escapeHtml(inv.clientName) || '—'}</div>
+        ${inv.clientEmail ? `<div style="font-size:13px;color:#666">${escapeHtml(inv.clientEmail)}</div>` : ''}
+        ${inv.clientAddress ? `<div style="font-size:13px;color:#666;white-space:pre-line">${escapeHtml(inv.clientAddress)}</div>` : ''}
       </div>
       <div class="section">
         <div class="label">Invoice Details</div>
         <div class="value">${inv.date || '—'}</div>
         ${inv.dueDate ? `<div style="font-size:13px;color:#c00"><strong>Due: ${inv.dueDate}</strong></div>` : ''}
         ${inv.billingStart ? `<div style="font-size:13px;color:#666">Period: ${inv.billingStart} – ${inv.billingEnd || ''}</div>` : ''}
-        ${inv.projectName ? `<div style="font-size:13px;color:#666">Project: ${inv.projectName}</div>` : ''}
+        ${inv.projectName ? `<div style="font-size:13px;color:#666">Project: ${escapeHtml(inv.projectName)}</div>` : ''}
       </div>
     </div>
     ${itemsSection}
-    ${inv.notes ? `<div class="notes-box">${inv.notes}</div>` : ''}
-    <div class="footer">${companyName} · yvastaffing.net</div>
+    ${inv.notes ? `<div class="notes-box">${escapeHtml(inv.notes)}</div>` : ''}
+    <div class="footer">${escapeHtml(companyName)} · yvastaffing.net</div>
     ${autoPrint ? '<script>window.onload = function(){ window.print(); }</script>' : ''}
     </body></html>`
 }
