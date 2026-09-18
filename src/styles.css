@@ -4018,3 +4018,114 @@ textarea:disabled {
   font-size: 12px;
   line-height: 1.5;
 }
+
+/* ── Select readability ───────────────────────────────────────────────────────
+   .proto-input sets background:transparent, which leaves <select> popups
+   rendering with the browser default (dark text on dark, or white on white
+   depending on the OS). Selects need an explicit surface and option colors. */
+select.proto-input {
+  background-color: var(--surf2);
+  color: #f1f5f9;
+  appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, #94a3b8 50%),
+                    linear-gradient(135deg, #94a3b8 50%, transparent 50%);
+  background-position: calc(100% - 16px) calc(50% + 1px), calc(100% - 11px) calc(50% + 1px);
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+  padding-right: 30px;
+}
+.proto-input option,
+select.proto-input option {
+  background: #0e1a35;
+  color: #f1f5f9;
+}
+
+/* Picker rows carry an inline justify-content, which does nothing without a
+   flex container - names and roles ran together as one string. Scoped to the
+   project form: .proto-plain-button is also used for avatar buttons and grid
+   rows elsewhere, which a global flex/width rule would distort. */
+.project-form .proto-plain-button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 7px 10px;
+  color: inherit;
+  font: inherit;
+}
+.project-form .proto-plain-button:hover {
+  background: rgba(255,255,255,0.04);
+  border-color: rgba(255,255,255,0.10);
+}
+
+/* ── Add / Edit Project modal ─────────────────────────────────────────────────
+   The modal reuses profile-page row classes, which are built for wide read-only
+   pages: label hard left, value hard right. In a form that reads as broken, so
+   the rows are re-laid out as a proper label-over-input form here only. */
+.project-form .proto-list-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0 0 14px;
+}
+.project-form .proto-list-card-head {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .07em;
+  color: var(--muted);
+  margin-bottom: 12px;
+}
+.project-form .proto-sidebar-stack > .proto-list-card > div:not(.proto-list-card-head) {
+  padding: 0 14px;
+}
+.project-form .proto-profile-row {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 5px;
+  padding: 0 14px 10px;
+}
+.project-form .proto-profile-label {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--muted);
+}
+.project-form .proto-input,
+.project-form textarea.proto-input {
+  width: 100%;
+  background-color: var(--surf2);
+}
+.project-form textarea.proto-input {
+  resize: vertical;
+  min-height: 62px;
+}
+
+@media (max-width: 720px) {
+  .project-form.proto-two-col { grid-template-columns: 1fr; }
+}
+
+/* Team picker rows: name takes the space, role stays on one line. */
+.proto-picker-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.5px;
+}
+.proto-picker-role {
+  flex-shrink: 0;
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.project-assignment-row .proto-input {
+  min-width: 0;
+  width: 100%;
+}

@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import type { Client, Employee, Expense, Invoice, Project, ProjectAssignment, Task, TaskStatus } from '../data/types'
 import { loadExpenses, loadSnapshot, loadTasks, saveExpenses, saveProjects, saveTasks } from '../services/storage'
 import { formatHourlyRate, formatMoney } from '../utils/money'
+import { invoiceItemHours } from '../utils/invoiceHours'
 import { findAssignment, resolvePayRate, setAssignment } from '../utils/rates'
 import {
   Avatar,
@@ -118,7 +119,7 @@ function projectClientName(project: Project, clients: Client[]) {
 }
 
 function invoiceHours(invoice: Invoice, projectRate?: string | number) {
-  const explicit = invoice.items?.reduce((sum, item) => sum + Number(item.hoursTotal || 0), 0) || 0
+  const explicit = invoice.items?.reduce((sum, item) => sum + invoiceItemHours(item), 0) || 0
   if (explicit > 0) return explicit
   const rate = Number(projectRate || 0)
   const subtotal = Number(invoice.subtotal || 0)
@@ -237,7 +238,7 @@ export default function ProjectsPage() {
       projectNeeds: project.projectNeeds || '',
       notes: project.notes || '',
       links: project.links || [],
-      employeeIds: project.employeeIds || [],
+      employeeIds: Array.from(new Set(project.employeeIds || [])),
       assignments: project.assignments || [],
     })
     setEditId(project.id)
@@ -261,7 +262,7 @@ export default function ProjectsPage() {
       projectNeeds: form.projectNeeds || undefined,
       notes: form.notes || undefined,
       links: form.links.length ? form.links : undefined,
-      employeeIds: form.employeeIds,
+      employeeIds: Array.from(new Set(form.employeeIds)),
       // Only keep overrides for people still on the project.
       assignments: form.assignments.filter(entry => form.employeeIds.includes(entry.employeeId)),
     }
@@ -340,7 +341,7 @@ export default function ProjectsPage() {
                 {byStage[stage.id].map(project => {
                     const clientName = projectClientName(project, clients)
                     const stats = projectInvoiceStats(project, invoices)
-                  const team = project.employeeIds || []
+                  const team = Array.from(new Set(project.employeeIds || []))
                   return (
                     <KanbanItem
                       key={project.id}
@@ -475,7 +476,7 @@ export default function ProjectsPage() {
         )}
       >
         {saveError ? <div className="settings-notice settings-notice-error">{saveError}</div> : null}
-        <div className="proto-two-col" style={{ gap: 14 }}>
+        <div className="project-form proto-two-col" style={{ gap: 14 }}>
           <div className="proto-list-card">
             <div className="proto-list-card-head">
               <span>Project Details</span>
@@ -580,7 +581,7 @@ export default function ProjectsPage() {
                         />
                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
                           <label style={{ display: 'grid', gap: 3 }}>
-                            <span className="project-assignment-label">Client bill /hr</span>
+                            <span className="project-assignment-label">Bill /hr</span>
                             <input
                               className="proto-input"
                               type="number"
@@ -588,7 +589,7 @@ export default function ProjectsPage() {
                               step="0.01"
                               style={{ fontSize: 12 }}
                               value={assignment?.billRate != null ? String(assignment.billRate) : ''}
-                              placeholder={inheritedBill > 0 ? `Inherits ${inheritedBill}` : 'Not set'}
+                              placeholder={inheritedBill > 0 ? String(inheritedBill) : 'Not set'}
                               onChange={e => setForm(prev => ({
                                 ...prev,
                                 assignments: setAssignment(prev.assignments, employeeId, { billRate: e.target.value ? Number(e.target.value) : undefined }),
@@ -596,7 +597,7 @@ export default function ProjectsPage() {
                             />
                           </label>
                           <label style={{ display: 'grid', gap: 3 }}>
-                            <span className="project-assignment-label">Employee pay /hr</span>
+                            <span className="project-assignment-label">Pay /hr</span>
                             <input
                               className="proto-input"
                               type="number"
@@ -604,7 +605,7 @@ export default function ProjectsPage() {
                               step="0.01"
                               style={{ fontSize: 12 }}
                               value={assignment?.payRate != null ? String(assignment.payRate) : ''}
-                              placeholder={inheritedPay > 0 ? `Inherits ${inheritedPay}` : 'Not set'}
+                              placeholder={inheritedPay > 0 ? String(inheritedPay) : 'Not set'}
                               onChange={e => setForm(prev => ({
                                 ...prev,
                                 assignments: setAssignment(prev.assignments, employeeId, { payRate: e.target.value ? Number(e.target.value) : undefined }),
@@ -634,8 +635,8 @@ export default function ProjectsPage() {
                         style={{ justifyContent: 'space-between' }}
                         onClick={() => setForm(prev => ({ ...prev, employeeIds: [...prev.employeeIds, employee.id] }))}
                       >
-                        <span>{employee.name}</span>
-                        <span style={{ color: 'var(--muted)', fontSize: 11 }}>{employee.role || 'Team'}</span>
+                        <span className="proto-picker-name">{employee.name}</span>
+                        <span className="proto-picker-role">{employee.role || 'Team'}</span>
                       </button>
                     ))}
                 </div>
@@ -708,7 +709,7 @@ function ProjectDrawer({
   const clientName = projectClientName(project, clients)
   const stats = projectInvoiceStats(project, invoices)
   const relatedTasks = tasks.filter(task => task.projectId === project.id)
-  const team = project.employeeIds || []
+  const team = Array.from(new Set(project.employeeIds || []))
   const totalHoursLifetime = stats.related.reduce((sum, invoice) => sum + invoiceHours(invoice, project.rate), 0)
   const openTasks = relatedTasks.filter(task => task.status !== 'done')
 
@@ -770,10 +771,10 @@ function ProjectDrawer({
           ) : team.map(employeeId => {
             const employee = employees.find(item => item.id === employeeId)
             const employeeHours = stats.related.reduce((sum, invoice) => {
-              const hours = invoice.items?.filter(item =>
-                (item.employeeId && item.employeeId === employee?.id) ||
-                item.employeeName?.toLowerCase() === employee?.name.toLowerCase(),
-              ).reduce((itemSum, item) => itemSum + Number(item.hoursTotal || 0), 0) || 0
+              const hours = invoice.items?.filter(item => item.employeeId
+                ? item.employeeId === employee?.id
+                : item.employeeName?.toLowerCase() === employee?.name.toLowerCase(),
+              ).reduce((itemSum, item) => itemSum + invoiceItemHours(item), 0) || 0
               return sum + hours
             }, 0)
             return employee ? (
