@@ -559,7 +559,7 @@ export default function ProjectProfilePage() {
                   <div className="project-team-search-list">
                     {filteredSearchEmployees
                       .filter(employee => !form.employeeIds.includes(employee.id))
-                      .slice(0, 8)
+                      .sort((a, b) => a.name.localeCompare(b.name))
                       .map(employee => (
                         <button
                           key={employee.id}

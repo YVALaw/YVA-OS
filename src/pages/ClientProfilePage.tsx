@@ -184,7 +184,8 @@ export default function ClientProfilePage() {
       status: 'active',
       billingModel: 'hourly',
       notes: projectForm.notes || undefined,
-      employeeIds: projectForm.employeeIds,
+      employeeIds: Array.from(new Set(projectForm.employeeIds)),
+      assignments: [],
     }
     const next = [...projects, nextProject]
     setProjects(next)

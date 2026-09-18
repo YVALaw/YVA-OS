@@ -156,6 +156,7 @@ export default function ProjectsPage() {
   const [editId, setEditId] = useState<string | null>(null)
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
   const [saveError, setSaveError] = useState<string | null>(null)
+  const [teamSearch, setTeamSearch] = useState('')
   const [saving, setSaving] = useState(false)
   const dragSuppressRef = useRef<string | null>(null)
 
@@ -222,6 +223,7 @@ export default function ProjectsPage() {
     setEditId(null)
     setModal('add')
     setSaveError(null)
+    setTeamSearch('')
   }
 
   function openEdit(project: Project) {
@@ -244,7 +246,17 @@ export default function ProjectsPage() {
     setEditId(project.id)
     setModal('edit')
     setSaveError(null)
+    setTeamSearch('')
   }
+
+  const assignableEmployees = (() => {
+    const query = teamSearch.trim().toLowerCase()
+    return employees
+      .filter(employee => !form.employeeIds.includes(employee.id))
+      .filter(employee => !query
+        || `${employee.name} ${employee.role || ''} ${employee.email || ''}`.toLowerCase().includes(query))
+      .sort((a, b) => a.name.localeCompare(b.name))
+  })()
 
   async function saveForm() {
     if (!form.name.trim()) return
@@ -618,15 +630,18 @@ export default function ProjectsPage() {
                   })}
                 </div>
                 <SearchField
-                  value=""
-                  onChange={() => {}}
+                  value={teamSearch}
+                  onChange={setTeamSearch}
                   placeholder="Search team member..."
                   minWidth={0}
                 />
-                <div style={{ display: 'grid', gap: 6, maxHeight: 220, overflow: 'auto' }}>
-                  {employees
-                    .filter(employee => !form.employeeIds.includes(employee.id))
-                    .slice(0, 8)
+                <div style={{ display: 'grid', gap: 6, maxHeight: 260, overflow: 'auto' }}>
+                  {assignableEmployees.length === 0 && (
+                    <span style={{ fontSize: 12, color: 'var(--muted)', padding: '4px 2px' }}>
+                      {teamSearch.trim() ? 'No one matches that search.' : 'Everyone is already on this project.'}
+                    </span>
+                  )}
+                  {assignableEmployees
                     .map(employee => (
                       <button
                         key={employee.id}

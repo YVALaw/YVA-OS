@@ -350,8 +350,19 @@ export async function loadProjects(force = false): Promise<Project[]> {
 }
 export async function saveProjects(projects: Project[]): Promise<void> {
   invalidateSnapshotCache()
-  await syncAll('projects', projects)
-  patchStorageCache({ projects })
+  // PostgREST bulk upsert takes the union of keys across the rows and writes
+  // NULL into any key a row is missing. projects.assignments is NOT NULL, so a
+  // project object built in JS without that field - a freshly created one -
+  // made the whole batch fail with 23502. Normalising here keeps every row's
+  // key set identical no matter which page built it, and dedupes team ids so
+  // a stale repeated id cannot survive a save.
+  const normalized = projects.map(project => ({
+    ...project,
+    assignments: project.assignments ?? [],
+    employeeIds: Array.from(new Set(project.employeeIds || [])),
+  }))
+  await syncAll('projects', normalized)
+  patchStorageCache({ projects: normalized })
 }
 
 // ─── Invoices ─────────────────────────────────────────────────────────────────

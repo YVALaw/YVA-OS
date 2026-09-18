@@ -384,6 +384,7 @@ add column if not exists assignments jsonb not null default '[]'::jsonb;
 notify pgrst, 'reload schema';
 ```
 - One entry per employee who needs a rate different from the project default.
+- **The column is `NOT NULL`, and PostgREST bulk upsert writes NULL into any key a row is missing** (it unions the keys across the batch rather than falling back to the column default). Any project object built in JS without `assignments` therefore fails the whole save with `23502`. `saveProjects` normalizes every row (`assignments ?? []`, deduped `employeeIds`) so no page, import or backup restore can reintroduce this. Add new project fields there, not per page.
 - `billRate` is client-facing only; `payRate` is employee-facing only.
 - Historical invoices are unaffected: `InvoiceItem` already snapshots `rate` and `basePayRate` at invoice time, so rate history lives on the invoice and assignments need no effective-dating.
 - Statements read the rate back from the stored item (`invoiceItemPayRate` / `distinctPayRates` in `src/utils/payroll.ts`) and show "Multiple" when a period spans more than one rate — never the employee's current global rate.
