@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import type { Client, Employee, Expense, Invoice, Project, Task, TaskStatus } from '../data/types'
+import type { Client, Employee, Expense, Invoice, Project, ProjectAssignment, Task, TaskStatus } from '../data/types'
 import { loadExpenses, loadSnapshot, loadTasks, saveExpenses, saveProjects, saveTasks } from '../services/storage'
 import { formatHourlyRate, formatMoney } from '../utils/money'
+import { findAssignment, resolvePayRate, setAssignment } from '../utils/rates'
 import {
   Avatar,
   Drawer,
@@ -57,6 +58,7 @@ type FormData = {
   notes: string
   links: LinkEntry[]
   employeeIds: string[]
+  assignments: ProjectAssignment[]
 }
 
 const EMPTY_FORM: FormData = {
@@ -73,6 +75,7 @@ const EMPTY_FORM: FormData = {
   notes: '',
   links: [],
   employeeIds: [],
+  assignments: [],
 }
 
 function normalizeProjectStage(value?: string | null): ProjectStage {
@@ -235,6 +238,7 @@ export default function ProjectsPage() {
       notes: project.notes || '',
       links: project.links || [],
       employeeIds: project.employeeIds || [],
+      assignments: project.assignments || [],
     })
     setEditId(project.id)
     setModal('edit')
@@ -258,6 +262,8 @@ export default function ProjectsPage() {
       notes: form.notes || undefined,
       links: form.links.length ? form.links : undefined,
       employeeIds: form.employeeIds,
+      // Only keep overrides for people still on the project.
+      assignments: form.assignments.filter(entry => form.employeeIds.includes(entry.employeeId)),
     }
 
     const next = modal === 'add'
@@ -535,19 +541,79 @@ export default function ProjectsPage() {
                 <span>Team</span>
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                <div className="proto-row-stack" style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                <div style={{ display: 'grid', gap: 10 }}>
                   {form.employeeIds.length === 0 ? (
                     <span style={{ fontSize: 12, color: 'var(--muted)' }}>No team assigned.</span>
                   ) : form.employeeIds.map(employeeId => {
                     const employee = employees.find(item => item.id === employeeId)
-                    return employee ? (
-                      <span key={employee.id} className="proto-tag">
-                        {employee.name}
-                        <button type="button" className="proto-btn proto-btn-ghost proto-btn-icon" style={{ width: 18, height: 18, minWidth: 18 }} onClick={() => setForm(prev => ({ ...prev, employeeIds: prev.employeeIds.filter(id => id !== employeeId) }))}>
-                          <ProtoIcon name="close" size={10} />
-                        </button>
-                      </span>
-                    ) : null
+                    if (!employee) return null
+                    const assignment = form.assignments.find(entry => entry.employeeId === employeeId)
+                    const formClient = clients.find(item => item.id === form.clientId)
+                    const inheritedBill = Number(form.rate) || Number(formClient?.defaultRate) || 0
+                    const inheritedPay = Number(employee.payRate) || 0
+                    return (
+                      <div key={employee.id} className="project-assignment-row">
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <span style={{ flex: 1, minWidth: 0, fontSize: 12, fontWeight: 700 }}>{employee.name}</span>
+                          <button
+                            type="button"
+                            className="proto-btn proto-btn-ghost proto-btn-icon"
+                            style={{ width: 18, height: 18, minWidth: 18 }}
+                            onClick={() => setForm(prev => ({
+                              ...prev,
+                              employeeIds: prev.employeeIds.filter(id => id !== employeeId),
+                              assignments: prev.assignments.filter(entry => entry.employeeId !== employeeId),
+                            }))}
+                          >
+                            <ProtoIcon name="close" size={10} />
+                          </button>
+                        </div>
+                        <input
+                          className="proto-input"
+                          style={{ fontSize: 12 }}
+                          value={assignment?.position || ''}
+                          placeholder={employee.role || 'Position on this project'}
+                          onChange={e => setForm(prev => ({
+                            ...prev,
+                            assignments: setAssignment(prev.assignments, employeeId, { position: e.target.value || undefined }),
+                          }))}
+                        />
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+                          <label style={{ display: 'grid', gap: 3 }}>
+                            <span className="project-assignment-label">Client bill /hr</span>
+                            <input
+                              className="proto-input"
+                              type="number"
+                              inputMode="decimal"
+                              step="0.01"
+                              style={{ fontSize: 12 }}
+                              value={assignment?.billRate != null ? String(assignment.billRate) : ''}
+                              placeholder={inheritedBill > 0 ? `Inherits ${inheritedBill}` : 'Not set'}
+                              onChange={e => setForm(prev => ({
+                                ...prev,
+                                assignments: setAssignment(prev.assignments, employeeId, { billRate: e.target.value ? Number(e.target.value) : undefined }),
+                              }))}
+                            />
+                          </label>
+                          <label style={{ display: 'grid', gap: 3 }}>
+                            <span className="project-assignment-label">Employee pay /hr</span>
+                            <input
+                              className="proto-input"
+                              type="number"
+                              inputMode="decimal"
+                              step="0.01"
+                              style={{ fontSize: 12 }}
+                              value={assignment?.payRate != null ? String(assignment.payRate) : ''}
+                              placeholder={inheritedPay > 0 ? `Inherits ${inheritedPay}` : 'Not set'}
+                              onChange={e => setForm(prev => ({
+                                ...prev,
+                                assignments: setAssignment(prev.assignments, employeeId, { payRate: e.target.value ? Number(e.target.value) : undefined }),
+                              }))}
+                            />
+                          </label>
+                        </div>
+                      </div>
+                    )
                   })}
                 </div>
                 <SearchField
@@ -715,7 +781,7 @@ function ProjectDrawer({
                 <Avatar name={employee.name} color={colorFromString(employee.name)} size="sm" />
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div className="project-detail-person-name">{employee.name}</div>
-                  <div className="project-detail-person-sub">{employee.role || 'Team member'} · {employee.payRate ? `${protoCurrency(Number(employee.payRate))}/hr` : 'Rate not set'}</div>
+                  <div className="project-detail-person-sub">{findAssignment(project, employee.id)?.position || employee.role || 'Team member'} · {resolvePayRate(employee, project).rate > 0 ? `${protoCurrency(resolvePayRate(employee, project).rate)}/hr` : 'Rate not set'}</div>
                 </div>
                 <span className="proto-mono project-detail-person-hours">{Math.round(employeeHours).toLocaleString()}h</span>
               </button>

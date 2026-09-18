@@ -4,6 +4,9 @@
 `C:\Users\cronu\Desktop\Invoice - Copy\yva-os-refactor\`
 
 ## Current Logic Updates
+- Rates are resolved per placement (one employee on one project) through `src/utils/rates.ts`. Two chains that never cross: **bill rate** (`assignment.billRate` → `project.rate` → `client.defaultRate` → none) and **pay rate** (`assignment.payRate` → `employee.payRate` → none). The bill chain deliberately never falls back to the employee pay rate, which previously invoiced clients at cost.
+- Client invoices show only the bill rate; employee statements show only hours and pay rate. No margin or profit figure is displayed anywhere.
+- Per-placement overrides live in `projects.assignments` (JSONB): `{ employeeId, position?, billRate?, payRate? }`. Edited in the project's Team panel. `employeeIds` remains the membership source of truth; `assignments` only holds rows that override something.
 - Employee schedule and premium-rate logic now live in the app layer: default shift start/end plus premium start time and premium percent are stored on each employee.
 - Invoice calculations use the saved employee schedule when available. Premium time increases both client billing and employee payroll; missing schedule falls back to regular rate.
 - Daily-grid invoice entries and simple total-hour entries both use the same payroll split logic.
@@ -34,7 +37,7 @@
 | Table | Contents |
 |-------|----------|
 | `employees` | Employee[] |
-| `projects` | Project[] |
+| `projects` | Project[] (incl. `assignments` JSONB: per-employee bill/pay rate overrides) |
 | `clients` | Client[] |
 | `invoices` | Invoice[] |
 | `candidates` | Candidate[] |
@@ -372,6 +375,18 @@ Standalone component used inside the builder modal in InvoicePage. Handles:
 - `netlify/functions/gmail-oauth.cjs` handles Google OAuth token exchange/refresh server-side using Netlify env var `GMAIL_CLIENT_SECRET`
 - `netlify/functions/infodolar-bhd.cjs` scrapes InfoDolar Banco BHD buy/sell rates for the currency settings auto-fetch
 - Planned Stripe phase should add `netlify/functions/stripe-create-invoice.cjs` and `netlify/functions/stripe-webhook.cjs`. Required env vars: `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, and `SUPABASE_SERVICE_ROLE_KEY`.
+
+### Per-placement rates (`projects.assignments`)
+```sql
+alter table public.projects
+add column if not exists assignments jsonb not null default '[]'::jsonb;
+
+notify pgrst, 'reload schema';
+```
+- One entry per employee who needs a rate different from the project default.
+- `billRate` is client-facing only; `payRate` is employee-facing only.
+- Historical invoices are unaffected: `InvoiceItem` already snapshots `rate` and `basePayRate` at invoice time, so rate history lives on the invoice and assignments need no effective-dating.
+- Statements read the rate back from the stored item (`invoiceItemPayRate` / `distinctPayRates` in `src/utils/payroll.ts`) and show "Multiple" when a period spans more than one rate — never the employee's current global rate.
 
 ### Supabase schema notes
 - `name`, `role`, `location`, `timestamp` are PostgreSQL reserved words — wrapped in double quotes in SQL

@@ -2,7 +2,7 @@ import html2canvas from 'html2canvas'
 import { jsPDF } from 'jspdf'
 import type { AppSettings, Employee, EmployeePaymentRecord, Invoice } from '../data/types'
 import { formatInvoiceHoursEntry, formatInvoiceHoursHM, invoiceItemAmount, invoiceItemHours, parseInvoiceHours } from './invoiceHours'
-import { payrollFromInvoiceItem } from './payroll'
+import { distinctPayRates, formatPayRateLabel, payrollFromInvoiceItem } from './payroll'
 import { formatTimeEntrySummary } from './timesheet'
 
 export type EmailAttachment = {
@@ -206,15 +206,15 @@ function buildStatementLines(
   settings: AppSettings,
   getPaymentRecord?: PaymentLookup,
 ): string[] {
-  const payRate = Number(emp.payRate) || 0
   const dopRate = settings.usdToDop || 0
   const period = dateFrom && dateTo ? `${dateFrom} - ${dateTo}` : dateFrom || dateTo || 'All time'
-  const totalHours = empInvoices.reduce((sum, inv) => {
-    return sum + (inv.items || [])
-      .filter(item => item.employeeName?.toLowerCase() === emp.name.toLowerCase())
-      .reduce((hours, item) => hours + invoiceItemHours(item), 0)
-  }, 0)
-  const totalUSD = totalHours * payRate
+  const statementItems = empInvoices.flatMap(inv => (inv.items || [])
+    .filter(item => item.employeeName?.toLowerCase() === emp.name.toLowerCase()))
+  const totalHours = statementItems.reduce((hours, item) => hours + invoiceItemHours(item), 0)
+  // Sum the stored per-item pay, so premium hours and per-project rates are
+  // both reflected instead of a flat hours x rate figure.
+  const totalUSD = statementItems.reduce((sum, item) => sum + payrollFromInvoiceItem(item, emp).totalPay, 0)
+  const payRateLabel = formatPayRateLabel(distinctPayRates(statementItems, emp))
   const totalDOP = dopRate > 0 ? totalUSD * dopRate : 0
 
   const lines: string[] = []
@@ -227,8 +227,8 @@ function buildStatementLines(
   lines.push('')
   lines.push(`Invoices: ${empInvoices.length}`)
   lines.push(`Total Hours: ${formatInvoiceHoursHM(totalHours)}`)
-  lines.push(`Pay Rate: ${payRate > 0 ? `$${payRate}/hr` : '-'}`)
-  lines.push(`Total Earned (USD): ${payRate > 0 ? money(totalUSD) : '-'}`)
+  lines.push(`Pay Rate: ${payRateLabel}`)
+  lines.push(`Total Earned (USD): ${money(totalUSD)}`)
   if (totalDOP > 0) lines.push(`Total Earned (DOP): ${dop(totalDOP)} @ ${dopRate}`)
   lines.push('')
   lines.push('Invoice Breakdown')
@@ -245,7 +245,7 @@ function buildStatementLines(
     const earned = items.reduce((sum, item) => sum + payrollFromInvoiceItem(item, emp).totalPay, 0)
     const payment = getPaymentRecord?.(inv)
     lines.push(`${inv.number} | ${inv.projectName || 'No project'} | ${inv.billingStart || inv.date || '-'}${inv.billingEnd ? ` - ${inv.billingEnd}` : ''}`)
-    lines.push(`Hours: ${formatInvoiceHoursHM(hours)}   Earned: ${payRate > 0 ? money(earned) : '-'}`)
+    lines.push(`Hours: ${formatInvoiceHoursHM(hours)}   Rate: ${formatPayRateLabel(distinctPayRates(items, emp))}   Earned: ${money(earned)}`)
     if (payment?.status === 'paid') {
       lines.push(`Status: Paid${payment.paidDate ? ` on ${payment.paidDate}` : ''}${payment.amount ? ` for ${money(payment.amount)}` : ''}`)
     } else {
@@ -263,7 +263,7 @@ function buildStatementLines(
 
   lines.push('----------------------------------------------------------------------------------------')
   lines.push(`Total Hours: ${formatInvoiceHoursHM(totalHours)}`)
-  lines.push(`Total Earned: ${payRate > 0 ? money(totalUSD) : '-'}`)
+  lines.push(`Total Earned: ${money(totalUSD)}`)
   if (totalDOP > 0) lines.push(`Total Earned (DOP): ${dop(totalDOP)}`)
   return lines
 }

@@ -101,10 +101,16 @@ export function computePremiumHours(totalHours: number, shiftStart?: string, shi
   }
 }
 
-export function computePayrollBreakdown(totalHours: number, employee?: Employee | null, shiftStart?: string, shiftEnd?: string): PayrollBreakdown {
+/**
+ * `payRateOverride` carries the rate resolved for this employee on this project
+ * (see `src/utils/rates.ts`). When omitted, the employee's global rate is used,
+ * so existing callers keep their previous behaviour.
+ */
+export function computePayrollBreakdown(totalHours: number, employee?: Employee | null, shiftStart?: string, shiftEnd?: string, payRateOverride?: number): PayrollBreakdown {
   const safeHours = Math.max(0, totalHours || 0)
   const config = employeePremiumConfig(employee)
-  const basePayRate = toNumber(employee?.payRate)
+  const overrideRate = toNumber(payRateOverride)
+  const basePayRate = overrideRate > 0 ? overrideRate : toNumber(employee?.payRate)
   const premiumPercent = config.enabled ? config.percent : 0
   const premiumMultiplier = 1 + premiumPercent / 100
   const split = config.enabled
@@ -174,4 +180,33 @@ export function payrollFromInvoiceItem(item: InvoiceItem, employee?: Employee | 
   }
 
   return computePayrollBreakdown(totalHours, employee, item.shiftStart, item.shiftEnd)
+}
+
+/**
+ * The pay rate actually applied to a stored invoice item. Statements must show
+ * this rather than the employee's current global rate, because the rate can
+ * differ per project and can have changed since the invoice was issued.
+ */
+export function invoiceItemPayRate(item: InvoiceItem, employee?: Employee | null): number {
+  return payrollFromInvoiceItem(item, employee).basePayRate
+}
+
+/**
+ * Distinct pay rates across a set of invoice items, ascending. Used by
+ * statements to decide between showing one rate or "Multiple".
+ */
+export function distinctPayRates(items: InvoiceItem[], employee?: Employee | null): number[] {
+  const seen = new Set<number>()
+  for (const item of items) {
+    const rate = invoiceItemPayRate(item, employee)
+    if (rate > 0) seen.add(Math.round(rate * 100) / 100)
+  }
+  return Array.from(seen).sort((a, b) => a - b)
+}
+
+/** Formats a pay rate for employee-facing output; "Multiple" when rates vary. */
+export function formatPayRateLabel(rates: number[]): string {
+  if (rates.length === 0) return '—'
+  if (rates.length === 1) return `$${rates[0]}/hr`
+  return 'Multiple'
 }

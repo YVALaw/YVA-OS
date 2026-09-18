@@ -63,6 +63,19 @@ export type Client = {
   links?: { label: string; url: string }[]
 }
 
+/**
+ * Per-placement rate override: one employee on one project.
+ * Both rates are optional — an absent value falls back through the chain in
+ * `src/utils/rates.ts`. `billRate` is client-facing only; `payRate` is
+ * employee-facing only. The two are never shown to the same audience.
+ */
+export type ProjectAssignment = {
+  employeeId: string
+  position?: string
+  billRate?: number
+  payRate?: number
+}
+
 export type Project = {
   id: string
   name: string
@@ -70,6 +83,7 @@ export type Project = {
   budget?: number
   clientId?: string | null
   employeeIds?: string[]
+  assignments?: ProjectAssignment[]
   nextInvoiceSeq?: number
   status?: string
   billingModel?: string

@@ -30,6 +30,7 @@ import {
 import { supabase } from '../lib/supabase'
 import { invoiceItemAmount } from '../utils/invoiceHours'
 import { computePayrollBreakdown, computePremiumAdjustedAmount, employeePremiumConfig, normalizeClockInput } from '../utils/payroll'
+import { resolveBillRate, resolvePayRate } from '../utils/rates'
 
 type CSVRecord = Record<string, string>
 
@@ -581,7 +582,8 @@ export async function importTimesheetCsv(input: TimesheetImportInput): Promise<T
       }
       if (!unresolvedGroups.has(unresolvedKey)) unresolvedGroups.set(unresolvedKey, unresolvedGroup)
 
-      const unresolvedBillingRate = Number(candidate.rate ?? matchedClient?.defaultRate ?? employee.payRate ?? 0) || 0
+      // Billing never falls back to the employee pay rate - that would invoice at cost.
+      const unresolvedBillingRate = Number(candidate.rate ?? matchedClient?.defaultRate ?? 0) || 0
       const unresolvedBucket = unresolvedGroup.employeeBuckets.get(employee.id) || {
         employee,
         rows: [],
@@ -638,9 +640,10 @@ export async function importTimesheetCsv(input: TimesheetImportInput): Promise<T
       rows: [],
       timeEntries: [],
       hours: 0,
-      payroll: computePayrollBreakdown(0, employee, shiftStart, shiftEnd),
+      payroll: computePayrollBreakdown(0, employee, shiftStart, shiftEnd, resolvePayRate(employee, project).rate),
       billAmount: 0,
-      billingRate: Number(project.rate ?? employee.payRate ?? candidate.rate ?? 0) || 0,
+      billingRate: resolveBillRate(employee, project, snapshot.clients.find(entry => entry.id === project.clientId)).rate
+        || Number(candidate.rate ?? 0) || 0,
       daily: {},
     }
     const bill = computePremiumAdjustedAmount(

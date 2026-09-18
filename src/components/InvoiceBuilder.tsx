@@ -8,6 +8,7 @@ import {
 } from '../services/storage'
 import { formatInvoiceHoursEntry, parseInvoiceHours } from '../utils/invoiceHours'
 import { computePayrollBreakdown, computePremiumAdjustedAmount, employeePremiumConfig, normalizeClockInput } from '../utils/payroll'
+import { billRateSourceLabel, resolveBillRate, resolvePayRate, resolvePosition } from '../utils/rates'
 import { formatEmailList } from '../utils/email'
 
 function projectPrefix(name: string): string {
@@ -205,15 +206,13 @@ export default function InvoiceBuilder({ onCreated, onCancel, initialClientId, i
       setClientId(selectedProject.clientId)
     }
     if (editInvoice && !editInvoice.projectId) {
-      const nextRate = selectedProject.rate != null && selectedProject.rate !== ''
-        ? String(selectedProject.rate)
-        : ''
       setRows(prev => prev.map(row => {
         if (!row.employeeName.trim()) return row
         const employee = employees.find(e => e.id === row.employeeId) || employees.find(e => e.name === row.employeeName)
+        const nextRate = resolveBillRate(employee, selectedProject, selectedClient).rate
         return {
           ...row,
-          rate: nextRate || row.rate,
+          rate: nextRate > 0 ? String(nextRate) : row.rate,
           shiftStart: employee?.defaultShiftStart || row.shiftStart,
           shiftEnd: employee?.defaultShiftEnd || row.shiftEnd,
         }
@@ -265,11 +264,14 @@ export default function InvoiceBuilder({ onCreated, onCancel, initialClientId, i
     const premiumConfig = employeePremiumConfig(employee)
     const shift = effectiveShift(row)
     const rate = parseFloat(row.rate) || 0
+    // Payroll uses the rate resolved for this employee on this row's project,
+    // independently of the client-facing rate above.
+    const payRate = resolvePayRate(employee, rowProject(row)).rate
 
     if (currentDates.length > 0) {
       return currentDates.reduce((acc, day) => {
         const hours = parseHours(row.daily[day] || '')
-        const payroll = computePayrollBreakdown(hours, employee, shift.shiftStart, shift.shiftEnd)
+        const payroll = computePayrollBreakdown(hours, employee, shift.shiftStart, shift.shiftEnd, payRate)
         const billing = computePremiumAdjustedAmount(
           hours,
           rate,
@@ -291,7 +293,7 @@ export default function InvoiceBuilder({ onCreated, onCancel, initialClientId, i
         premiumHours: 0,
         billAmount: 0,
         payrollAmount: 0,
-        basePayRate: payrollFromEmployee(employee),
+        basePayRate: payRate,
         premiumPercent: premiumConfig.percent,
         shift,
         premiumEnabled: premiumConfig.enabled && shift.linked,
@@ -299,7 +301,7 @@ export default function InvoiceBuilder({ onCreated, onCancel, initialClientId, i
     }
 
     const hours = rowHours(row, currentDates)
-    const payroll = computePayrollBreakdown(hours, employee, shift.shiftStart, shift.shiftEnd)
+    const payroll = computePayrollBreakdown(hours, employee, shift.shiftStart, shift.shiftEnd, payRate)
     const billing = computePremiumAdjustedAmount(
       hours,
       rate,
@@ -322,10 +324,6 @@ export default function InvoiceBuilder({ onCreated, onCancel, initialClientId, i
     }
   }
 
-  function payrollFromEmployee(employee?: Employee | null) {
-    return Number(employee?.payRate || 0) || 0
-  }
-
   function updateRow(id: string, patch: Partial<BuilderRow>) {
     setRows(prev => prev.map(r => r._id === id ? { ...r, ...patch } : r))
   }
@@ -346,12 +344,19 @@ export default function InvoiceBuilder({ onCreated, onCancel, initialClientId, i
       const employeeStillFits = row.employeeId && project?.employeeIds?.length
         ? project.employeeIds.includes(row.employeeId)
         : true
+      const employee = employeeStillFits
+        ? employees.find(e => e.id === row.employeeId)
+        : undefined
+      // The same person can carry a different rate on each project, so the
+      // rate is re-resolved whenever the row changes project.
+      const billing = resolveBillRate(employee, project, selectedClient)
       return {
         ...row,
         projectId: nextProjectId || undefined,
         employeeId: employeeStillFits ? row.employeeId : undefined,
         employeeName: employeeStillFits ? row.employeeName : '',
-        rate: project?.rate != null && project.rate !== '' ? String(project.rate) : row.rate,
+        position: employeeStillFits ? (resolvePosition(project, employee) || row.position) : '',
+        rate: billing.rate > 0 ? String(billing.rate) : row.rate,
       }
     }))
   }
@@ -360,17 +365,25 @@ export default function InvoiceBuilder({ onCreated, onCancel, initialClientId, i
     const row = rows.find(entry => entry._id === rowId)
     const project = row ? rowProject(row) : selectedProject
     const emp = employees.find(e => e.name === name)
-    // Use the project billing rate for client invoices; fall back to employee pay rate if no project rate set
-    const billingRate = project?.rate != null && project.rate !== ''
-      ? String(project.rate)
-      : emp?.payRate != null ? String(emp.payRate) : ''
+    // Client-facing rate only: assignment -> project -> client default.
+    // Never the employee pay rate, which would invoice the client at cost.
+    const billing = resolveBillRate(emp, project, selectedClient)
     updateRow(rowId, {
       employeeId: emp?.id,
       employeeName: name,
-      rate: billingRate,
+      rate: billing.rate > 0 ? String(billing.rate) : '',
+      position: resolvePosition(project, emp) || row?.position || '',
       shiftStart: emp?.defaultShiftStart || '',
       shiftEnd: emp?.defaultShiftEnd || '',
     })
+  }
+
+  /** Rows with a named employee but no client rate resolved from any layer. */
+  const rowsMissingRate = rows.filter(row => row.employeeName.trim() && !(parseFloat(row.rate) > 0))
+
+  function rateHint(row: BuilderRow): string {
+    const employee = rowEmployee(row)
+    return billRateSourceLabel(resolveBillRate(employee, rowProject(row), selectedClient).source)
   }
 
   function addRow() { setRows(prev => [...prev, emptyRow()]) }
@@ -745,6 +758,7 @@ export default function InvoiceBuilder({ onCreated, onCancel, initialClientId, i
                           value={row.rate}
                           onChange={e => updateRow(row._id, { rate: e.target.value })}
                           placeholder="0.00"
+                          title={rateHint(row)}
                         />
                       </td>
                       {dates.map(d => (
@@ -817,7 +831,7 @@ export default function InvoiceBuilder({ onCreated, onCancel, initialClientId, i
                   </div>
                   <div className="form-group" style={{ flex: 1 }}>
                     {rows.indexOf(row) === 0 && <label className="form-label">Rate/hr</label>}
-                    <input className="form-input" type="number" inputMode="decimal" step="0.01" value={row.rate} onChange={e => updateRow(row._id, { rate: e.target.value })} placeholder="0.00" />
+                    <input className="form-input" type="number" inputMode="decimal" step="0.01" value={row.rate} onChange={e => updateRow(row._id, { rate: e.target.value })} placeholder="0.00" title={rateHint(row)} />
                   </div>
                   <div className="form-group" style={{ flex: 1 }}>
                     {rows.indexOf(row) === 0 && <label className="form-label">Total Hrs</label>}
@@ -890,6 +904,15 @@ export default function InvoiceBuilder({ onCreated, onCancel, initialClientId, i
           placeholder="Payment instructions, thank you note, or any additional info..."
         />
       </div>
+
+      {/* Nothing bills at the employee pay rate any more, so a row with no
+          resolved client rate has to be called out rather than silently zeroed. */}
+      {rowsMissingRate.length > 0 && (
+        <div className="builder-rate-warning">
+          No client rate set for {rowsMissingRate.map(row => row.employeeName.trim()).join(', ')}.
+          Set a rate on the row, on the project, or per person in the project's team panel.
+        </div>
+      )}
 
       {/* ── Grand Total ── */}
       <div className="builder-total-bar">

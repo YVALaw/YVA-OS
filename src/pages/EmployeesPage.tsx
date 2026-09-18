@@ -10,7 +10,7 @@ import { formatMoney, fmtHoursHM } from '../utils/money'
 import { useRole } from '../context/RoleContext'
 import { can } from '../lib/roles'
 import { htmlToPdfAttachment } from '../utils/pdf'
-import { computePayrollBreakdown, employeePremiumConfig, normalizeClockInput, payrollFromInvoiceItem } from '../utils/payroll'
+import { computePayrollBreakdown, distinctPayRates, employeePremiumConfig, formatPayRateLabel, normalizeClockInput, payrollFromInvoiceItem } from '../utils/payroll'
 import { formatEmailList, parseEmailList } from '../utils/email'
 import { Avatar, FilterChips, KanbanColumn, KanbanItem, ProtoIcon, SearchField, StatusChip, ToggleGroup, colorFromString, protoCurrency, useKanbanDnd } from '../components/PrototypeKit'
 
@@ -143,7 +143,9 @@ function summarizeEmployeeInvoices(emp: Employee, invoices: Invoice[]) {
 }
 
 function buildPayslipHTML(emp: Employee, empInvoices: Invoice[], dateFrom: string, dateTo: string, settings: Awaited<ReturnType<typeof loadSettings>>) {
-  const payRate = Number(emp.payRate) || 0
+  // Rates come from the invoice items themselves: the same employee can be paid
+  // a different rate per project, and rates change over time.
+  const payRateLabel = formatPayRateLabel(distinctPayRates(empInvoices.flatMap(inv => getEmployeeInvoiceItems(emp, inv)), emp))
   const premiumConfig = employeePremiumConfig(emp)
   const dopRate = settings.usdToDop || 0
 
@@ -186,9 +188,9 @@ function buildPayslipHTML(emp: Employee, empInvoices: Invoice[], dateFrom: strin
     if (allDates.length > 0 && daily) {
       const dateHeaders = allDates.map(d=>{const dt=new Date(d+'T12:00:00');return '<th style="text-align:center;font-size:9px;padding:5px 3px;min-width:22px;color:#999;border-bottom:2px solid #eee;white-space:nowrap">'+DA[dt.getDay()]+'<br>'+(dt.getMonth()+1)+'/'+dt.getDate()+'</th>'}).join('')
       const dayCells = allDates.map(d=>{const h=ph(daily[d]||'');return '<td style="text-align:center;padding:7px 4px;font-size:12px;color:'+(h>0?'#111':'#ccc')+'">'+(h>0?(h%1===0?String(h):h.toFixed(1)):'—')+'</td>'}).join('')
-      return label+'<table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:20px"><thead><tr>'+dateHeaders+'<th style="text-align:right;font-size:9px;padding:5px 6px;color:#999;border-bottom:2px solid #eee">HOURS</th><th style="text-align:right;font-size:9px;padding:5px 6px;color:#999;border-bottom:2px solid #eee">RATE</th><th style="text-align:right;font-size:9px;padding:5px 6px;color:#999;border-bottom:2px solid #eee">EARNED</th></tr></thead><tbody><tr>'+dayCells+'<td style="text-align:right;font-weight:700;padding:8px 6px">'+hrs.toFixed(1)+'h</td><td style="text-align:right;color:#999;padding:8px 6px">'+(payRate>0?'$'+payRate+'/hr':'—')+'</td><td style="text-align:right;font-weight:700;color:#f5b533;padding:8px 6px">'+(earned>0?'$'+earned.toFixed(2):'—')+'</td></tr></tbody></table>' + (invoiceSummary.premium > 0 ? '<div style="font-size:11px;color:#666;margin-top:-10px;margin-bottom:14px">Premium split: '+invoiceSummary.regular.toFixed(2)+'h regular + '+invoiceSummary.premium.toFixed(2)+'h at +'+premiumConfig.percent+'%</div>' : '')
+      return label+'<table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:20px"><thead><tr>'+dateHeaders+'<th style="text-align:right;font-size:9px;padding:5px 6px;color:#999;border-bottom:2px solid #eee">HOURS</th><th style="text-align:right;font-size:9px;padding:5px 6px;color:#999;border-bottom:2px solid #eee">RATE</th><th style="text-align:right;font-size:9px;padding:5px 6px;color:#999;border-bottom:2px solid #eee">EARNED</th></tr></thead><tbody><tr>'+dayCells+'<td style="text-align:right;font-weight:700;padding:8px 6px">'+hrs.toFixed(1)+'h</td><td style="text-align:right;color:#999;padding:8px 6px">'+formatPayRateLabel(distinctPayRates(items, emp))+'</td><td style="text-align:right;font-weight:700;color:#f5b533;padding:8px 6px">'+(earned>0?'$'+earned.toFixed(2):'—')+'</td></tr></tbody></table>' + (invoiceSummary.premium > 0 ? '<div style="font-size:11px;color:#666;margin-top:-10px;margin-bottom:14px">Premium split: '+invoiceSummary.regular.toFixed(2)+'h regular + '+invoiceSummary.premium.toFixed(2)+'h at +'+premiumConfig.percent+'%</div>' : '')
     } else {
-      return label+'<table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:20px"><thead><tr><th style="font-size:9px;padding:5px 6px;color:#999;border-bottom:2px solid #eee">HOURS</th><th style="text-align:right;font-size:9px;padding:5px 6px;color:#999;border-bottom:2px solid #eee">RATE</th><th style="text-align:right;font-size:9px;padding:5px 6px;color:#999;border-bottom:2px solid #eee">EARNED</th></tr></thead><tbody><tr><td style="font-weight:700;padding:8px 6px">'+hrs.toFixed(1)+'h</td><td style="text-align:right;color:#999;padding:8px 6px">'+(payRate>0?'$'+payRate+'/hr':'—')+'</td><td style="text-align:right;font-weight:700;color:#f5b533;padding:8px 6px">'+(earned>0?'$'+earned.toFixed(2):'—')+'</td></tr></tbody></table>' + (invoiceSummary.premium > 0 ? '<div style="font-size:11px;color:#666;margin-top:-10px;margin-bottom:14px">Premium split: '+invoiceSummary.regular.toFixed(2)+'h regular + '+invoiceSummary.premium.toFixed(2)+'h at +'+premiumConfig.percent+'%</div>' : '')
+      return label+'<table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:20px"><thead><tr><th style="font-size:9px;padding:5px 6px;color:#999;border-bottom:2px solid #eee">HOURS</th><th style="text-align:right;font-size:9px;padding:5px 6px;color:#999;border-bottom:2px solid #eee">RATE</th><th style="text-align:right;font-size:9px;padding:5px 6px;color:#999;border-bottom:2px solid #eee">EARNED</th></tr></thead><tbody><tr><td style="font-weight:700;padding:8px 6px">'+hrs.toFixed(1)+'h</td><td style="text-align:right;color:#999;padding:8px 6px">'+formatPayRateLabel(distinctPayRates(items, emp))+'</td><td style="text-align:right;font-weight:700;color:#f5b533;padding:8px 6px">'+(earned>0?'$'+earned.toFixed(2):'—')+'</td></tr></tbody></table>' + (invoiceSummary.premium > 0 ? '<div style="font-size:11px;color:#666;margin-top:-10px;margin-bottom:14px">Premium split: '+invoiceSummary.regular.toFixed(2)+'h regular + '+invoiceSummary.premium.toFixed(2)+'h at +'+premiumConfig.percent+'%</div>' : '')
     }
   }).join('<hr style="border:none;border-top:1px solid #eee;margin:0 0 16px">')
 
@@ -226,12 +228,12 @@ function buildPayslipHTML(emp: Employee, empInvoices: Invoice[], dateFrom: strin
   <div class="kpis">
     <div class="kpi"><div class="kpi-v">${empInvoices.length}</div><div class="kpi-l">Invoices</div></div>
     <div class="kpi"><div class="kpi-v">${totalHours.toFixed(1)}h</div><div class="kpi-l">Total Hours</div></div>
-    <div class="kpi"><div class="kpi-v">${payRate>0?'$'+payRate+'/hr':'—'}</div><div class="kpi-l">Base Pay Rate</div></div>
+    <div class="kpi"><div class="kpi-v">${payRateLabel}</div><div class="kpi-l">Base Pay Rate</div></div>
     ${summary.premiumHours > 0 ? `<div class="kpi"><div class="kpi-v">${summary.premiumHours.toFixed(1)}h</div><div class="kpi-l">Premium Hours (+${premiumConfig.percent}%)</div></div>` : ''}
-    <div class="kpi"><div class="kpi-v">${payRate>0?'$'+totalUSD.toFixed(2):'—'}</div><div class="kpi-l">Total Earned (USD)</div></div>
+    <div class="kpi"><div class="kpi-v">$${totalUSD.toFixed(2)}</div><div class="kpi-l">Total Earned (USD)</div></div>
     ${totalDOP>0?`<div class="kpi"><div class="kpi-v">RD$${totalDOP.toLocaleString('en-US',{maximumFractionDigits:0})}</div><div class="kpi-l">Total Earned (DOP @ ${dopRate})</div></div>`:''}
   </div>
-  ${sections?sections+'<div style="text-align:right;font-weight:800;font-size:13px;padding:10px 0;border-top:2px solid #111;margin-top:4px">Total &nbsp;&nbsp; '+totalHours.toFixed(1)+'h &nbsp;&nbsp; '+(payRate>0?'$'+totalUSD.toFixed(2):'—')+'</div>' + (summary.premiumHours > 0 ? '<div style="text-align:right;font-size:11px;color:#666">Regular: '+summary.regularHours.toFixed(2)+'h · Premium: '+summary.premiumHours.toFixed(2)+'h at +'+premiumConfig.percent+'%</div>' : ''):'<p style="color:#999;text-align:center;padding:24px">No invoice data for this period.</p>'}
+  ${sections?sections+'<div style="text-align:right;font-weight:800;font-size:13px;padding:10px 0;border-top:2px solid #111;margin-top:4px">Total &nbsp;&nbsp; '+totalHours.toFixed(1)+'h &nbsp;&nbsp; $'+totalUSD.toFixed(2)+'</div>' + (summary.premiumHours > 0 ? '<div style="text-align:right;font-size:11px;color:#666">Regular: '+summary.regularHours.toFixed(2)+'h · Premium: '+summary.premiumHours.toFixed(2)+'h at +'+premiumConfig.percent+'%</div>' : ''):'<p style="color:#999;text-align:center;padding:24px">No invoice data for this period.</p>'}
   <div class="footer">YVA Staffing · Bilingual Virtual Professionals · yvastaffing.net</div>
   </div></body></html>`
 }
@@ -295,7 +297,10 @@ function EmployeeStatementsPanel({ emp, invoices, onInvoicesChange }: {
   const [previewInvoices, setPreviewInvoices] = useState<Invoice[]>([])
 
   const empInvoices = getEmployeeInvoices(emp.name, invoices, dateFrom || undefined, dateTo || undefined)
-  const payRate = Number(emp.payRate) || 0
+  // Pay rate can differ per project, so the statement reports the rates that
+  // were actually applied over the period rather than the employee default.
+  const statementRates = distinctPayRates(empInvoices.flatMap(inv => getEmployeeInvoiceItems(emp, inv)), emp)
+  const payRateLabel = formatPayRateLabel(statementRates)
   const premiumConfig = employeePremiumConfig(emp)
   const summary = summarizeEmployeeInvoices(emp, empInvoices)
   const totalHours = summary.hours
@@ -430,7 +435,7 @@ function EmployeeStatementsPanel({ emp, invoices, onInvoicesChange }: {
           <div className="settings-stat-label">Total Hours</div>
         </div>
         <div className="settings-stat-card">
-          <div className="settings-stat-count" style={{ fontSize: 15 }}>{payRate > 0 ? `$${payRate}/hr` : '—'}</div>
+          <div className="settings-stat-count" style={{ fontSize: 15 }}>{payRateLabel}</div>
           <div className="settings-stat-label">Base Rate</div>
         </div>
         <div className="settings-stat-card">
@@ -438,11 +443,11 @@ function EmployeeStatementsPanel({ emp, invoices, onInvoicesChange }: {
           <div className="settings-stat-label">{summary.premiumHours > 0 ? `Premium Hrs (+${premiumConfig.percent}%)` : 'Premium Hrs'}</div>
         </div>
         <div className="settings-stat-card">
-          <div className="settings-stat-count" style={{ fontSize: 15 }}>{payRate > 0 ? formatMoney(totalEarned) : '—'}</div>
+          <div className="settings-stat-count" style={{ fontSize: 15 }}>{formatMoney(totalEarned)}</div>
           <div className="settings-stat-label">Total Earned</div>
         </div>
         <div className="settings-stat-card" style={{ borderColor: paidCount > 0 ? 'var(--gold)' : undefined }}>
-          <div className="settings-stat-count" style={{ fontSize: 15, color: paidCount > 0 ? 'var(--gold)' : undefined }}>{payRate > 0 ? formatMoney(totalPaid) : paidCount}</div>
+          <div className="settings-stat-count" style={{ fontSize: 15, color: paidCount > 0 ? 'var(--gold)' : undefined }}>{formatMoney(totalPaid)}</div>
           <div className="settings-stat-label">{paidCount} Paid</div>
         </div>
         <div className="settings-stat-card" style={{ borderColor: pendingCount > 0 ? 'var(--muted)' : undefined }}>
@@ -550,8 +555,8 @@ function EmployeeStatementsPanel({ emp, invoices, onInvoicesChange }: {
                             )
                           })}
                           <td style={{ textAlign: 'right', fontWeight: 700 }}>{fmtHoursHM(hrs)}</td>
-                          <td style={{ textAlign: 'right', color: 'var(--muted)', fontSize: 11 }}>{payRate > 0 ? `$${payRate}/hr` : '—'}</td>
-                          <td style={{ textAlign: 'right', color: 'var(--gold)', fontWeight: 700 }}>{payRate > 0 ? formatMoney(hrs * payRate) : '—'}</td>
+                          <td style={{ textAlign: 'right', color: 'var(--muted)', fontSize: 11 }}>{formatPayRateLabel(distinctPayRates(items, emp))}</td>
+                          <td style={{ textAlign: 'right', color: 'var(--gold)', fontWeight: 700 }}>{formatMoney(invoiceSummary.earned)}</td>
                         </tr>
                       </tbody>
                     </table>
@@ -560,7 +565,7 @@ function EmployeeStatementsPanel({ emp, invoices, onInvoicesChange }: {
               )
             })}
             <div style={{ textAlign: 'right', fontWeight: 800, fontSize: 13, padding: '8px 4px', borderTop: '2px solid var(--border)', marginTop: 4 }}>
-              Total &nbsp; {fmtHoursHM(totalHours)} &nbsp;&nbsp; {payRate > 0 ? formatMoney(totalEarned) : '—'}
+              Total &nbsp; {fmtHoursHM(totalHours)} &nbsp;&nbsp; {formatMoney(totalEarned)}
             </div>
           </div>
 
@@ -575,7 +580,7 @@ function EmployeeStatementsPanel({ emp, invoices, onInvoicesChange }: {
                       <tr key={pt.name}>
                         <td className="td-name">{pt.name}</td>
                         <td className="td-muted">{fmtHoursHM(pt.hours)}</td>
-                        <td style={{ color: 'var(--gold)', fontWeight: 700 }}>{payRate > 0 ? formatMoney(pt.earned) : '—'}</td>
+                        <td style={{ color: 'var(--gold)', fontWeight: 700 }}>{formatMoney(pt.earned)}</td>
                       </tr>
                     ))}
                   </tbody>

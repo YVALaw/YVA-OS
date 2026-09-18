@@ -52,7 +52,11 @@ ALTER TABLE clients
   ADD COLUMN IF NOT EXISTS links jsonb;
 
 ALTER TABLE projects
-  ADD COLUMN IF NOT EXISTS description text;
+  ADD COLUMN IF NOT EXISTS description text,
+  -- Per-placement rate overrides: one entry per employee on this project,
+  -- shaped { employeeId, position?, billRate?, payRate? }. billRate is
+  -- client-facing, payRate is employee-facing; they are never mixed.
+  ADD COLUMN IF NOT EXISTS assignments jsonb NOT NULL DEFAULT '[]'::jsonb;
 
 ALTER TABLE tasks
   ADD COLUMN IF NOT EXISTS description text,
@@ -118,3 +122,7 @@ CREATE POLICY "user_roles_ceo_delete" ON user_roles
 -- "RLS enabled" in the top bar, and check the Policies tab to confirm
 -- each policy was created. You can test by logging in as a non-CEO user
 -- and confirming they cannot modify user_roles or settings directly.
+
+
+-- Reload PostgREST's schema cache after adding columns.
+notify pgrst, 'reload schema';
