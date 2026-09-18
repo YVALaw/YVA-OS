@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import type { Client, Employee, Expense, Invoice, Project, Task, TaskStatus } from '../data/types'
 import { loadExpenses, loadSnapshot, loadTasks, saveExpenses, saveProjects, saveTasks as saveTasksToStorage } from '../services/storage'
 import { formatHourlyRate, formatMoney } from '../utils/money'
+import { invoiceItemHours } from '../utils/invoiceHours'
 import type { ProjectAssignmentDraft } from '../utils/rates'
 import { fromAssignmentDrafts, setAssignmentDraft, toAssignmentDrafts } from '../utils/rates'
 import {
@@ -40,7 +41,7 @@ function currentMonthKey(date?: string) {
 }
 
 function invoiceHours(invoice: Invoice, projectRate?: string | number) {
-  const explicit = invoice.items?.reduce((sum, item) => sum + Number(item.hoursTotal || 0), 0) || 0
+  const explicit = invoice.items?.reduce((sum, item) => sum + invoiceItemHours(item), 0) || 0
   if (explicit > 0) return explicit
   const rate = Number(projectRate || 0)
   const subtotal = Number(invoice.subtotal || 0)

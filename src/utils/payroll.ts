@@ -210,3 +210,22 @@ export function formatPayRateLabel(rates: number[]): string {
   if (rates.length === 1) return `$${rates[0]}/hr`
   return 'Multiple'
 }
+
+/**
+ * Whether an invoice item belongs to this employee.
+ *
+ * An item that carries an employeeId is authoritative: matching on the name as
+ * well means an item belonging to one person also matches a different employee
+ * record with the same name, and both get credited the same hours and pay.
+ * The name is only a fallback for older items saved before ids were stored.
+ */
+export function itemBelongsToEmployee(
+  item: Pick<InvoiceItem, 'employeeId' | 'employeeName'>,
+  employee?: Pick<Employee, 'id' | 'name'> | null,
+): boolean {
+  if (!employee) return false
+  if (item.employeeId) return item.employeeId === employee.id
+  const itemName = item.employeeName?.trim().toLowerCase()
+  const employeeName = employee.name?.trim().toLowerCase()
+  return Boolean(itemName && employeeName && itemName === employeeName)
+}

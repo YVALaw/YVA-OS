@@ -9,7 +9,7 @@ import {
 } from '../services/reportsService'
 import { formatInvoiceHoursEntry, invoiceItemHours } from '../utils/invoiceHours'
 import { formatMoney, fmtHoursHM } from '../utils/money'
-import { payrollFromInvoiceItem } from '../utils/payroll'
+import { itemBelongsToEmployee, payrollFromInvoiceItem } from '../utils/payroll'
 import { loadSettings, loadGeneralExpenses, loadCandidates, loadExpenses } from '../services/storage'
 import type { AppSettings, Candidate, DataSnapshot, Expense, Invoice } from '../data/types'
 import { useRole } from '../context/RoleContext'
@@ -219,7 +219,7 @@ export default function ReportsPage() {
     return invoicesInRange
       .map(inv => {
         const estPayroll = (inv.items || []).reduce((sum, item) => {
-          const employee = store.employees.find(emp => (item.employeeId && emp.id === item.employeeId) || emp.name?.toLowerCase() === item.employeeName?.toLowerCase())
+          const employee = store.employees.find(emp => itemBelongsToEmployee(item, emp))
           const payroll = payrollFromInvoiceItem(item, employee)
           return sum + payroll.totalPay
         }, 0)
@@ -269,10 +269,7 @@ export default function ReportsPage() {
     const rows = new Map<string, { name: string; totalDue: number; invoiceIds: Set<string>; lineCount: number }>()
     for (const inv of store.invoices) {
       for (const item of inv.items || []) {
-        const employee = store.employees.find(emp =>
-          (item.employeeId && emp.id === item.employeeId) ||
-          emp.name?.toLowerCase() === item.employeeName?.toLowerCase(),
-        )
+        const employee = store.employees.find(emp => itemBelongsToEmployee(item, emp))
         const key = item.employeeId || employee?.id || item.employeeName || 'unknown'
         const name = employee?.name || item.employeeName || 'Unknown employee'
         const payroll = payrollFromInvoiceItem(item, employee).totalPay
@@ -349,10 +346,7 @@ export default function ReportsPage() {
       row.invoiceCount += 1
 
       for (const item of inv.items || []) {
-        const employee = store.employees.find(emp =>
-          (item.employeeId && emp.id === item.employeeId) ||
-          emp.name?.toLowerCase() === item.employeeName?.toLowerCase(),
-        )
+        const employee = store.employees.find(emp => itemBelongsToEmployee(item, emp))
         const payroll = payrollFromInvoiceItem(item, employee).totalPay
         const paymentRecord = inv.employeePayments?.[item.employeeId || '']
           || (employee?.id ? inv.employeePayments?.[employee.id] : undefined)
@@ -655,7 +649,7 @@ export default function ReportsPage() {
                     const hoursThisMonth = store.invoices
                       .filter(inv => (inv.date || inv.billingEnd || '').startsWith(thisMonthStr))
                       .flatMap(inv => inv.items || [])
-                      .filter(it => it.employeeName?.toLowerCase() === emp.name.toLowerCase())
+                      .filter(it => itemBelongsToEmployee(it, emp))
                       .reduce((s, it) => s + invoiceItemHours(it), 0)
                     return (
                       <tr key={emp.id}>
@@ -766,11 +760,11 @@ export default function ReportsPage() {
                       const rows = store.employees.map(emp => {
                         const empInvs = store.invoices.filter(inv =>
                           (inv.date || inv.billingEnd || '').startsWith(thisMonthStr) &&
-                          (inv.items || []).some(it => it.employeeName?.toLowerCase() === emp.name.toLowerCase())
+                          (inv.items || []).some(it => itemBelongsToEmployee(it, emp))
                         )
                         if (empInvs.length === 0) return null
                         const hours = empInvs.flatMap(inv => inv.items || [])
-                          .filter(it => it.employeeName?.toLowerCase() === emp.name.toLowerCase())
+                          .filter(it => itemBelongsToEmployee(it, emp))
                           .reduce((s, it) => s + invoiceItemHours(it), 0)
                         const paidCount = empInvs.filter(inv => inv.employeePayments?.[emp.id]?.status === 'paid').length
                         const pendingCount = empInvs.length - paidCount

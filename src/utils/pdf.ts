@@ -2,7 +2,7 @@ import html2canvas from 'html2canvas'
 import { jsPDF } from 'jspdf'
 import type { AppSettings, Employee, EmployeePaymentRecord, Invoice } from '../data/types'
 import { formatInvoiceHoursEntry, formatInvoiceHoursHM, invoiceItemAmount, invoiceItemHours, parseInvoiceHours } from './invoiceHours'
-import { distinctPayRates, formatPayRateLabel, payrollFromInvoiceItem } from './payroll'
+import { distinctPayRates, formatPayRateLabel, itemBelongsToEmployee, payrollFromInvoiceItem } from './payroll'
 import { formatTimeEntrySummary } from './timesheet'
 
 export type EmailAttachment = {
@@ -209,7 +209,7 @@ function buildStatementLines(
   const dopRate = settings.usdToDop || 0
   const period = dateFrom && dateTo ? `${dateFrom} - ${dateTo}` : dateFrom || dateTo || 'All time'
   const statementItems = empInvoices.flatMap(inv => (inv.items || [])
-    .filter(item => item.employeeName?.toLowerCase() === emp.name.toLowerCase()))
+    .filter(item => itemBelongsToEmployee(item, emp)))
   const totalHours = statementItems.reduce((hours, item) => hours + invoiceItemHours(item), 0)
   // Sum the stored per-item pay, so premium hours and per-project rates are
   // both reflected instead of a flat hours x rate figure.
@@ -240,7 +240,7 @@ function buildStatementLines(
   }
 
   for (const inv of empInvoices) {
-    const items = (inv.items || []).filter(item => item.employeeName?.toLowerCase() === emp.name.toLowerCase())
+    const items = (inv.items || []).filter(item => itemBelongsToEmployee(item, emp))
     const hours = items.reduce((sum, item) => sum + invoiceItemHours(item), 0)
     const earned = items.reduce((sum, item) => sum + payrollFromInvoiceItem(item, emp).totalPay, 0)
     const payment = getPaymentRecord?.(inv)

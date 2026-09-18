@@ -7,10 +7,11 @@ import {
 } from '../services/storage'
 import { sendEmail, type SendEmailResult } from '../services/gmail'
 import { formatMoney, fmtHoursHM } from '../utils/money'
+import { formatInvoiceHoursEntry, parseInvoiceHours } from '../utils/invoiceHours'
 import { useRole } from '../context/RoleContext'
 import { can } from '../lib/roles'
 import { htmlToPdfAttachment } from '../utils/pdf'
-import { computePayrollBreakdown, distinctPayRates, employeePremiumConfig, formatPayRateLabel, normalizeClockInput, payrollFromInvoiceItem } from '../utils/payroll'
+import { computePayrollBreakdown, distinctPayRates, employeePremiumConfig, formatPayRateLabel, itemBelongsToEmployee, normalizeClockInput, payrollFromInvoiceItem } from '../utils/payroll'
 import { formatEmailList, parseEmailList } from '../utils/email'
 import { Avatar, FilterChips, KanbanColumn, KanbanItem, ProtoIcon, SearchField, StatusChip, ToggleGroup, colorFromString, protoCurrency, useKanbanDnd } from '../components/PrototypeKit'
 
@@ -77,9 +78,9 @@ const EMPTY: FormData = {
   location: '', timezone: '', startYear: '', status: 'Active', notes: '',
 }
 
-function getEmployeeInvoices(empName: string, invoices: Invoice[], from?: string, to?: string) {
+function getEmployeeInvoices(emp: Employee, invoices: Invoice[], from?: string, to?: string) {
   return invoices.filter(inv => {
-    const hasEmp = (inv.items || []).some(it => it.employeeName?.toLowerCase() === empName.toLowerCase())
+    const hasEmp = (inv.items || []).some(it => itemBelongsToEmployee(it, emp))
     if (!hasEmp) return false
     if (!from && !to) return true
     const d = inv.date || inv.billingEnd || inv.billingStart
@@ -123,10 +124,7 @@ function parseInvoiceNumber(value?: string): number {
 }
 
 function getEmployeeInvoiceItems(emp: Employee, inv: Invoice) {
-  return (inv.items || []).filter(it =>
-    (it.employeeId && it.employeeId === emp.id) ||
-    it.employeeName?.toLowerCase() === emp.name.toLowerCase()
-  )
+  return (inv.items || []).filter(it => itemBelongsToEmployee(it, emp))
 }
 
 function summarizeEmployeeInvoices(emp: Employee, invoices: Invoice[]) {
@@ -154,11 +152,6 @@ function buildPayslipHTML(emp: Employee, empInvoices: Invoice[], dateFrom: strin
   const totalUSD = summary.totalPay
   const totalDOP = dopRate > 0 ? totalUSD * dopRate : 0
 
-  function ph(v: string): number {
-    if (!v) return 0; const s = v.trim().replace(',','.')
-    if (s.includes(':')) { const [h,m]=s.split(':'); return (parseInt(h)||0)+(parseInt(m)||0)/60 }
-    return parseFloat(s)||0
-  }
   const DA = ['Su','Mo','Tu','We','Th','Fr','Sa']
   const sections = empInvoices.map(inv => {
     const items = getEmployeeInvoiceItems(emp, inv)
@@ -181,13 +174,13 @@ function buildPayslipHTML(emp: Employee, empInvoices: Invoice[], dateFrom: strin
         const end = new Date(inv.billingEnd+'T12:00:00')
         while (cur <= end) { allDates.push(cur.toISOString().slice(0,10)); cur.setDate(cur.getDate()+1) }
       } else {
-        allDates = Object.keys(daily).filter(d=>ph(daily[d])>0).sort()
+        allDates = Object.keys(daily).filter(d=>parseInvoiceHours(daily[d])>0).sort()
       }
     }
     const label = '<div style="font-size:11px;margin-bottom:6px"><strong style="font-size:13px">'+inv.number+'</strong>&nbsp;&middot;&nbsp;'+(inv.projectName||'—')+'&nbsp;&middot;&nbsp;<span style="color:#999">'+invPeriod+'</span></div>'
     if (allDates.length > 0 && daily) {
       const dateHeaders = allDates.map(d=>{const dt=new Date(d+'T12:00:00');return '<th style="text-align:center;font-size:9px;padding:5px 3px;min-width:22px;color:#999;border-bottom:2px solid #eee;white-space:nowrap">'+DA[dt.getDay()]+'<br>'+(dt.getMonth()+1)+'/'+dt.getDate()+'</th>'}).join('')
-      const dayCells = allDates.map(d=>{const h=ph(daily[d]||'');return '<td style="text-align:center;padding:7px 4px;font-size:12px;color:'+(h>0?'#111':'#ccc')+'">'+(h>0?(h%1===0?String(h):h.toFixed(1)):'—')+'</td>'}).join('')
+      const dayCells = allDates.map(d=>{const h=parseInvoiceHours(daily[d]||'');return '<td style="text-align:center;padding:7px 4px;font-size:12px;color:'+(h>0?'#111':'#ccc')+'">'+(h>0?formatInvoiceHoursEntry(h):'—')+'</td>'}).join('')
       return label+'<table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:20px"><thead><tr>'+dateHeaders+'<th style="text-align:right;font-size:9px;padding:5px 6px;color:#999;border-bottom:2px solid #eee">HOURS</th><th style="text-align:right;font-size:9px;padding:5px 6px;color:#999;border-bottom:2px solid #eee">RATE</th><th style="text-align:right;font-size:9px;padding:5px 6px;color:#999;border-bottom:2px solid #eee">EARNED</th></tr></thead><tbody><tr>'+dayCells+'<td style="text-align:right;font-weight:700;padding:8px 6px">'+hrs.toFixed(1)+'h</td><td style="text-align:right;color:#999;padding:8px 6px">'+formatPayRateLabel(distinctPayRates(items, emp))+'</td><td style="text-align:right;font-weight:700;color:#f5b533;padding:8px 6px">'+(earned>0?'$'+earned.toFixed(2):'—')+'</td></tr></tbody></table>' + (invoiceSummary.premium > 0 ? '<div style="font-size:11px;color:#666;margin-top:-10px;margin-bottom:14px">Premium split: '+invoiceSummary.regular.toFixed(2)+'h regular + '+invoiceSummary.premium.toFixed(2)+'h at +'+premiumConfig.percent+'%</div>' : '')
     } else {
       return label+'<table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:20px"><thead><tr><th style="font-size:9px;padding:5px 6px;color:#999;border-bottom:2px solid #eee">HOURS</th><th style="text-align:right;font-size:9px;padding:5px 6px;color:#999;border-bottom:2px solid #eee">RATE</th><th style="text-align:right;font-size:9px;padding:5px 6px;color:#999;border-bottom:2px solid #eee">EARNED</th></tr></thead><tbody><tr><td style="font-weight:700;padding:8px 6px">'+hrs.toFixed(1)+'h</td><td style="text-align:right;color:#999;padding:8px 6px">'+formatPayRateLabel(distinctPayRates(items, emp))+'</td><td style="text-align:right;font-weight:700;color:#f5b533;padding:8px 6px">'+(earned>0?'$'+earned.toFixed(2):'—')+'</td></tr></tbody></table>' + (invoiceSummary.premium > 0 ? '<div style="font-size:11px;color:#666;margin-top:-10px;margin-bottom:14px">Premium split: '+invoiceSummary.regular.toFixed(2)+'h regular + '+invoiceSummary.premium.toFixed(2)+'h at +'+premiumConfig.percent+'%</div>' : '')
@@ -296,7 +289,7 @@ function EmployeeStatementsPanel({ emp, invoices, onInvoicesChange }: {
   const [previewTitle, setPreviewTitle] = useState('')
   const [previewInvoices, setPreviewInvoices] = useState<Invoice[]>([])
 
-  const empInvoices = getEmployeeInvoices(emp.name, invoices, dateFrom || undefined, dateTo || undefined)
+  const empInvoices = getEmployeeInvoices(emp, invoices, dateFrom || undefined, dateTo || undefined)
   // Pay rate can differ per project, so the statement reports the rates that
   // were actually applied over the period rather than the employee default.
   const statementRates = distinctPayRates(empInvoices.flatMap(inv => getEmployeeInvoiceItems(emp, inv)), emp)
@@ -486,7 +479,7 @@ function EmployeeStatementsPanel({ emp, invoices, onInvoicesChange }: {
                   const end = new Date(inv.billingEnd + 'T12:00:00')
                   while (cur <= end) { allDates.push(cur.toISOString().slice(0, 10)); cur.setDate(cur.getDate() + 1) }
                 } else {
-                  allDates = Object.keys(daily).filter(d => parseFloat(daily[d]) > 0).sort()
+                  allDates = Object.keys(daily).filter(d => parseInvoiceHours(daily[d]) > 0).sort()
                 }
               }
               const payment = getEmpPayment(inv)
@@ -547,10 +540,10 @@ function EmployeeStatementsPanel({ emp, invoices, onInvoicesChange }: {
                       <tbody>
                         <tr>
                           {allDates.map(d => {
-                            const h = daily ? (parseFloat(daily[d] || '') || 0) : 0
+                            const h = daily ? parseInvoiceHours(daily[d] || '') : 0
                             return (
                               <td key={d} style={{ textAlign: 'center', fontSize: 12, color: h > 0 ? undefined : 'var(--muted)', padding: '7px 3px' }}>
-                                {h > 0 ? (h % 1 === 0 ? h : h.toFixed(1)) : '—'}
+                                {h > 0 ? formatInvoiceHoursEntry(h) : '—'}
                               </td>
                             )
                           })}
@@ -743,8 +736,7 @@ export default function EmployeesPage() {
     const empInvoices = invoices.filter(inv =>
       invoiceOverlapsRange(inv, currentMonth.from, currentMonth.to) &&
       (inv.items || []).some(item =>
-        (item.employeeId && item.employeeId === employee.id) ||
-        item.employeeName?.toLowerCase() === employee.name.toLowerCase(),
+        itemBelongsToEmployee(item, employee),
       ),
     )
     const summary = summarizeEmployeeInvoices(employee, empInvoices)
