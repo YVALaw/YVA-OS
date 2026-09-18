@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import type { Client, Employee, Expense, Invoice, Project, ProjectAssignment, Task, TaskStatus } from '../data/types'
+import type { Client, Employee, Expense, Invoice, Project, Task, TaskStatus } from '../data/types'
 import { loadExpenses, loadSnapshot, loadTasks, saveExpenses, saveProjects, saveTasks } from '../services/storage'
 import { formatHourlyRate, formatMoney } from '../utils/money'
 import { invoiceItemHours } from '../utils/invoiceHours'
-import { findAssignment, resolvePayRate, setAssignment } from '../utils/rates'
+import type { ProjectAssignmentDraft } from '../utils/rates'
+import { findAssignment, fromAssignmentDrafts, resolvePayRate, setAssignmentDraft, toAssignmentDrafts } from '../utils/rates'
 import {
   Avatar,
   Drawer,
@@ -59,7 +60,7 @@ type FormData = {
   notes: string
   links: LinkEntry[]
   employeeIds: string[]
-  assignments: ProjectAssignment[]
+  assignments: ProjectAssignmentDraft[]
 }
 
 const EMPTY_FORM: FormData = {
@@ -241,7 +242,7 @@ export default function ProjectsPage() {
       notes: project.notes || '',
       links: project.links || [],
       employeeIds: Array.from(new Set(project.employeeIds || [])),
-      assignments: project.assignments || [],
+      assignments: toAssignmentDrafts(project.assignments),
     })
     setEditId(project.id)
     setModal('edit')
@@ -275,8 +276,8 @@ export default function ProjectsPage() {
       notes: form.notes || undefined,
       links: form.links.length ? form.links : undefined,
       employeeIds: Array.from(new Set(form.employeeIds)),
-      // Only keep overrides for people still on the project.
-      assignments: form.assignments.filter(entry => form.employeeIds.includes(entry.employeeId)),
+      // Parses the raw rate strings and keeps only people still on the project.
+      assignments: fromAssignmentDrafts(form.assignments, form.employeeIds),
     }
 
     const next = modal === 'add'
@@ -588,7 +589,7 @@ export default function ProjectsPage() {
                           placeholder={employee.role || 'Position on this project'}
                           onChange={e => setForm(prev => ({
                             ...prev,
-                            assignments: setAssignment(prev.assignments, employeeId, { position: e.target.value || undefined }),
+                            assignments: setAssignmentDraft(prev.assignments, employeeId, { position: e.target.value }),
                           }))}
                         />
                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
@@ -600,11 +601,11 @@ export default function ProjectsPage() {
                               inputMode="decimal"
                               step="0.01"
                               style={{ fontSize: 12 }}
-                              value={assignment?.billRate != null ? String(assignment.billRate) : ''}
+                              value={assignment?.billRate ?? ''}
                               placeholder={inheritedBill > 0 ? String(inheritedBill) : 'Not set'}
                               onChange={e => setForm(prev => ({
                                 ...prev,
-                                assignments: setAssignment(prev.assignments, employeeId, { billRate: e.target.value ? Number(e.target.value) : undefined }),
+                                assignments: setAssignmentDraft(prev.assignments, employeeId, { billRate: e.target.value }),
                               }))}
                             />
                           </label>
@@ -616,11 +617,11 @@ export default function ProjectsPage() {
                               inputMode="decimal"
                               step="0.01"
                               style={{ fontSize: 12 }}
-                              value={assignment?.payRate != null ? String(assignment.payRate) : ''}
+                              value={assignment?.payRate ?? ''}
                               placeholder={inheritedPay > 0 ? String(inheritedPay) : 'Not set'}
                               onChange={e => setForm(prev => ({
                                 ...prev,
-                                assignments: setAssignment(prev.assignments, employeeId, { payRate: e.target.value ? Number(e.target.value) : undefined }),
+                                assignments: setAssignmentDraft(prev.assignments, employeeId, { payRate: e.target.value }),
                               }))}
                             />
                           </label>

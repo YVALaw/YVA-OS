@@ -82,20 +82,74 @@ export function billRateSourceLabel(source: BillRateSource): string {
   return BILL_RATE_LABELS[source]
 }
 
-/** Upsert one assignment, dropping it entirely when both rates and position are empty. */
-export function setAssignment(
-  assignments: ProjectAssignment[] | undefined,
-  employeeId: string,
-  patch: Partial<Omit<ProjectAssignment, 'employeeId'>>,
-): ProjectAssignment[] {
-  const current = assignments || []
-  const existing = current.find(entry => entry.employeeId === employeeId)
-  const merged: ProjectAssignment = { ...existing, ...patch, employeeId }
+/**
+ * Edit-time shape of an assignment: rates stay raw strings while someone is
+ * typing. Storing them as numbers and rendering String(n) back into the input
+ * makes a decimal impossible to type - "7." parses to 7 and re-renders as "7",
+ * deleting the point before the next keystroke arrives. Same convention the
+ * project forms already use for `rate` and `budget`.
+ */
+export type ProjectAssignmentDraft = {
+  employeeId: string
+  position?: string
+  billRate?: string
+  payRate?: string
+}
 
-  if (!merged.billRate && !merged.payRate && !merged.position) {
+function isBlank(value?: string): boolean {
+  return !value || !value.trim()
+}
+
+/** Upsert one draft, dropping it entirely when position and both rates are empty. */
+export function setAssignmentDraft(
+  drafts: ProjectAssignmentDraft[] | undefined,
+  employeeId: string,
+  patch: Partial<Omit<ProjectAssignmentDraft, 'employeeId'>>,
+): ProjectAssignmentDraft[] {
+  const current = drafts || []
+  const existing = current.find(entry => entry.employeeId === employeeId)
+  const merged: ProjectAssignmentDraft = { ...existing, ...patch, employeeId }
+
+  if (isBlank(merged.position) && isBlank(merged.billRate) && isBlank(merged.payRate)) {
     return current.filter(entry => entry.employeeId !== employeeId)
   }
   return existing
     ? current.map(entry => entry.employeeId === employeeId ? merged : entry)
     : [...current, merged]
+}
+
+export function toAssignmentDrafts(assignments?: ProjectAssignment[]): ProjectAssignmentDraft[] {
+  return (assignments || []).map(entry => ({
+    employeeId: entry.employeeId,
+    position: entry.position,
+    billRate: entry.billRate != null ? String(entry.billRate) : undefined,
+    payRate: entry.payRate != null ? String(entry.payRate) : undefined,
+  }))
+}
+
+/**
+ * Commit drafts back to storage: parse the rate strings, drop anything that is
+ * blank or not a real number, and keep only people still on the project.
+ */
+export function fromAssignmentDrafts(
+  drafts: ProjectAssignmentDraft[] | undefined,
+  employeeIds: string[],
+): ProjectAssignment[] {
+  const members = new Set(employeeIds)
+  const result: ProjectAssignment[] = []
+
+  for (const draft of drafts || []) {
+    if (!members.has(draft.employeeId)) continue
+    const entry: ProjectAssignment = { employeeId: draft.employeeId }
+    const position = draft.position?.trim()
+    if (position) entry.position = position
+    for (const field of ['billRate', 'payRate'] as const) {
+      const raw = draft[field]
+      if (isBlank(raw)) continue
+      const num = Number(String(raw).replace(',', '.'))
+      if (Number.isFinite(num) && num > 0) entry[field] = num
+    }
+    if (entry.position || entry.billRate || entry.payRate) result.push(entry)
+  }
+  return result
 }

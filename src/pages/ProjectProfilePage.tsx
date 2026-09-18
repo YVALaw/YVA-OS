@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import type { Client, Employee, Expense, Invoice, Project, ProjectAssignment, Task, TaskStatus } from '../data/types'
+import type { Client, Employee, Expense, Invoice, Project, Task, TaskStatus } from '../data/types'
 import { loadExpenses, loadSnapshot, loadTasks, saveExpenses, saveProjects, saveTasks as saveTasksToStorage } from '../services/storage'
 import { formatHourlyRate, formatMoney } from '../utils/money'
-import { setAssignment } from '../utils/rates'
+import type { ProjectAssignmentDraft } from '../utils/rates'
+import { fromAssignmentDrafts, setAssignmentDraft, toAssignmentDrafts } from '../utils/rates'
 import {
   Avatar,
   Modal,
@@ -79,7 +80,7 @@ export default function ProjectProfilePage() {
     notes: '',
     links: [] as { label: string; url: string }[],
     employeeIds: [] as string[],
-    assignments: [] as ProjectAssignment[],
+    assignments: [] as ProjectAssignmentDraft[],
   })
 
   useEffect(() => {
@@ -111,7 +112,7 @@ export default function ProjectProfilePage() {
       notes: project.notes || '',
       links: project.links || [],
       employeeIds: Array.from(new Set(project.employeeIds || [])),
-      assignments: project.assignments || [],
+      assignments: toAssignmentDrafts(project.assignments),
     })
   }, [editing, project])
 
@@ -178,7 +179,7 @@ export default function ProjectProfilePage() {
       notes: project.notes || '',
       links: project.links || [],
       employeeIds: Array.from(new Set(project.employeeIds || [])),
-      assignments: project.assignments || [],
+      assignments: toAssignmentDrafts(project.assignments),
     })
     setEditing(false)
     setEmpSearch('')
@@ -205,7 +206,7 @@ export default function ProjectProfilePage() {
       notes: form.notes || undefined,
       links: form.links.length ? form.links : undefined,
       employeeIds: Array.from(new Set(form.employeeIds)),
-      assignments: form.assignments.filter(entry => form.employeeIds.includes(entry.employeeId)),
+      assignments: fromAssignmentDrafts(form.assignments, form.employeeIds),
     }
     await persistProject(next)
     setSaving(false)
@@ -241,8 +242,8 @@ export default function ProjectProfilePage() {
     setForm(prev => prev.employeeIds.includes(employeeId) ? prev : { ...prev, employeeIds: [...prev.employeeIds, employeeId] })
   }
 
-  function patchAssignment(employeeId: string, patch: Partial<Omit<ProjectAssignment, 'employeeId'>>) {
-    setForm(prev => ({ ...prev, assignments: setAssignment(prev.assignments, employeeId, patch) }))
+  function patchAssignment(employeeId: string, patch: Partial<Omit<ProjectAssignmentDraft, 'employeeId'>>) {
+    setForm(prev => ({ ...prev, assignments: setAssignmentDraft(prev.assignments, employeeId, patch) }))
   }
 
   function removeEmployee(employeeId: string) {
@@ -533,22 +534,22 @@ export default function ProjectProfilePage() {
                             style={{ fontSize: 12 }}
                             value={assignment?.position || ''}
                             placeholder={employee.role || 'Position on this project'}
-                            onChange={e => patchAssignment(employeeId, { position: e.target.value || undefined })}
+                            onChange={e => patchAssignment(employeeId, { position: e.target.value })}
                           />
                           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
                             <label style={{ display: 'grid', gap: 3 }}>
                               <span className="project-assignment-label">Bill /hr</span>
                               <input className="proto-input" type="number" inputMode="decimal" step="0.01" style={{ fontSize: 12 }}
-                                value={assignment?.billRate != null ? String(assignment.billRate) : ''}
+                                value={assignment?.billRate ?? ''}
                                 placeholder={inheritedBill > 0 ? String(inheritedBill) : 'Not set'}
-                                onChange={e => patchAssignment(employeeId, { billRate: e.target.value ? Number(e.target.value) : undefined })} />
+                                onChange={e => patchAssignment(employeeId, { billRate: e.target.value })} />
                             </label>
                             <label style={{ display: 'grid', gap: 3 }}>
                               <span className="project-assignment-label">Pay /hr</span>
                               <input className="proto-input" type="number" inputMode="decimal" step="0.01" style={{ fontSize: 12 }}
-                                value={assignment?.payRate != null ? String(assignment.payRate) : ''}
+                                value={assignment?.payRate ?? ''}
                                 placeholder={inheritedPay > 0 ? String(inheritedPay) : 'Not set'}
-                                onChange={e => patchAssignment(employeeId, { payRate: e.target.value ? Number(e.target.value) : undefined })} />
+                                onChange={e => patchAssignment(employeeId, { payRate: e.target.value })} />
                             </label>
                           </div>
                         </div>
