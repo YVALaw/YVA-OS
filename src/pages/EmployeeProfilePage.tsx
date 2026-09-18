@@ -6,6 +6,7 @@ import { uploadFile, deleteFile } from '../services/fileStorage'
 import { sendEmail, type SendEmailResult } from '../services/gmail'
 import { formatMoney, fmtHoursHM } from '../utils/money'
 import { formatInvoiceHoursEntry, parseInvoiceHours } from '../utils/invoiceHours'
+import { escapeHtml } from '../utils/html'
 import { htmlToPdfAttachment } from '../utils/pdf'
 import { distinctPayRates, employeePremiumConfig, formatPayRateLabel, itemBelongsToEmployee, normalizeClockInput, payrollFromInvoiceItem } from '../utils/payroll'
 import { formatEmailList, parseEmailList } from '../utils/email'
@@ -142,16 +143,6 @@ function sumAdjustments(adjustments: EmployeePaymentAdjustment[]): number {
   return adjustments.reduce((sum, adj) => sum + adjustmentSignedAmount(adj), 0)
 }
 
-function escapeStatementHtml(value: string): string {
-  return value.replace(/[&<>"']/g, character => ({
-    '&': '&amp;',
-    '<': '&lt;',
-    '>': '&gt;',
-    '"': '&quot;',
-    "'": '&#039;',
-  })[character] || character)
-}
-
 function buildPayslipHTML(emp: Employee, empInvoices: Invoice[], dateFrom: string, dateTo: string, settings: Awaited<ReturnType<typeof loadSettings>>, statementAdjustments = filterStatementAdjustments(emp, dateFrom || undefined, dateTo || undefined)) {
   // Rates are read back from the invoice items: pay rate can differ per project.
   const payRateLabel = formatPayRateLabel(distinctPayRates(empInvoices.flatMap(inv => getEmployeeInvoiceItems(emp, inv)), emp))
@@ -188,7 +179,7 @@ function buildPayslipHTML(emp: Employee, empInvoices: Invoice[], dateFrom: strin
         allDates = Object.keys(daily).filter(d=>parseInvoiceHours(daily[d])>0).sort()
       }
     }
-    const label = '<div style="font-size:11px;margin-bottom:6px"><strong style="font-size:13px">'+inv.number+'</strong>&nbsp;&middot;&nbsp;'+(inv.projectName||'—')+'&nbsp;&middot;&nbsp;<span style="color:#999">'+invPeriod+'</span></div>'
+    const label = '<div style="font-size:11px;margin-bottom:6px"><strong style="font-size:13px">'+escapeHtml(inv.number)+'</strong>&nbsp;&middot;&nbsp;'+escapeHtml(inv.projectName||'—')+'&nbsp;&middot;&nbsp;<span style="color:#999">'+escapeHtml(invPeriod)+'</span></div>'
     if (allDates.length > 0 && daily) {
       const dateHeaders = allDates.map(d=>{const dt=new Date(d+'T12:00:00');return '<th style="text-align:center;font-size:9px;padding:5px 3px;min-width:22px;color:#999;border-bottom:2px solid #eee;white-space:nowrap">'+DA[dt.getDay()]+'<br>'+(dt.getMonth()+1)+'/'+dt.getDate()+'</th>'}).join('')
       const dayCells = allDates.map(d=>{const h=parseInvoiceHours(daily[d]||'');return '<td style="text-align:center;padding:7px 4px;font-size:12px;color:'+(h>0?'#111':'#ccc')+'">'+(h>0?formatInvoiceHoursEntry(h):'—')+'</td>'}).join('')
@@ -199,10 +190,10 @@ function buildPayslipHTML(emp: Employee, empInvoices: Invoice[], dateFrom: strin
   }).join('<hr style="border:none;border-top:1px solid #eee;margin:0 0 16px">')
 
   const period   = dateFrom && dateTo ? `${dateFrom} – ${dateTo}` : dateFrom || dateTo || 'All time'
-  const adjustmentRows = statementAdjustments.map(adj => '<tr><td style="font-weight:700;padding:8px 6px">'+(adj.type === 'bonus' ? 'Bonus' : 'Deduction')+'</td><td style="color:#666;padding:8px 6px">'+escapeStatementHtml(adj.date || '—')+'</td><td style="color:#666;padding:8px 6px">'+escapeStatementHtml(adj.reason || 'Adjustment')+'</td><td style="text-align:right;font-weight:700;padding:8px 6px;color:'+(adj.type === 'deduction' ? '#dc2626' : '#16a34a')+'">'+(adj.type === 'deduction' ? '-' : '+')+'$'+parseAdjustmentAmount(adj.amount).toFixed(2)+'</td></tr>').join('')
+  const adjustmentRows = statementAdjustments.map(adj => '<tr><td style="font-weight:700;padding:8px 6px">'+(adj.type === 'bonus' ? 'Bonus' : 'Deduction')+'</td><td style="color:#666;padding:8px 6px">'+escapeHtml(adj.date || '—')+'</td><td style="color:#666;padding:8px 6px">'+escapeHtml(adj.reason || 'Adjustment')+'</td><td style="text-align:right;font-weight:700;padding:8px 6px;color:'+(adj.type === 'deduction' ? '#dc2626' : '#16a34a')+'">'+(adj.type === 'deduction' ? '-' : '+')+'$'+parseAdjustmentAmount(adj.amount).toFixed(2)+'</td></tr>').join('')
   const adjustmentSection = statementAdjustments.length > 0 ? '<h3 style="font-size:13px;margin:18px 0 6px">Adjustments</h3><table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:12px"><thead><tr><th>Type</th><th>Date</th><th>Reason</th><th style="text-align:right">Amount</th></tr></thead><tbody>'+adjustmentRows+'</tbody></table>' : ''
   const netPaySection = statementAdjustments.length > 0 ? '<div style="text-align:right;font-weight:800;font-size:14px;padding:2px 0">Net Pay &nbsp;&nbsp; $'+netUSD.toFixed(2)+'</div>' : ''
-  return `<!DOCTYPE html><html><head><title>Statement — ${emp.name}</title><style>@page{size:Letter;margin:.5in}html,body{margin:0;padding:0;background:#fff}body{font-family:Arial,sans-serif;color:#111}.statement-page{width:8.5in;min-height:11in;margin:0 auto;padding:.6in;box-sizing:border-box;background:#fff}.header{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:28px;border-bottom:2px solid #f5b533;padding-bottom:16px}.logo{height:48px}h2{margin:0;font-size:22px;color:#f5b533}.meta{font-size:12px;color:#999;margin-top:4px}.kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:24px}.kpi{background:#f9f9f9;border-radius:8px;padding:14px;text-align:center}.kpi-v{font-size:20px;font-weight:800;color:#111}.kpi-l{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:#999;margin-top:4px}table{width:100%;border-collapse:collapse;font-size:12px}th{text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:#999;padding:8px 8px;border-bottom:2px solid #eee}td{padding:8px;border-bottom:1px solid #eee}.footer{margin-top:32px;font-size:11px;color:#999;border-top:1px solid #eee;padding-top:12px;text-align:center}@media print{body{margin:0}.statement-page{margin:0}}</style></head><body><div class="statement-page" data-pdf-page><div class="header"><img src="${window.location.origin}/yva-logo.png" class="logo" onerror="this.style.display='none'" /><div style="text-align:right"><h2>EARNINGS STATEMENT</h2><div class="meta">${emp.name}${emp.employeeNumber?` · ${emp.employeeNumber}`:''}</div><div class="meta">Period: ${period}</div><div class="meta">Generated: ${new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})}</div></div></div><div class="kpis"><div class="kpi"><div class="kpi-v">${empInvoices.length}</div><div class="kpi-l">Invoices</div></div><div class="kpi"><div class="kpi-v">${totalHours.toFixed(1)}h</div><div class="kpi-l">Total Hours</div></div><div class="kpi"><div class="kpi-v">${payRateLabel}</div><div class="kpi-l">Base Rate</div></div>${summary.premiumHours>0?`<div class="kpi"><div class="kpi-v">${summary.premiumHours.toFixed(1)}h</div><div class="kpi-l">Premium Hours (+${premiumConfig.percent}%)</div></div>`:''}<div class="kpi"><div class="kpi-v">$${totalUSD.toFixed(2)}</div><div class="kpi-l">Gross Earned (USD)</div></div>${statementAdjustments.length>0?`<div class="kpi"><div class="kpi-v">${adjustmentTotal<0?'-':'+'}$${Math.abs(adjustmentTotal).toFixed(2)}</div><div class="kpi-l">Adjustments</div></div><div class="kpi"><div class="kpi-v">$${netUSD.toFixed(2)}</div><div class="kpi-l">Net Pay (USD)</div></div>`:''}${totalDOP>0?`<div class="kpi"><div class="kpi-v">RD$${totalDOP.toLocaleString('en-US',{maximumFractionDigits:0})}</div><div class="kpi-l">Net Pay (DOP @ ${dopRate})</div></div>`:''}</div>${sections?sections+adjustmentSection+'<div style="text-align:right;font-weight:800;font-size:13px;padding:10px 0;border-top:2px solid #111;margin-top:4px">Gross &nbsp;&nbsp; '+totalHours.toFixed(1)+'h &nbsp;&nbsp; $'+totalUSD.toFixed(2)+'</div>'+netPaySection+(summary.premiumHours>0?'<div style="text-align:right;font-size:11px;color:#666">Regular: '+summary.regularHours.toFixed(2)+'h · Premium: '+summary.premiumHours.toFixed(2)+'h at +'+premiumConfig.percent+'%</div>':''):'<p style="color:#999;text-align:center;padding:24px">No invoice data for this period.</p>'}<div class="footer">YVA Staffing · Bilingual Virtual Professionals · yvastaffing.net</div></div></body></html>`
+  return `<!DOCTYPE html><html><head><title>Statement — ${escapeHtml(emp.name)}</title><style>@page{size:Letter;margin:.5in}html,body{margin:0;padding:0;background:#fff}body{font-family:Arial,sans-serif;color:#111}.statement-page{width:8.5in;min-height:11in;margin:0 auto;padding:.6in;box-sizing:border-box;background:#fff}.header{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:28px;border-bottom:2px solid #f5b533;padding-bottom:16px}.logo{height:48px}h2{margin:0;font-size:22px;color:#f5b533}.meta{font-size:12px;color:#999;margin-top:4px}.kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:24px}.kpi{background:#f9f9f9;border-radius:8px;padding:14px;text-align:center}.kpi-v{font-size:20px;font-weight:800;color:#111}.kpi-l{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:#999;margin-top:4px}table{width:100%;border-collapse:collapse;font-size:12px}th{text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:#999;padding:8px 8px;border-bottom:2px solid #eee}td{padding:8px;border-bottom:1px solid #eee}.footer{margin-top:32px;font-size:11px;color:#999;border-top:1px solid #eee;padding-top:12px;text-align:center}@media print{body{margin:0}.statement-page{margin:0}}</style></head><body><div class="statement-page" data-pdf-page><div class="header"><img src="${window.location.origin}/yva-logo.png" class="logo" onerror="this.style.display='none'" /><div style="text-align:right"><h2>EARNINGS STATEMENT</h2><div class="meta">${escapeHtml(emp.name)}${emp.employeeNumber?` · ${escapeHtml(emp.employeeNumber)}`:''}</div><div class="meta">Period: ${escapeHtml(period)}</div><div class="meta">Generated: ${new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})}</div></div></div><div class="kpis"><div class="kpi"><div class="kpi-v">${empInvoices.length}</div><div class="kpi-l">Invoices</div></div><div class="kpi"><div class="kpi-v">${totalHours.toFixed(1)}h</div><div class="kpi-l">Total Hours</div></div><div class="kpi"><div class="kpi-v">${payRateLabel}</div><div class="kpi-l">Base Rate</div></div>${summary.premiumHours>0?`<div class="kpi"><div class="kpi-v">${summary.premiumHours.toFixed(1)}h</div><div class="kpi-l">Premium Hours (+${premiumConfig.percent}%)</div></div>`:''}<div class="kpi"><div class="kpi-v">$${totalUSD.toFixed(2)}</div><div class="kpi-l">Gross Earned (USD)</div></div>${statementAdjustments.length>0?`<div class="kpi"><div class="kpi-v">${adjustmentTotal<0?'-':'+'}$${Math.abs(adjustmentTotal).toFixed(2)}</div><div class="kpi-l">Adjustments</div></div><div class="kpi"><div class="kpi-v">$${netUSD.toFixed(2)}</div><div class="kpi-l">Net Pay (USD)</div></div>`:''}${totalDOP>0?`<div class="kpi"><div class="kpi-v">RD$${totalDOP.toLocaleString('en-US',{maximumFractionDigits:0})}</div><div class="kpi-l">Net Pay (DOP @ ${dopRate})</div></div>`:''}</div>${sections?sections+adjustmentSection+'<div style="text-align:right;font-weight:800;font-size:13px;padding:10px 0;border-top:2px solid #111;margin-top:4px">Gross &nbsp;&nbsp; '+totalHours.toFixed(1)+'h &nbsp;&nbsp; $'+totalUSD.toFixed(2)+'</div>'+netPaySection+(summary.premiumHours>0?'<div style="text-align:right;font-size:11px;color:#666">Regular: '+summary.regularHours.toFixed(2)+'h · Premium: '+summary.premiumHours.toFixed(2)+'h at +'+premiumConfig.percent+'%</div>':''):'<p style="color:#999;text-align:center;padding:24px">No invoice data for this period.</p>'}<div class="footer">YVA Staffing · Bilingual Virtual Professionals · yvastaffing.net</div></div></body></html>`
 }
 
 async function emailStatement(emp: Employee, empInvoices: Invoice[], dateFrom: string, dateTo: string, statementAdjustments = filterStatementAdjustments(emp, dateFrom || undefined, dateTo || undefined)) {
@@ -529,10 +520,17 @@ export default function EmployeeProfilePage() {
     setEditing(false)
   }
 
-  function handleDelete() {
+  async function handleDelete() {
+    const previous = employees
     const next = employees.filter(e => e.id !== empNN.id)
     setEmployeesState(next)
-    void saveEmployees(next)
+    try {
+      await saveEmployees(next)
+    } catch (error) {
+      setEmployeesState(previous)
+      alert(error instanceof Error ? error.message : 'Employee could not be deleted.')
+      return
+    }
     navigate('/employees')
   }
 

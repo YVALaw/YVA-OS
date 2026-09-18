@@ -8,6 +8,7 @@ import {
 import { sendEmail, type SendEmailResult } from '../services/gmail'
 import { formatMoney, fmtHoursHM } from '../utils/money'
 import { formatInvoiceHoursEntry, parseInvoiceHours } from '../utils/invoiceHours'
+import { escapeHtml } from '../utils/html'
 import { useRole } from '../context/RoleContext'
 import { can } from '../lib/roles'
 import { htmlToPdfAttachment } from '../utils/pdf'
@@ -177,7 +178,7 @@ function buildPayslipHTML(emp: Employee, empInvoices: Invoice[], dateFrom: strin
         allDates = Object.keys(daily).filter(d=>parseInvoiceHours(daily[d])>0).sort()
       }
     }
-    const label = '<div style="font-size:11px;margin-bottom:6px"><strong style="font-size:13px">'+inv.number+'</strong>&nbsp;&middot;&nbsp;'+(inv.projectName||'—')+'&nbsp;&middot;&nbsp;<span style="color:#999">'+invPeriod+'</span></div>'
+    const label = '<div style="font-size:11px;margin-bottom:6px"><strong style="font-size:13px">'+escapeHtml(inv.number)+'</strong>&nbsp;&middot;&nbsp;'+escapeHtml(inv.projectName||'—')+'&nbsp;&middot;&nbsp;<span style="color:#999">'+escapeHtml(invPeriod)+'</span></div>'
     if (allDates.length > 0 && daily) {
       const dateHeaders = allDates.map(d=>{const dt=new Date(d+'T12:00:00');return '<th style="text-align:center;font-size:9px;padding:5px 3px;min-width:22px;color:#999;border-bottom:2px solid #eee;white-space:nowrap">'+DA[dt.getDay()]+'<br>'+(dt.getMonth()+1)+'/'+dt.getDate()+'</th>'}).join('')
       const dayCells = allDates.map(d=>{const h=parseInvoiceHours(daily[d]||'');return '<td style="text-align:center;padding:7px 4px;font-size:12px;color:'+(h>0?'#111':'#ccc')+'">'+(h>0?formatInvoiceHoursEntry(h):'—')+'</td>'}).join('')
@@ -189,7 +190,7 @@ function buildPayslipHTML(emp: Employee, empInvoices: Invoice[], dateFrom: strin
 
   const period = dateFrom && dateTo ? `${dateFrom} – ${dateTo}` : dateFrom || dateTo || 'All time'
   return `<!DOCTYPE html><html><head>
-  <title>Statement — ${emp.name}</title>
+  <title>Statement — ${escapeHtml(emp.name)}</title>
   <style>
     @page{size:Letter;margin:.5in}
     html,body{margin:0;padding:0;background:#fff}
@@ -213,8 +214,8 @@ function buildPayslipHTML(emp: Employee, empInvoices: Invoice[], dateFrom: strin
     <img src="${window.location.origin}/yva-logo.png" class="logo" onerror="this.style.display='none'" />
     <div style="text-align:right">
       <h2>EARNINGS STATEMENT</h2>
-      <div class="meta">${emp.name}${emp.employeeNumber ? ` · ${emp.employeeNumber}` : ''}</div>
-      <div class="meta">Period: ${period}</div>
+      <div class="meta">${escapeHtml(emp.name)}${emp.employeeNumber ? ` · ${escapeHtml(emp.employeeNumber)}` : ''}</div>
+      <div class="meta">Period: ${escapeHtml(period)}</div>
       <div class="meta">Generated: ${new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})}</div>
     </div>
   </div>
@@ -648,9 +649,11 @@ export default function EmployeesPage() {
   const [view, setView] = useState<'cards' | 'projects' | 'capacity' | 'table'>('projects')
 
   function persist(next: Employee[]) {
+    const previous = employees
     setEmployees(next)
     void saveEmployees(next).catch((err) => {
       console.error('saveEmployees failed', err)
+      setEmployees(previous)
       alert(err instanceof Error ? err.message : 'Could not save team changes to Supabase.')
     })
   }
@@ -793,8 +796,12 @@ export default function EmployeesPage() {
         next.filter(employee => employee.projectIdsList.includes(project.id)).map(employee => employee.id).filter((value, index, array) => array.indexOf(value) === index)
       ),
     }))
+    const previousProjects = projects
     setProjects(updatedProjects)
-    void saveProjects(updatedProjects)
+    void saveProjects(updatedProjects).catch(error => {
+      setProjects(previousProjects)
+      alert(error instanceof Error ? error.message : 'Project assignment could not be saved.')
+    })
   }, (employee, newColumnId, sourceColumnId) => {
     let nextProjectIds = [...employee.projectIdsList]
     if (sourceColumnId && sourceColumnId !== '__unassigned') nextProjectIds = nextProjectIds.filter(id => id !== sourceColumnId)

@@ -123,14 +123,29 @@ export default function CandidatesPage() {
     loadEmployees().then(setEmployees)
   }, [hiredOnly])
 
-  function persist(next: Candidate[]) {
+  // Roll the optimistic update back and report it if Supabase rejects the write.
+  // Dropping the promise made a failed save look like it had succeeded, until a
+  // refresh silently restored the old data.
+  async function persist(next: Candidate[]) {
+    const previous = candidates
     setCandidates(next)
-    void saveCandidates(next)
+    try {
+      await saveCandidates(next)
+    } catch (error) {
+      setCandidates(previous)
+      alert(error instanceof Error ? error.message : 'Candidate could not be saved.')
+    }
   }
 
-  function persistEmployees(next: Employee[]) {
+  async function persistEmployees(next: Employee[]) {
+    const previous = employees
     setEmployees(next)
-    void saveEmployees(next)
+    try {
+      await saveEmployees(next)
+    } catch (error) {
+      setEmployees(previous)
+      alert(error instanceof Error ? error.message : 'Employee could not be saved.')
+    }
   }
 
   function openAdd() {

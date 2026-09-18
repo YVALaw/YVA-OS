@@ -4,7 +4,7 @@ import type { ActivityLogEntry, Client, Invoice, Project } from '../data/types'
 import { loadSnapshot, saveClients, loadActivityLog, saveActivityLog, loadSettings } from '../services/storage'
 import { sendEmail } from '../services/gmail'
 import { formatEmailList, parseEmailList } from '../utils/email'
-import { Avatar, KanbanColumn, KanbanItem, ProtoIcon, SearchField, StatusChip, ToggleGroup, colorFromString, dueLabel, protoCurrency, protoDateShort, useKanbanDnd } from '../components/PrototypeKit'
+import { Avatar, KanbanColumn, KanbanItem, ProtoIcon, SearchField, StatusChip, ToggleGroup, colorFromString, daysFromToday, dueLabel, protoCurrency, protoDateShort, useKanbanDnd } from '../components/PrototypeKit'
 function uid() { return crypto.randomUUID() }
 
 type ClientStage = 'lead' | 'prospect' | 'active' | 'paused' | 'churned'
@@ -101,17 +101,25 @@ export default function ClientsPage() {
   function addActivity() {
     if (!activityNote.trim() || !activityClient) return
     const entry: ActivityLogEntry = { id: uid(), clientId: activityClient.id, note: activityNote.trim(), createdAt: Date.now() }
-    loadActivityLog().then(all => {
-      void saveActivityLog([entry, ...all])
-      setActivityLog([entry, ...activityLog])
-      setActivityNote('')
+    void loadActivityLog().then(async all => {
+      try {
+        await saveActivityLog([entry, ...all])
+        setActivityLog([entry, ...activityLog])
+        setActivityNote('')
+      } catch (error) {
+        alert(error instanceof Error ? error.message : 'Note could not be saved.')
+      }
     })
   }
   function deleteActivity(id: string) {
-    loadActivityLog().then(all => {
+    void loadActivityLog().then(async all => {
       const next = all.filter(e => e.id !== id)
-      void saveActivityLog(next)
-      setActivityLog(activityLog.filter(e => e.id !== id))
+      try {
+        await saveActivityLog(next)
+        setActivityLog(activityLog.filter(e => e.id !== id))
+      } catch (error) {
+        alert(error instanceof Error ? error.message : 'Note could not be deleted.')
+      }
     })
   }
 
@@ -186,8 +194,9 @@ export default function ClientsPage() {
   const activeClients = filtered.filter(c => (c.status || 'lead').toLowerCase() === 'active').length
   const contractRisk = filtered.filter((c) => {
     if (!c.contractEnd) return false
-    const daysLeft = Math.ceil((new Date(c.contractEnd).getTime() - Date.now()) / 86400000)
-    return daysLeft <= 45
+    // A bare new Date("YYYY-MM-DD") is UTC midnight, which reads as the previous
+    // day in UTC-4 and shifted this threshold by one.
+    return daysFromToday(c.contractEnd) <= 45
   }).length
 
   function clientRevenue(id: string) {

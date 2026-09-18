@@ -390,6 +390,15 @@ notify pgrst, 'reload schema';
 - Historical invoices are unaffected: `InvoiceItem` already snapshots `rate` and `basePayRate` at invoice time, so rate history lives on the invoice and assignments need no effective-dating.
 - Statements read the rate back from the stored item (`invoiceItemPayRate` / `distinctPayRates` in `src/utils/payroll.ts`) and show "Multiple" when a period spans more than one rate — never the employee's current global rate.
 
+### Shared utilities worth knowing about
+- `src/utils/html.ts` — `escapeHtml`. Invoice and statement documents are built by string concatenation, so **every** user-entered value interpolated into them must go through this. An unescaped `<` in a note swallows the rest of the document.
+- `src/utils/dates.ts` — `parseDateOnly` / `daysUntil` / `isWithinDays`. `new Date("YYYY-MM-DD")` parses as **UTC midnight**, which is the previous day in any negative offset (the team is UTC-4), so a date due today compares as already past. `PrototypeKit.daysFromToday` delegates here; never hand-roll a date-string comparison.
+- `src/utils/payroll.ts` — `itemBelongsToEmployee`. An invoice item's `employeeId` is authoritative; the name is only a fallback for older items. Matching on both with `||` credits two employees who share a name with each other's hours and pay.
+- `src/utils/invoiceHours.ts` — every hour value is `H.MM` (`5.30` = 5h30m). Never `Number()` or `parseFloat()` an hours field.
+
+### Writes must surface failures
+Pages apply an optimistic update, then `await` the save and roll the state back with a message if it rejects. A dropped promise (`void save...()` with no `.catch`) makes a failed write look successful until a refresh silently reverts it. The only acceptable bare `void save...` calls are internal bookkeeping (counters, OAuth tokens) and `void someAsyncHandler()` wrappers where the handler already catches.
+
 ### Supabase schema notes
 - `name`, `role`, `location`, `timestamp` are PostgreSQL reserved words — wrapped in double quotes in SQL
 - `created_at` is a DB-managed `timestamptz` — never included in upserts

@@ -9,6 +9,7 @@ import {
 } from '../services/reportsService'
 import { formatInvoiceHoursEntry, invoiceItemHours } from '../utils/invoiceHours'
 import { formatMoney, fmtHoursHM } from '../utils/money'
+import { daysFromToday } from '../components/PrototypeKit'
 import { itemBelongsToEmployee, payrollFromInvoiceItem } from '../utils/payroll'
 import { loadSettings, loadGeneralExpenses, loadCandidates, loadExpenses } from '../services/storage'
 import type { AppSettings, Candidate, DataSnapshot, Expense, Invoice } from '../data/types'
@@ -403,9 +404,11 @@ export default function ReportsPage() {
     const in60 = new Date(today); in60.setDate(in60.getDate() + 60)
     return store.clients.filter(c => {
       if (!c.contractEnd) return false
-      const d = new Date(c.contractEnd)
-      return d >= today && d <= in60
-    }).sort((a, b) => new Date(a.contractEnd!).getTime() - new Date(b.contractEnd!).getTime())
+      // Inclusive of a contract ending today: the old UTC-midnight parse made
+      // today's date compare as already past, so it vanished from this list.
+      const left = daysFromToday(c.contractEnd)
+      return left >= 0 && left <= 60
+    }).sort((a, b) => (a.contractEnd || '').localeCompare(b.contractEnd || ''))
   }, [store])
 
   const canSeeOwnerStats = can.viewOwnerStats(role)
@@ -608,7 +611,7 @@ export default function ReportsPage() {
                 </button>
               )}
               {expiringContracts.map(c => {
-                const daysLeft = Math.ceil((new Date(c.contractEnd!).getTime() - Date.now()) / 86400000)
+                const daysLeft = daysFromToday(c.contractEnd)
                 return (
                   <button key={c.id} className="attention-item attention-item-action" type="button" onClick={() => navigate(`/clients/${c.id}`)}>
                     <div className="attention-item-dot" style={{ background: daysLeft <= 14 ? '#ef4444' : '#f97316' }} />
@@ -814,7 +817,7 @@ export default function ReportsPage() {
                 </button>
               )}
               {expiringContracts.map(c => {
-                const daysLeft = Math.ceil((new Date(c.contractEnd!).getTime() - Date.now()) / 86400000)
+                const daysLeft = daysFromToday(c.contractEnd)
                 return (
                   <button key={c.id} className="attention-item attention-item-action" type="button" onClick={() => navigate(`/clients/${c.id}`)}>
                     <div className="attention-item-dot" style={{ background: daysLeft <= 14 ? '#ef4444' : '#f97316' }} />
@@ -908,9 +911,11 @@ export default function ReportsPage() {
 
     const contractsExpiring = store.clients.filter(c => {
       if (!c.contractEnd) return false
-      const d = new Date(c.contractEnd)
-      return d >= today && d <= in60
-    }).sort((a, b) => new Date(a.contractEnd!).getTime() - new Date(b.contractEnd!).getTime())
+      // Inclusive of a contract ending today: the old UTC-midnight parse made
+      // today's date compare as already past, so it vanished from this list.
+      const left = daysFromToday(c.contractEnd)
+      return left >= 0 && left <= 60
+    }).sort((a, b) => (a.contractEnd || '').localeCompare(b.contractEnd || ''))
 
     const retentionRisk = store.clients.filter(c => {
       const lastInv = store.invoices
@@ -954,7 +959,7 @@ export default function ReportsPage() {
             {contractsExpiring.length === 0 ? (
               <div style={{ color: 'var(--muted)', fontSize: 13, padding: '16px 0' }}>No contracts expiring soon.</div>
             ) : contractsExpiring.map(c => {
-              const days = Math.round((new Date(c.contractEnd!).getTime() - today.getTime()) / 86400000)
+              const days = daysFromToday(c.contractEnd)
               return (
                 <div key={c.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid rgba(255,255,255,.05)' }}>
                   <span style={{ fontSize: 13, fontWeight: 600 }}>{c.name}</span>
@@ -1198,7 +1203,7 @@ export default function ReportsPage() {
               </button>
             )}
             {expiringContracts.map(c => {
-              const daysLeft = Math.ceil((new Date(c.contractEnd!).getTime() - Date.now()) / 86400000)
+              const daysLeft = daysFromToday(c.contractEnd)
               return (
                 <button key={c.id} className="attention-item attention-item-action" type="button" onClick={() => navigate(`/clients/${c.id}`)}>
                   <div className="attention-item-dot" style={{ background: daysLeft <= 14 ? '#ef4444' : '#f97316' }} />

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type CSSProperties, type Dispatch, type DragEvent, type ReactNode, type SetStateAction } from 'react'
+import { daysUntil } from '../utils/dates'
 
 export function protoCurrency(value: number, decimals = 0): string {
   return `$${Math.abs(value).toLocaleString('en-US', {
@@ -21,13 +22,9 @@ export function protoDateShort(value?: string): string {
   return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
 }
 
+/** Whole calendar days until `value`; 0 when absent or unparseable. */
 export function daysFromToday(value?: string): number {
-  if (!value) return 0
-  const target = new Date(`${value}T12:00:00`)
-  const today = new Date()
-  today.setHours(12, 0, 0, 0)
-  if (Number.isNaN(target.getTime())) return 0
-  return Math.round((target.getTime() - today.getTime()) / 86400000)
+  return daysUntil(value) ?? 0
 }
 
 export function dueLabel(value?: string): string {

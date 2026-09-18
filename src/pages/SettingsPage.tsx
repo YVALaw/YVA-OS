@@ -197,10 +197,18 @@ export default function SettingsPage() {
     })()
   }, [activeTab])
 
-  function updateSettings(partial: Partial<AppSettings>) {
+  // A dropped promise here meant a setting appeared to stick but was gone on
+  // the next load - the exchange rate and reminder schedule both live here.
+  async function updateSettings(partial: Partial<AppSettings>) {
+    const previous = settings
     const next = { ...settings, ...partial }
     setSettingsState(next)
-    void saveSettings(next)
+    try {
+      await saveSettings(next)
+    } catch (error) {
+      setSettingsState(previous)
+      alert(error instanceof Error ? error.message : 'Settings could not be saved.')
+    }
   }
 
   async function handleFetchRate() {

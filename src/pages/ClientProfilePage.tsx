@@ -130,10 +130,19 @@ export default function ClientProfilePage() {
     .reduce((sum, invoice) => sum + (Number(invoice.subtotal) || 0), 0)
   const tagList = (clientNN.tags || '').split(',').map(tag => tag.trim()).filter(Boolean)
 
-  function persistUpdate(updated: Client) {
+  // Roll the optimistic update back and report it if Supabase rejects the write.
+  // Dropping the promise made a failed save look like it had succeeded, until a
+  // refresh silently restored the old data.
+  async function persistUpdate(updated: Client) {
+    const previous = clients
     const next = clients.map(entry => entry.id === updated.id ? updated : entry)
     setClientsState(next)
-    void saveClients(next)
+    try {
+      await saveClients(next)
+    } catch (error) {
+      setClientsState(previous)
+      alert(error instanceof Error ? error.message : 'Client could not be saved.')
+    }
   }
 
   function handleSave() {
@@ -167,10 +176,17 @@ export default function ClientProfilePage() {
     setEditing(false)
   }
 
-  function handleDelete() {
+  async function handleDelete() {
+    const previous = clients
     const next = clients.filter(entry => entry.id !== clientNN.id)
     setClientsState(next)
-    void saveClients(next)
+    try {
+      await saveClients(next)
+    } catch (error) {
+      setClientsState(previous)
+      alert(error instanceof Error ? error.message : 'Client could not be deleted.')
+      return
+    }
     navigate('/clients')
   }
 
@@ -213,18 +229,26 @@ export default function ClientProfilePage() {
   function addActivity() {
     if (!activityNote.trim()) return
     const entry: ActivityLogEntry = { id: uid(), clientId: clientNN.id, note: activityNote.trim(), createdAt: Date.now() }
-    loadActivityLog().then(all => {
-      void saveActivityLog([entry, ...all])
-      setActivityLog(current => [entry, ...current])
-      setActivityNote('')
+    void loadActivityLog().then(async all => {
+      try {
+        await saveActivityLog([entry, ...all])
+        setActivityLog(current => [entry, ...current])
+        setActivityNote('')
+      } catch (error) {
+        alert(error instanceof Error ? error.message : 'Note could not be saved.')
+      }
     })
   }
 
   function deleteActivity(entryId: string) {
-    loadActivityLog().then(all => {
+    void loadActivityLog().then(async all => {
       const next = all.filter(entry => entry.id !== entryId)
-      void saveActivityLog(next)
-      setActivityLog(current => current.filter(entry => entry.id !== entryId))
+      try {
+        await saveActivityLog(next)
+        setActivityLog(current => current.filter(entry => entry.id !== entryId))
+      } catch (error) {
+        alert(error instanceof Error ? error.message : 'Note could not be deleted.')
+      }
     })
   }
 
