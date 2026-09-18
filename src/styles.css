@@ -2200,10 +2200,12 @@ textarea:disabled {
 }
 
 .project-profile-selected-team {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-bottom: 2px;
+  /* Holds one rate-editor card per assigned person, so it stacks rather than
+     wrapping like the pill row it used to be. */
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+  margin-bottom: 8px;
 }
 
 .project-team-search-list {

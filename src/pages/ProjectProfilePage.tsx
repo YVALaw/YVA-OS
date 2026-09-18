@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import type { Client, Employee, Expense, Invoice, Project, Task, TaskStatus } from '../data/types'
+import type { Client, Employee, Expense, Invoice, Project, ProjectAssignment, Task, TaskStatus } from '../data/types'
 import { loadExpenses, loadSnapshot, loadTasks, saveExpenses, saveProjects, saveTasks as saveTasksToStorage } from '../services/storage'
 import { formatHourlyRate, formatMoney } from '../utils/money'
+import { setAssignment } from '../utils/rates'
 import {
   Avatar,
   Modal,
@@ -78,6 +79,7 @@ export default function ProjectProfilePage() {
     notes: '',
     links: [] as { label: string; url: string }[],
     employeeIds: [] as string[],
+    assignments: [] as ProjectAssignment[],
   })
 
   useEffect(() => {
@@ -108,7 +110,8 @@ export default function ProjectProfilePage() {
       projectNeeds: project.projectNeeds || '',
       notes: project.notes || '',
       links: project.links || [],
-      employeeIds: project.employeeIds || [],
+      employeeIds: Array.from(new Set(project.employeeIds || [])),
+      assignments: project.assignments || [],
     })
   }, [editing, project])
 
@@ -174,7 +177,8 @@ export default function ProjectProfilePage() {
       projectNeeds: project.projectNeeds || '',
       notes: project.notes || '',
       links: project.links || [],
-      employeeIds: project.employeeIds || [],
+      employeeIds: Array.from(new Set(project.employeeIds || [])),
+      assignments: project.assignments || [],
     })
     setEditing(false)
     setEmpSearch('')
@@ -200,7 +204,8 @@ export default function ProjectProfilePage() {
       projectNeeds: form.projectNeeds || undefined,
       notes: form.notes || undefined,
       links: form.links.length ? form.links : undefined,
-      employeeIds: form.employeeIds,
+      employeeIds: Array.from(new Set(form.employeeIds)),
+      assignments: form.assignments.filter(entry => form.employeeIds.includes(entry.employeeId)),
     }
     await persistProject(next)
     setSaving(false)
@@ -236,8 +241,16 @@ export default function ProjectProfilePage() {
     setForm(prev => prev.employeeIds.includes(employeeId) ? prev : { ...prev, employeeIds: [...prev.employeeIds, employeeId] })
   }
 
+  function patchAssignment(employeeId: string, patch: Partial<Omit<ProjectAssignment, 'employeeId'>>) {
+    setForm(prev => ({ ...prev, assignments: setAssignment(prev.assignments, employeeId, patch) }))
+  }
+
   function removeEmployee(employeeId: string) {
-    setForm(prev => ({ ...prev, employeeIds: prev.employeeIds.filter(id => id !== employeeId) }))
+    setForm(prev => ({
+      ...prev,
+      employeeIds: prev.employeeIds.filter(id => id !== employeeId),
+      assignments: prev.assignments.filter(entry => entry.employeeId !== employeeId),
+    }))
   }
 
   async function persistTasks(next: Task[]) {
@@ -502,14 +515,44 @@ export default function ProjectProfilePage() {
                   <div className="project-profile-selected-team">
                     {form.employeeIds.length === 0 ? <span style={{ fontSize: 12, color: 'var(--muted)' }}>No team assigned.</span> : form.employeeIds.map(employeeId => {
                       const employee = employees.find(item => item.id === employeeId)
-                      return employee ? (
-                        <span key={employee.id} className="proto-tag">
-                          {employee.name}
-                          <button type="button" className="proto-btn proto-btn-ghost proto-btn-icon" style={{ width: 18, height: 18, minWidth: 18 }} onClick={() => removeEmployee(employeeId)}>
-                            <ProtoIcon name="close" size={10} />
-                          </button>
-                        </span>
-                      ) : null
+                      if (!employee) return null
+                      const assignment = form.assignments.find(entry => entry.employeeId === employeeId)
+                      const formClient = clients.find(item => item.id === form.clientId)
+                      const inheritedBill = Number(form.rate) || Number(formClient?.defaultRate) || 0
+                      const inheritedPay = Number(employee.payRate) || 0
+                      return (
+                        <div key={employee.id} className="project-assignment-row">
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <span style={{ flex: 1, minWidth: 0, fontSize: 12, fontWeight: 700 }}>{employee.name}</span>
+                            <button type="button" className="proto-btn proto-btn-ghost proto-btn-icon" style={{ width: 18, height: 18, minWidth: 18 }} onClick={() => removeEmployee(employeeId)}>
+                              <ProtoIcon name="close" size={10} />
+                            </button>
+                          </div>
+                          <input
+                            className="proto-input"
+                            style={{ fontSize: 12 }}
+                            value={assignment?.position || ''}
+                            placeholder={employee.role || 'Position on this project'}
+                            onChange={e => patchAssignment(employeeId, { position: e.target.value || undefined })}
+                          />
+                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+                            <label style={{ display: 'grid', gap: 3 }}>
+                              <span className="project-assignment-label">Bill /hr</span>
+                              <input className="proto-input" type="number" inputMode="decimal" step="0.01" style={{ fontSize: 12 }}
+                                value={assignment?.billRate != null ? String(assignment.billRate) : ''}
+                                placeholder={inheritedBill > 0 ? String(inheritedBill) : 'Not set'}
+                                onChange={e => patchAssignment(employeeId, { billRate: e.target.value ? Number(e.target.value) : undefined })} />
+                            </label>
+                            <label style={{ display: 'grid', gap: 3 }}>
+                              <span className="project-assignment-label">Pay /hr</span>
+                              <input className="proto-input" type="number" inputMode="decimal" step="0.01" style={{ fontSize: 12 }}
+                                value={assignment?.payRate != null ? String(assignment.payRate) : ''}
+                                placeholder={inheritedPay > 0 ? String(inheritedPay) : 'Not set'}
+                                onChange={e => patchAssignment(employeeId, { payRate: e.target.value ? Number(e.target.value) : undefined })} />
+                            </label>
+                          </div>
+                        </div>
+                      )
                     })}
                   </div>
                   <SearchField value={empSearch} onChange={setEmpSearch} placeholder="Search team member..." minWidth={0} />
