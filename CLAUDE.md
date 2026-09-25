@@ -210,17 +210,20 @@ Also shows: Employee Performance table, Revenue by Client/Project, All-Time Clie
 
 ## Gmail Integration
 - Service: `src/services/gmail.ts` — OAuth2 PKCE flow with Netlify-backed token exchange/refresh, `sendGmailMessage()`, `sendEmail()` (universal)
-- `sendEmail(to, subject, body, attachment?)` — uses Gmail API if connected, falls back to `mailto:` if not
+- `sendEmail(to, subject, body, options?)` — uses the Gmail API if connected. Result `mode` is `gmail`, `mailto` or `failed`
+- **Gmail failures are never silent.** When the workspace uses Gmail (a Client ID is saved) but a send can't go through — this login never connected, Google revoked the sign-in, the Gmail API rejected the message — `sendEmail` shows the reason in a confirm dialog and only opens `mailto:` (plus PDF download) if the user agrees; otherwise it returns `mode: 'failed'` with `fallbackReason`. Before 2026-09-25 it switched to the mail app on its own and the reason sat in a 3.5 s toast behind the mail client
 - Optional attachment support builds multipart/mixed MIME when provided
 - Invoice emails, reminder emails, and employee statement emails attach a generated PDF when Gmail is connected
-- If Gmail is not connected, the app falls back to `mailto:` and downloads the matching PDF so it can be attached manually
+- A workspace with no Gmail Client ID goes straight to `mailto:` and downloads the matching PDF so it can be attached manually (no prompt)
+- `mailto:` parameters are percent-encoded; `URLSearchParams` encodes spaces as `+`, which mail clients show literally
 - **Per-user OAuth**: each logged-in user connects their own Gmail account independently
   - `gmailClientId` stored in shared `settings` table (one per org)
   - `gmailAccessToken`, `gmailRefreshToken`, `gmailTokenExpiry`, `gmailEmail` stored in **Supabase user metadata** (`supabase.auth.updateUser({ data: {...} })`)
   - Read via `supabase.auth.getUser()` → `user.user_metadata`
 - **OAuth flow**: User enters Google OAuth Client ID in Settings → clicks "Connect Gmail" → PKCE redirect to Google → callback at `/oauth-callback` → token exchange/refresh handled by `/.netlify/functions/gmail-oauth` → tokens saved to user metadata
-- Token auto-refreshes on expiry using stored refresh token
-- Disconnect option in Settings clears all Gmail tokens from user metadata
+- Token auto-refreshes when the stored expiry passes, and once more if Gmail answers 401 (early revocation, wrong PC clock). Refresh errors are surfaced, not swallowed: Google `invalid_grant` → `GmailReconnectError` ("reconnect Gmail"); `invalid_client` → secret/Client ID mismatch; a missing `GMAIL_CLIENT_SECRET` is reported verbatim
+- Settings → Integrations asks Google whether the saved sign-in works (`checkGmailConnection()`, tokeninfo incl. the `gmail.send` scope) instead of trusting that a token string is stored, and shows **Reconnect Needed** / **Connection Problem** with Reconnect and Check Again buttons
+- Disconnect writes `null` to the metadata keys. Supabase deletes keys set to `null`; `undefined` is dropped by `JSON.stringify`, which made the old Disconnect a no-op that reappeared on reload
 - **Setup**: Google Cloud Console → enable Gmail API → OAuth 2.0 Client ID (Web application) → add `{origin}/oauth-callback` as Authorized Redirect URI and set `GMAIL_CLIENT_SECRET` in Netlify
 - All email-sending functions (invoice email, payment reminder, statement email, client reminder) use `sendEmail()` and therefore support Gmail automatically
 

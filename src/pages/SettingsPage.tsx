@@ -8,7 +8,7 @@ import {
   deleteTimesheetImportBatch, loadInvoices, loadTimesheetImportBatches, loadUserRoles, upsertUserRole, type UserRoleRow,
 } from '../services/storage'
 import { supabase } from '../lib/supabase'
-import { initiateGmailAuth, disconnectGmail, isGmailConnected, sendEmail } from '../services/gmail'
+import { initiateGmailAuth, disconnectGmail, isGmailConnected, checkGmailConnection, sendEmail, type GmailConnectionStatus } from '../services/gmail'
 import { importTimesheetCsv } from '../services/timesheetAutomation'
 import { useRole } from '../context/RoleContext'
 import { can, ROLE_LABELS, ROLE_OPTIONS } from '../lib/roles'
@@ -155,8 +155,8 @@ export default function SettingsPage() {
   const [notifPerm, setNotifPerm] = useState<NotificationPermission>(
     typeof Notification !== 'undefined' ? Notification.permission : 'default'
   )
-  const [gmailConnected, setGmailConnected] = useState(false)
-  const [gmailEmail, setGmailEmail] = useState<string | undefined>()
+  // null while Google is being asked whether the saved sign-in still works.
+  const [gmailStatus, setGmailStatus] = useState<GmailConnectionStatus | null>(null)
   const [userRoles, setUserRoles] = useState<UserRoleRow[]>([])
   const [accessStatus, setAccessStatus] = useState<string | null>(null)
   const [accessStatusKind, setAccessStatusKind] = useState<'success' | 'error'>('success')
@@ -166,10 +166,7 @@ export default function SettingsPage() {
 
   useEffect(() => {
     void loadSettings().then(setSettingsState)
-    void isGmailConnected().then(setGmailConnected)
-    void supabase.auth.getUser().then(({ data: { user } }) => {
-      setGmailEmail(user?.user_metadata?.gmailEmail as string | undefined)
-    })
+    void checkGmailConnection().then(setGmailStatus)
   }, [])
 
   useEffect(() => {
@@ -208,6 +205,15 @@ export default function SettingsPage() {
     } catch (error) {
       setSettingsState(previous)
       alert(error instanceof Error ? error.message : 'Settings could not be saved.')
+    }
+  }
+
+  async function handleDisconnectGmail() {
+    try {
+      await disconnectGmail()
+      setGmailStatus({ state: 'disconnected' })
+    } catch (error) {
+      alert(error instanceof Error ? error.message : 'Gmail could not be disconnected.')
     }
   }
 
@@ -326,7 +332,9 @@ export default function SettingsPage() {
                 const sendResult = await sendEmail(notifyTo, subject, body)
                 notifyMsg = sendResult.mode === 'gmail'
                   ? ' Notification email sent.'
-                  : ` Notification email opened in your mail client.`
+                  : sendResult.mode === 'failed'
+                    ? ` Notification email not sent: ${sendResult.fallbackReason}`
+                    : ` Notification email opened in your mail client.`
               } else {
                 notifyMsg = ' Notification email skipped because Gmail is not connected.'
               }
@@ -465,7 +473,9 @@ export default function SettingsPage() {
 
   const activeTabMeta = TAB_META[activeTab]
   const activeWorkspaceSignals = [
-    gmailConnected ? 'Gmail connected' : 'Gmail pending',
+    gmailStatus?.state === 'connected' ? 'Gmail connected'
+      : gmailStatus?.state === 'needs-reconnect' || gmailStatus?.state === 'error' ? 'Gmail needs attention'
+      : 'Gmail pending',
     settings.timesheetAutomationEnabled ? 'Timesheet import live' : 'Timesheet import off',
     can.manageRoles(currentRole) ? 'Team access enabled' : 'Role-limited view',
   ]
@@ -714,21 +724,47 @@ export default function SettingsPage() {
         <div className="settings-section">
           <div className="settings-section-title">Gmail</div>
 
-          {gmailConnected ? (
+          {gmailStatus === null ? (
+            <div className="settings-row">
+              <div className="settings-row-info">
+                <div className="settings-row-label">Connected Account</div>
+                <div className="settings-row-sub">Checking the Gmail connection with Google…</div>
+              </div>
+            </div>
+          ) : gmailStatus.state === 'connected' ? (
             <div className="settings-row">
               <div className="settings-row-info">
                 <div className="settings-row-label">Connected Account</div>
                 <div className="settings-row-sub" style={{ color: '#22c55e' }}>
-                  ✓ Emails sent via Gmail as <strong>{gmailEmail}</strong>
+                  ✓ Emails sent via Gmail as <strong>{gmailStatus.email}</strong>
                 </div>
               </div>
-              <button className="btn-ghost btn-sm" style={{ color: '#f87171' }}
-                onClick={() => void disconnectGmail().then(() => { setGmailConnected(false); setGmailEmail(undefined) })}>
+              <button className="btn-ghost btn-sm" style={{ color: '#f87171' }} onClick={() => void handleDisconnectGmail()}>
                 Disconnect
               </button>
             </div>
           ) : (
             <>
+              {gmailStatus.state !== 'disconnected' && (
+                <div className="settings-row">
+                  <div className="settings-row-info">
+                    <div className="settings-row-label">
+                      {gmailStatus.state === 'needs-reconnect' ? 'Reconnect Needed' : 'Connection Problem'}
+                    </div>
+                    <div className="settings-row-sub" style={{ color: '#f87171' }}>
+                      ⚠ Emails{gmailStatus.email ? <> from <strong>{gmailStatus.email}</strong></> : null} can't be sent through Gmail right now. {gmailStatus.reason}
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    <button className="btn-ghost btn-sm" onClick={() => { setGmailStatus(null); void checkGmailConnection().then(setGmailStatus) }}>
+                      Check Again
+                    </button>
+                    <button className="btn-ghost btn-sm" style={{ color: '#f87171' }} onClick={() => void handleDisconnectGmail()}>
+                      Disconnect
+                    </button>
+                  </div>
+                </div>
+              )}
               <div className="settings-row">
                 <div className="settings-row-info">
                   <div className="settings-row-label">Google OAuth Client ID</div>
@@ -748,7 +784,7 @@ export default function SettingsPage() {
               </div>
               <div className="settings-row">
                 <div className="settings-row-info">
-                  <div className="settings-row-label">Connect Gmail</div>
+                  <div className="settings-row-label">{gmailStatus.state === 'disconnected' ? 'Connect Gmail' : 'Reconnect Gmail'}</div>
               <div className="settings-row-sub">
                 Uses OAuth with PKCE. All emails (invoices, statements, reminders) will be sent directly via your Gmail.
               </div>
@@ -758,7 +794,7 @@ export default function SettingsPage() {
                   disabled={!settings.gmailClientId?.trim()}
                   onClick={() => initiateGmailAuth(settings.gmailClientId!)}
                 >
-                  Connect Gmail →
+                  {gmailStatus.state === 'disconnected' ? 'Connect Gmail →' : 'Reconnect Gmail →'}
                 </button>
               </div>
               <div style={{ background: 'rgba(245,181,51,.05)', borderRadius: 8, padding: '12px 16px', marginTop: 8, fontSize: 12, color: 'var(--muted)', lineHeight: 1.7 }}>

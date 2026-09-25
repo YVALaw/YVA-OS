@@ -377,7 +377,8 @@ export default function InvoicePage() {
 
   function describeEmailResult(result: SendEmailResult, noun: string, recipient: string): string {
     if (result.mode === 'gmail') return `${noun} sent to ${recipient} with PDF attached`
-    const reason = result.fallbackReason ? ` Gmail fallback: ${result.fallbackReason}.` : ''
+    if (result.mode === 'failed') return `${noun} not sent to ${recipient}. ${result.fallbackReason || ''}`
+    const reason = result.fallbackReason ? ` Gmail fallback: ${result.fallbackReason}` : ''
     return `${noun} draft opened for ${recipient}. PDF downloaded to attach manually.${reason}`
   }
 

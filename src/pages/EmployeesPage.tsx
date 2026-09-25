@@ -314,7 +314,8 @@ function EmployeeStatementsPanel({ emp, invoices, onInvoicesChange }: {
 
   function describeEmailResult(result: SendEmailResult, recipient: string) {
     if (result.mode === 'gmail') return `Statement sent to ${recipient} with PDF attached`
-    const reason = result.fallbackReason ? ` Gmail fallback: ${result.fallbackReason}.` : ''
+    if (result.mode === 'failed') return `Statement not sent to ${recipient}. ${result.fallbackReason || ''}`
+    const reason = result.fallbackReason ? ` Gmail fallback: ${result.fallbackReason}` : ''
     return `Statement draft opened for ${recipient}. PDF downloaded to attach manually.${reason}`
   }
 
