@@ -167,6 +167,11 @@ async function refreshAccessToken(userData: GmailUserData): Promise<string> {
       // issues while the OAuth app is still in "Testing".
       throw new GmailReconnectError(`Google says the saved Gmail sign-in has expired or been revoked. ${RECONNECT_HINT}`)
     }
+    if (googleError === 'deleted_client') {
+      // Reconnecting can't help: Google blocks the sign-in screen for this
+      // Client ID too, and the saved refresh token only works with it.
+      throw new Error('The Google OAuth Client ID saved below was deleted in Google Cloud Console. Restore its project if it was deleted in the last 30 days, or create a new OAuth Client ID (Web application). If the Client ID changes, paste it below, put its client secret in GMAIL_CLIENT_SECRET on Netlify and redeploy, then click Reconnect Gmail.')
+    }
     if (googleError === 'invalid_client' || googleError === 'unauthorized_client') {
       throw new Error('Google rejected the OAuth client. Check that GMAIL_CLIENT_SECRET on Netlify belongs to the Client ID in Settings → Integrations.')
     }

@@ -100,6 +100,9 @@ async function refreshGmailToken(clientId, clientSecret, refreshToken) {
   })
   const data = await res.json().catch(() => ({}))
   if (!res.ok || !data.access_token) {
+    if (data.error === 'deleted_client') {
+      throw new Error('settings.gmail_client_id was deleted in Google Cloud Console. Restore it or create a new OAuth Client ID, update it in Settings → Integrations and GMAIL_CLIENT_SECRET on Netlify, then reconnect Gmail on the reminder sender account.')
+    }
     throw new Error(data.error_description || data.error || 'Google token refresh failed')
   }
   return data.access_token
